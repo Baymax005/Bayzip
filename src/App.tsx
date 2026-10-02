@@ -48,12 +48,12 @@ function App() {
           setSelectedFiles((prev) => [...new Set([...prev, ...args])]);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     // 3. Auto-register Explorer right-click context menu (HKCU)
     invoke<string>("register_context_menu")
       .then((msg) => setContextMenuStatus(msg))
-      .catch(() => {});
+      .catch(() => { });
 
     // 4. Listen to native Tauri file drop events
     let unlisten: (() => void) | undefined;
@@ -156,12 +156,12 @@ function App() {
         data-tauri-drag-region
         onMouseDown={(e) => {
           if (e.buttons === 1 && (e.target as HTMLElement).closest("button") === null) {
-            getCurrentWindow().startDragging().catch(() => {});
+            getCurrentWindow().startDragging().catch(() => { });
           }
         }}
         onDoubleClick={(e) => {
           if ((e.target as HTMLElement).closest("button") === null) {
-            getCurrentWindow().toggleMaximize().catch(() => {});
+            getCurrentWindow().toggleMaximize().catch(() => { });
           }
         }}
         className="h-10 w-full flex justify-between items-center bg-[#202020] cursor-default select-none border-b border-[#2D2D2D] shrink-0"
@@ -500,14 +500,12 @@ function App() {
                       onChange={() => setArchiveToOriginalPath(!archiveToOriginalPath)}
                     />
                     <div
-                      className={`block w-10 h-6 rounded-full transition-colors ${
-                        archiveToOriginalPath ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
-                      }`}
+                      className={`block w-10 h-6 rounded-full transition-colors ${archiveToOriginalPath ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                        }`}
                     ></div>
                     <div
-                      className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${
-                        archiveToOriginalPath ? "transform translate-x-4" : ""
-                      }`}
+                      className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${archiveToOriginalPath ? "transform translate-x-4" : ""
+                        }`}
                     ></div>
                   </div>
                   <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
@@ -524,14 +522,12 @@ function App() {
                       onChange={() => setSeparateArchives(!separateArchives)}
                     />
                     <div
-                      className={`block w-10 h-6 rounded-full transition-colors ${
-                        separateArchives ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
-                      }`}
+                      className={`block w-10 h-6 rounded-full transition-colors ${separateArchives ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                        }`}
                     ></div>
                     <div
-                      className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${
-                        separateArchives ? "transform translate-x-4" : ""
-                      }`}
+                      className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${separateArchives ? "transform translate-x-4" : ""
+                        }`}
                     ></div>
                   </div>
                   <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
