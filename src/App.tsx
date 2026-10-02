@@ -28,6 +28,8 @@ function App() {
   // New Toggles
   const [archiveToOriginalPath, setArchiveToOriginalPath] = useState(true);
   const [separateArchives, setSeparateArchives] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [isAboutOpen, setIsAboutOpen] = useState(false);
 
   useEffect(() => {
     invoke<SystemSpecs>("get_system_specs")
@@ -112,31 +114,67 @@ function App() {
           {/* Header */}
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-semibold tracking-tight">Create Archive</h1>
-            <button 
-              onClick={() => setIsAdvanced(!isAdvanced)}
-              className="text-sm font-medium px-4 py-1.5 rounded bg-[#333333] hover:bg-[#3E3E3E] border border-[#3E3E3E] transition-colors"
-            >
-              {isAdvanced ? "Simple Mode" : "Advanced Options"}
-            </button>
+            <div className="flex space-x-3">
+              <button 
+                onClick={() => setIsAboutOpen(true)}
+                className="text-sm font-medium px-4 py-1.5 rounded text-[#A8A8A8] hover:bg-[#333333] hover:text-white transition-colors"
+              >
+                About
+              </button>
+              <button 
+                onClick={() => setIsAdvanced(!isAdvanced)}
+                className="text-sm font-medium px-4 py-1.5 rounded bg-[#333333] hover:bg-[#3E3E3E] border border-[#3E3E3E] transition-colors"
+              >
+                {isAdvanced ? "Simple Mode" : "Advanced Options"}
+              </button>
+            </div>
           </div>
 
           {/* Windows 11 File Drop Zone */}
-          <div 
-            onClick={async () => {
-              const { open } = await import('@tauri-apps/plugin-dialog');
-              const selected = await open({
-                multiple: true,
-                title: 'Select files to compress'
-              });
-              if (selected) {
-                console.log('Selected files:', selected);
-              }
-            }}
-            className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-10 text-center hover:bg-[#333333] transition-colors cursor-pointer flex flex-col items-center justify-center space-y-3">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-10 h-10 text-[#60CDFF]"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
-            <p className="text-sm font-medium text-white">Drag and drop files to compress</p>
-            <p className="text-xs text-[#A8A8A8]">or right-click files in Explorer</p>
-          </div>
+          {selectedFiles.length > 0 ? (
+            <div className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-4 h-48 overflow-y-auto flex flex-col space-y-2 custom-scrollbar">
+              {selectedFiles.map(file => (
+                <div key={file} className="flex justify-between items-center bg-[#202020] px-4 py-3 rounded-md border border-[#3E3E3E] group">
+                  <span className="text-sm truncate mr-4" title={file}>{file.split('\\').pop() || file.split('/').pop()}</span>
+                  <button 
+                    onClick={() => setSelectedFiles(prev => prev.filter(f => f !== file))} 
+                    className="text-[#A8A8A8] hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Remove file"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                </div>
+              ))}
+              <button 
+                onClick={async () => {
+                  const { open } = await import('@tauri-apps/plugin-dialog');
+                  const selected = await open({ multiple: true, title: 'Select files to compress' });
+                  if (selected) {
+                    const newFiles = Array.isArray(selected) ? selected : [selected];
+                    setSelectedFiles(prev => [...new Set([...prev, ...newFiles])]);
+                  }
+                }}
+                className="mt-2 text-xs font-medium text-[#60CDFF] hover:text-[#4FB8E6] transition-colors self-start px-2 py-1"
+              >
+                + Add more files
+              </button>
+            </div>
+          ) : (
+            <div 
+              onClick={async () => {
+                const { open } = await import('@tauri-apps/plugin-dialog');
+                const selected = await open({ multiple: true, title: 'Select files to compress' });
+                if (selected) {
+                  const newFiles = Array.isArray(selected) ? selected : [selected];
+                  setSelectedFiles(prev => [...new Set([...prev, ...newFiles])]);
+                }
+              }}
+              className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-10 text-center hover:bg-[#333333] transition-colors cursor-pointer flex flex-col items-center justify-center space-y-3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-10 h-10 text-[#60CDFF]"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
+              <p className="text-sm font-medium text-white">Drag and drop files to compress</p>
+              <p className="text-xs text-[#A8A8A8]">or click to select files</p>
+            </div>
+          )}
 
           {/* Hardware Configuration - Fluent Design Card */}
           <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6">
@@ -290,6 +328,40 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* About Modal */}
+      {isAboutOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-sm w-full mx-4 shadow-2xl relative">
+            <button 
+              onClick={() => setIsAboutOpen(false)}
+              className="absolute top-4 right-4 text-[#A8A8A8] hover:text-white transition-colors"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+            
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="w-8 h-8 text-[#60CDFF] flex items-center justify-center">
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2h12c1.1 0 2-.9 2-2V8l-6-6zm-2 14h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V6h2v2z"/></svg>
+              </div>
+              <h2 className="text-xl font-semibold">Bayzip</h2>
+              <span className="text-xs bg-[#333333] text-[#A8A8A8] px-2 py-0.5 rounded-full border border-[#3E3E3E]">v0.1.0</span>
+            </div>
+            
+            <div className="space-y-4 text-sm text-[#D0D0D0]">
+              <p>
+                A next-generation compression tool built with Rust and React for extreme hardware utilization and modern UI.
+              </p>
+              
+              <div className="pt-4 border-t border-[#3E3E3E]">
+                <p className="font-medium text-[#60CDFF] mb-1">Created By</p>
+                <p className="text-white">Made by Baymax</p>
+                <p className="text-xs text-[#A8A8A8] mt-0.5">CEO of DPG (aka Muhammad Ali)</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
