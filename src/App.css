@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+body {
+  @apply bg-slate-900 text-slate-100;
+  font-family: 'Inter', system-ui, sans-serif;
+}
