@@ -12,11 +12,13 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Bayzip",
         "width": 800,
         "height": 700,
         "decorations": false,
-        "transparent": true
+        "transparent": true,
+        "shadow": true
       }
     ],
     "security": {
