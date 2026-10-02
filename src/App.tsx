@@ -73,15 +73,22 @@ function App() {
       setItemsInfo({});
       return;
     }
+    let isCurrent = true;
     invoke<SelectedItemInfo[]>("get_selected_items_info", { paths: selectedFiles })
       .then((infos) => {
+        if (!isCurrent) return;
         const map: Record<string, { size: number; is_dir: boolean }> = {};
         infos.forEach((info) => {
           map[info.path] = { size: info.size, is_dir: info.is_dir };
         });
         setItemsInfo(map);
       })
-      .catch((err) => console.error("Failed to query item sizes:", err));
+      .catch((err) => {
+        if (isCurrent) console.error("Failed to query item sizes:", err);
+      });
+    return () => {
+      isCurrent = false;
+    };
   }, [selectedFiles]);
 
   const totalSelectedSize = useMemo(() => {
@@ -89,22 +96,27 @@ function App() {
   }, [selectedFiles, itemsInfo]);
 
   useEffect(() => {
+    let isMounted = true;
+    let unlistenDrop: (() => void) | undefined;
+    let unlistenProgress: (() => void) | undefined;
+
     // 1. Instant hardware specs query
     invoke<SystemSpecs>("get_system_specs")
-      .then((res) => setSpecs(res))
+      .then((res) => {
+        if (isMounted) setSpecs(res);
+      })
       .catch((err) => console.error("Specs query error:", err));
 
     // 2. Fetch CLI / Context menu startup arguments
     invoke<string[]>("get_cli_args")
       .then((args) => {
-        if (args && args.length > 0) {
+        if (isMounted && args && args.length > 0) {
           setSelectedFiles((prev) => [...new Set([...prev, ...args])]);
         }
       })
       .catch(() => {});
 
     // 3. Listen to native Tauri file drop events
-    let unlistenDrop: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "drop") {
@@ -115,25 +127,27 @@ function App() {
         }
       })
       .then((fn) => {
-        unlistenDrop = fn;
+        if (isMounted) unlistenDrop = fn;
+        else fn();
       })
       .catch((err) => {
         console.error("Failed to register drag-drop listener:", err);
       });
 
     // 5. Listen to live compression progress events from Rust
-    let unlistenProgress: (() => void) | undefined;
     listen<CompressProgress>("compress_progress", (event) => {
-      setProgress(event.payload);
+      if (isMounted) setProgress(event.payload);
     })
       .then((fn) => {
-        unlistenProgress = fn;
+        if (isMounted) unlistenProgress = fn;
+        else fn();
       })
       .catch((err) => {
         console.error("Progress listener error:", err);
       });
 
     return () => {
+      isMounted = false;
       if (unlistenDrop) unlistenDrop();
       if (unlistenProgress) unlistenProgress();
     };
@@ -575,52 +589,73 @@ function App() {
           {/* Advanced Options Toggle */}
           {isAdvanced && (
             <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6 space-y-5">
-              <div className="grid grid-cols-3 gap-4">
-                <div className={selectedFormat === ".bay_gamer" ? "col-span-2" : "col-span-1"}>
-                  <label className="block text-xs font-medium mb-2">Format</label>
-                  <select
-                    value={selectedFormat}
-                    onChange={(e) => setSelectedFormat(e.target.value)}
-                    className="w-full bg-[#202020] rounded-md p-2 text-sm border border-[#3E3E3E] focus:border-[#60CDFF] outline-none cursor-pointer"
-                  >
-                    <option value=".bay">.bay</option>
-                    <option value=".bay_gamer">.bay (Gamer Mod Pack)</option>
-                    <option value=".7z">.7z</option>
-                    <option value=".zip">.zip</option>
-                    <option value=".tar">.tar</option>
-                  </select>
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5">
+                <div className={selectedFormat === ".bay_gamer" ? "sm:col-span-6" : "sm:col-span-3"}>
+                  <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Format</label>
+                  <div className="relative group">
+                    <select
+                      value={selectedFormat}
+                      onChange={(e) => setSelectedFormat(e.target.value)}
+                      className="w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none cursor-pointer text-white truncate transition-colors"
+                    >
+                      <option value=".bay">.bay</option>
+                      <option value=".bay_gamer">.bay (Gamer Mod Pack)</option>
+                      <option value=".7z">.7z</option>
+                      <option value=".zip">.zip</option>
+                      <option value=".tar">.tar</option>
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[#888888] group-hover:text-white transition-colors">
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6l4 4 4-4" />
+                      </svg>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Hide algorithm dropdown if Gamer Mod Pack is selected */}
                 {selectedFormat !== ".bay_gamer" && (
-                  <div>
-                    <label className="block text-xs font-medium mb-2">Algorithm</label>
-                    <select
-                      value={selectedAlgorithm}
-                      onChange={(e) => setSelectedAlgorithm(e.target.value)}
-                      className="w-full bg-[#202020] rounded-md p-2 text-sm border border-[#3E3E3E] focus:border-[#60CDFF] outline-none cursor-pointer"
-                    >
-                      {FORMAT_ALGORITHMS[selectedFormat].map((algo) => (
-                        <option key={algo} value={algo}>
-                          {algo}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="sm:col-span-5">
+                    <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Algorithm</label>
+                    <div className="relative group">
+                      <select
+                        value={selectedAlgorithm}
+                        onChange={(e) => setSelectedAlgorithm(e.target.value)}
+                        className="w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none cursor-pointer text-white truncate transition-colors"
+                      >
+                        {FORMAT_ALGORITHMS[selectedFormat].map((algo) => (
+                          <option key={algo} value={algo}>
+                            {algo}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[#888888] group-hover:text-white transition-colors">
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6l4 4 4-4" />
+                        </svg>
+                      </div>
+                    </div>
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-xs font-medium mb-2">Encryption</label>
-                  <select
-                    value={selectedEncryption}
-                    onChange={(e) => setSelectedEncryption(e.target.value)}
-                    className="w-full bg-[#202020] rounded-md p-2 text-sm border border-[#3E3E3E] focus:border-[#60CDFF] outline-none cursor-pointer"
-                  >
-                    <option value="none">None</option>
-                    <option value="aes-256">AES-256-GCM</option>
-                    <option value="chacha20">ChaCha20-Poly1305</option>
-                    <option value="twofish">Twofish</option>
-                  </select>
+                <div className={selectedFormat === ".bay_gamer" ? "sm:col-span-6" : "sm:col-span-4"}>
+                  <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Encryption</label>
+                  <div className="relative group">
+                    <select
+                      value={selectedEncryption}
+                      onChange={(e) => setSelectedEncryption(e.target.value)}
+                      className="w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none cursor-pointer text-white truncate transition-colors"
+                    >
+                      <option value="none">None</option>
+                      <option value="aes-256">AES-256-GCM</option>
+                      <option value="chacha20">ChaCha20-Poly1305</option>
+                      <option value="twofish">Twofish</option>
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[#888888] group-hover:text-white transition-colors">
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6l4 4 4-4" />
+                      </svg>
+                    </div>
+                  </div>
                 </div>
               </div>
 

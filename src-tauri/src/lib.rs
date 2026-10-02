@@ -154,33 +154,38 @@ pub fn headless_quick_compress(format: &str, target_path: &str) -> Result<(), St
             }
         }
     } else if p.is_dir() {
-        fn add_dir(dir: &Path, base_parent: &Path, encoder: &mut zstd::stream::Encoder<File>) {
+        fn add_dir(dir: &Path, base_parent: &Path, encoder: &mut zstd::stream::Encoder<File>, depth: usize) {
+            if depth > 32 {
+                return;
+            }
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let entry_path = entry.path();
-                    if entry_path.is_file() {
-                        let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
-                        let rel_str = rel_name.to_string_lossy();
-                        let bytes = rel_str.as_bytes();
-                        let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
-                        let _ = encoder.write_all(bytes);
-                        if let Ok(mut f) = File::open(&entry_path) {
-                            let mut buf = [0u8; 128 * 1024];
-                            loop {
-                                match f.read(&mut buf) {
-                                    Ok(0) => break,
-                                    Ok(n) => { let _ = encoder.write_all(&buf[..n]); },
-                                    Err(_) => break,
+                    if let Ok(m) = std::fs::symlink_metadata(&entry_path) {
+                        if m.is_file() {
+                            let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
+                            let rel_str = rel_name.to_string_lossy();
+                            let bytes = rel_str.as_bytes();
+                            let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
+                            let _ = encoder.write_all(bytes);
+                            if let Ok(mut f) = File::open(&entry_path) {
+                                let mut buf = [0u8; 128 * 1024];
+                                loop {
+                                    match f.read(&mut buf) {
+                                        Ok(0) => break,
+                                        Ok(n) => { let _ = encoder.write_all(&buf[..n]); },
+                                        Err(_) => break,
+                                    }
                                 }
                             }
+                        } else if m.is_dir() && !m.file_type().is_symlink() {
+                            add_dir(&entry_path, base_parent, encoder, depth + 1);
                         }
-                    } else if entry_path.is_dir() {
-                        add_dir(&entry_path, base_parent, encoder);
                     }
                 }
             }
         }
-        add_dir(p, parent, &mut encoder);
+        add_dir(p, parent, &mut encoder, 0);
     }
 
     encoder.finish().map_err(|e| format!("Finalize error: {}", e))?;
@@ -196,26 +201,29 @@ pub struct SelectedItemInfo {
 }
 
 fn compute_path_size(p: &Path) -> (u64, bool) {
-    if let Ok(meta) = std::fs::metadata(p) {
+    if let Ok(meta) = std::fs::symlink_metadata(p) {
         if meta.is_file() {
             (meta.len(), false)
         } else if meta.is_dir() {
             let mut total: u64 = 0;
-            fn walk_dir(dir: &Path, total: &mut u64) {
+            fn walk_dir(dir: &Path, total: &mut u64, depth: usize) {
+                if depth > 32 {
+                    return;
+                }
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
                         let ep = entry.path();
-                        if let Ok(m) = std::fs::metadata(&ep) {
+                        if let Ok(m) = std::fs::symlink_metadata(&ep) {
                             if m.is_file() {
                                 *total += m.len();
-                            } else if m.is_dir() {
-                                walk_dir(&ep, total);
+                            } else if m.is_dir() && !m.file_type().is_symlink() {
+                                walk_dir(&ep, total, depth + 1);
                             }
                         }
                     }
                 }
             }
-            walk_dir(p, &mut total);
+            walk_dir(p, &mut total, 0);
             (total, true)
         } else {
             (0, false)
@@ -318,15 +326,21 @@ fn write_dir_to_archive(
     bytes_processed: &mut u64,
     total_original: u64,
     app: &AppHandle,
+    depth: usize,
 ) {
+    if depth > 32 {
+        return;
+    }
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let ep = entry.path();
-            if ep.is_file() {
-                let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
-                write_file_to_archive(&ep, &rel.to_string_lossy(), encoder, bytes_processed, total_original, app);
-            } else if ep.is_dir() {
-                write_dir_to_archive(&ep, base_parent, encoder, bytes_processed, total_original, app);
+            if let Ok(m) = std::fs::symlink_metadata(&ep) {
+                if m.is_file() {
+                    let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
+                    write_file_to_archive(&ep, &rel.to_string_lossy(), encoder, bytes_processed, total_original, app);
+                } else if m.is_dir() && !m.file_type().is_symlink() {
+                    write_dir_to_archive(&ep, base_parent, encoder, bytes_processed, total_original, app, depth + 1);
+                }
             }
         }
     }
@@ -390,7 +404,7 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
             let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
             write_file_to_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, &app);
         } else if p.is_dir() {
-            write_dir_to_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, &app);
+            write_dir_to_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, &app, 0);
         }
     }
 
