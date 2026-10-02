@@ -68,8 +68,8 @@ function App() {
     <div className="min-h-screen bg-[#202020] text-white flex flex-col font-sans select-none overflow-hidden">
       {/* Windows 11 Native Titlebar */}
       <div 
-        data-tauri-drag-region 
-        className="h-10 w-full flex justify-between items-center bg-[#202020] hover:bg-[#202020] transition-colors"
+        data-tauri-drag-region="true" 
+        className="h-10 w-full flex justify-between items-center bg-[#202020] hover:bg-[#202020] transition-colors cursor-default"
       >
         <div className="flex items-center space-x-3 px-4 pointer-events-none">
           <div className="w-4 h-4 text-[#60CDFF] flex items-center justify-center">
@@ -80,15 +80,27 @@ function App() {
         </div>
         <div className="flex h-full">
           {/* Windows Minimize */}
-          <button className="h-full px-4 hover:bg-[#3E3E3E] flex items-center justify-center text-[#A8A8A8] transition-colors">
+          <button 
+            onClick={() => {
+              import('@tauri-apps/api/window').then((m) => m.getCurrentWindow().minimize());
+            }}
+            className="h-full px-4 hover:bg-[#3E3E3E] flex items-center justify-center text-[#A8A8A8] transition-colors">
             <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
           </button>
           {/* Windows Maximize */}
-          <button className="h-full px-4 hover:bg-[#3E3E3E] flex items-center justify-center text-[#A8A8A8] transition-colors">
+          <button 
+            onClick={() => {
+              import('@tauri-apps/api/window').then((m) => m.getCurrentWindow().toggleMaximize());
+            }}
+            className="h-full px-4 hover:bg-[#3E3E3E] flex items-center justify-center text-[#A8A8A8] transition-colors">
             <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0,0v10h10V0H0z M9,9H1V1h8V9z" fill="currentColor"/></svg>
           </button>
           {/* Windows Close */}
-          <button className="h-full px-4 hover:bg-red-600 hover:text-white flex items-center justify-center text-[#A8A8A8] transition-colors">
+          <button 
+            onClick={() => {
+              import('@tauri-apps/api/window').then((m) => m.getCurrentWindow().close());
+            }}
+            className="h-full px-4 hover:bg-red-600 hover:text-white flex items-center justify-center text-[#A8A8A8] transition-colors">
             <svg width="10" height="10" viewBox="0 0 10 10"><path d="M10,1L9,0L5,4L1,0L0,1l4,4l-4,4l1,1l4-4l4,4l1-1l-4-4L10,1z" fill="currentColor"/></svg>
           </button>
         </div>
@@ -109,7 +121,18 @@ function App() {
           </div>
 
           {/* Windows 11 File Drop Zone */}
-          <div className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-10 text-center hover:bg-[#333333] transition-colors cursor-pointer flex flex-col items-center justify-center space-y-3">
+          <div 
+            onClick={async () => {
+              const { open } = await import('@tauri-apps/plugin-dialog');
+              const selected = await open({
+                multiple: true,
+                title: 'Select files to compress'
+              });
+              if (selected) {
+                console.log('Selected files:', selected);
+              }
+            }}
+            className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-10 text-center hover:bg-[#333333] transition-colors cursor-pointer flex flex-col items-center justify-center space-y-3">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-10 h-10 text-[#60CDFF]"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
             <p className="text-sm font-medium text-white">Drag and drop files to compress</p>
             <p className="text-xs text-[#A8A8A8]">or right-click files in Explorer</p>
