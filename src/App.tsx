@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -29,6 +29,13 @@ interface CompressResult {
   error?: string;
 }
 
+interface SelectedItemInfo {
+  path: string;
+  name: string;
+  size: number;
+  is_dir: boolean;
+}
+
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
   ".bay_gamer": ["Zstd-Fast (Auto)"],
@@ -50,6 +57,7 @@ function App() {
   const [archiveToOriginalPath, setArchiveToOriginalPath] = useState(true);
   const [separateArchives, setSeparateArchives] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [itemsInfo, setItemsInfo] = useState<Record<string, { size: number; is_dir: boolean }>>({});
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
 
@@ -58,6 +66,27 @@ function App() {
   const [progress, setProgress] = useState<CompressProgress | null>(null);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
   const [compressError, setCompressError] = useState<string | null>(null);
+
+  // Query file and folder size metadata when selection changes
+  useEffect(() => {
+    if (selectedFiles.length === 0) {
+      setItemsInfo({});
+      return;
+    }
+    invoke<SelectedItemInfo[]>("get_selected_items_info", { paths: selectedFiles })
+      .then((infos) => {
+        const map: Record<string, { size: number; is_dir: boolean }> = {};
+        infos.forEach((info) => {
+          map[info.path] = { size: info.size, is_dir: info.is_dir };
+        });
+        setItemsInfo(map);
+      })
+      .catch((err) => console.error("Failed to query item sizes:", err));
+  }, [selectedFiles]);
+
+  const totalSelectedSize = useMemo(() => {
+    return selectedFiles.reduce((acc, path) => acc + (itemsInfo[path]?.size || 0), 0);
+  }, [selectedFiles, itemsInfo]);
 
   useEffect(() => {
     // 1. Instant hardware specs query
@@ -326,10 +355,20 @@ function App() {
           {/* Windows 11 File Drop Zone */}
           {selectedFiles.length > 0 ? (
             <div className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-4 flex flex-col space-y-3">
-              <div className="flex justify-between items-center text-xs text-[#A8A8A8] border-b border-[#3E3E3E] pb-2">
-                <span>
-                  {selectedFiles.length} item{selectedFiles.length > 1 ? "s" : ""} selected
-                </span>
+              <div className="flex justify-between items-center text-xs border-b border-[#3E3E3E] pb-2">
+                <div className="flex items-center space-x-2 text-[#A8A8A8]">
+                  <span className="text-white font-medium">
+                    {selectedFiles.length} item{selectedFiles.length > 1 ? "s" : ""} selected
+                  </span>
+                  {totalSelectedSize > 0 && (
+                    <>
+                      <span>•</span>
+                      <span className="text-[#60CDFF] font-mono font-medium">
+                        Total: {formatBytes(totalSelectedSize)}
+                      </span>
+                    </>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => setSelectedFiles([])}
@@ -340,41 +379,72 @@ function App() {
               </div>
 
               <div className="max-h-48 overflow-y-auto flex flex-col space-y-2 custom-scrollbar pr-1">
-                {selectedFiles.map((file) => (
-                  <div
-                    key={file}
-                    className="flex justify-between items-center bg-[#202020] px-4 py-2.5 rounded-md border border-[#3E3E3E] group hover:border-[#555] transition-colors"
-                  >
-                    <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        className="w-4 h-4 text-[#60CDFF] shrink-0"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
-                        />
-                      </svg>
-                      <span className="text-sm truncate text-white" title={file}>
-                        {file.split("\\").pop() || file.split("/").pop()}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedFiles((prev) => prev.filter((f) => f !== file))}
-                      className="text-[#A8A8A8] hover:text-red-400 p-1 rounded hover:bg-[#333333] transition-colors cursor-pointer shrink-0"
-                      title="Remove"
+                {selectedFiles.map((file) => {
+                  const info = itemsInfo[file];
+                  const isDir = info?.is_dir;
+                  const sizeFormatted = info !== undefined ? formatBytes(info.size) : "...";
+                  return (
+                    <div
+                      key={file}
+                      className="flex justify-between items-center bg-[#202020] px-4 py-2.5 rounded-md border border-[#3E3E3E] group hover:border-[#555] transition-colors"
                     >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                        {isDir ? (
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            className="w-4 h-4 text-[#F9D648] shrink-0"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                            />
+                          </svg>
+                        ) : (
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            className="w-4 h-4 text-[#60CDFF] shrink-0"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+                            />
+                          </svg>
+                        )}
+                        <span className="text-sm truncate text-white" title={file}>
+                          {file.split("\\").pop() || file.split("/").pop()}
+                        </span>
+                        {isDir && (
+                          <span className="text-[10px] text-[#A8A8A8] bg-[#2A2A2A] px-1.5 py-0.5 rounded border border-[#3E3E3E] shrink-0">
+                            folder
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-3 shrink-0">
+                        <span className="text-xs font-mono font-medium text-[#C8C8C8] bg-[#2A2A2A] px-2.5 py-1 rounded border border-[#3E3E3E]">
+                          {sizeFormatted}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedFiles((prev) => prev.filter((f) => f !== file))}
+                          className="text-[#A8A8A8] hover:text-red-400 p-1 rounded hover:bg-[#333333] transition-colors cursor-pointer shrink-0"
+                          title="Remove"
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="flex space-x-3 pt-1">

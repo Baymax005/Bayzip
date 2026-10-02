@@ -187,6 +187,66 @@ pub fn headless_quick_compress(format: &str, target_path: &str) -> Result<(), St
     Ok(())
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct SelectedItemInfo {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+fn compute_path_size(p: &Path) -> (u64, bool) {
+    if let Ok(meta) = std::fs::metadata(p) {
+        if meta.is_file() {
+            (meta.len(), false)
+        } else if meta.is_dir() {
+            let mut total: u64 = 0;
+            fn walk_dir(dir: &Path, total: &mut u64) {
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let ep = entry.path();
+                        if let Ok(m) = std::fs::metadata(&ep) {
+                            if m.is_file() {
+                                *total += m.len();
+                            } else if m.is_dir() {
+                                walk_dir(&ep, total);
+                            }
+                        }
+                    }
+                }
+            }
+            walk_dir(p, &mut total);
+            (total, true)
+        } else {
+            (0, false)
+        }
+    } else {
+        (0, false)
+    }
+}
+
+#[tauri::command]
+fn get_selected_items_info(paths: Vec<String>) -> Vec<SelectedItemInfo> {
+    paths
+        .into_iter()
+        .map(|path_str| {
+            let p = Path::new(&path_str);
+            let name = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&path_str)
+                .to_string();
+            let (size, is_dir) = compute_path_size(p);
+            SelectedItemInfo {
+                path: path_str,
+                name,
+                size,
+                is_dir,
+            }
+        })
+        .collect()
+}
+
 #[derive(serde::Deserialize)]
 pub struct CompressPayload {
     files: Vec<String>,
@@ -213,6 +273,65 @@ pub struct CompressResponse {
     error: Option<String>,
 }
 
+fn write_file_to_archive(
+    filepath: &Path,
+    rel_name: &str,
+    encoder: &mut zstd::stream::Encoder<File>,
+    bytes_processed: &mut u64,
+    total_original: u64,
+    app: &AppHandle,
+) {
+    let filename_bytes = rel_name.as_bytes();
+    let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
+    let _ = encoder.write_all(filename_bytes);
+
+    if let Ok(mut f) = File::open(filepath) {
+        let mut buffer = [0u8; 128 * 1024];
+        loop {
+            match f.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let _ = encoder.write_all(&buffer[..n]);
+                    *bytes_processed += n as u64;
+                    let pct = if total_original > 0 {
+                        ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                    } else {
+                        50.0
+                    };
+                    let _ = app.emit("compress_progress", CompressProgress {
+                        percent: pct,
+                        current_file: rel_name.to_string(),
+                        bytes_processed: *bytes_processed,
+                        total_bytes: total_original,
+                    });
+                }
+                Err(_) => break,
+            }
+        }
+    }
+}
+
+fn write_dir_to_archive(
+    dir: &Path,
+    base_parent: &Path,
+    encoder: &mut zstd::stream::Encoder<File>,
+    bytes_processed: &mut u64,
+    total_original: u64,
+    app: &AppHandle,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let ep = entry.path();
+            if ep.is_file() {
+                let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
+                write_file_to_archive(&ep, &rel.to_string_lossy(), encoder, bytes_processed, total_original, app);
+            } else if ep.is_dir() {
+                write_dir_to_archive(&ep, base_parent, encoder, bytes_processed, total_original, app);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressResponse, String> {
     if payload.files.is_empty() {
@@ -232,12 +351,11 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
     
     let output_path = parent_dir.join(&archive_name);
     
-    // Calculate total original size
+    // Calculate total original size across files & folders
     let mut total_original: u64 = 0;
     for file_str in &payload.files {
-        if let Ok(meta) = std::fs::metadata(file_str) {
-            total_original += meta.len();
-        }
+        let (s, _) = compute_path_size(Path::new(file_str));
+        total_original += s;
     }
 
     // Initial 0% progress event
@@ -268,35 +386,11 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
 
     for file_str in &payload.files {
         let p = Path::new(file_str);
-        let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-        let filename_bytes = filename.as_bytes();
-        
-        let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
-        let _ = encoder.write_all(filename_bytes);
-
-        if let Ok(mut f) = File::open(p) {
-            let mut buffer = [0u8; 128 * 1024];
-            loop {
-                match f.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let _ = encoder.write_all(&buffer[..n]);
-                        bytes_processed += n as u64;
-                        let pct = if total_original > 0 {
-                            ((bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
-                        } else {
-                            50.0
-                        };
-                        let _ = app.emit("compress_progress", CompressProgress {
-                            percent: pct,
-                            current_file: filename.to_string(),
-                            bytes_processed,
-                            total_bytes: total_original,
-                        });
-                    }
-                    Err(_) => break,
-                }
-            }
+        if p.is_file() {
+            let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            write_file_to_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, &app);
+        } else if p.is_dir() {
+            write_dir_to_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, &app);
         }
     }
 
@@ -339,7 +433,8 @@ pub fn run() {
             get_system_specs, 
             get_cli_args, 
             register_context_menu,
-            compress_files
+            compress_files,
+            get_selected_items_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
