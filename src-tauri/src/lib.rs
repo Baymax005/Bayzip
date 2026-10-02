@@ -7,6 +7,12 @@ use std::path::Path;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[derive(Serialize)]
 struct SystemSpecs {
     total_ram_gb: f64,
@@ -39,38 +45,47 @@ fn get_cli_args() -> Vec<String> {
 }
 
 #[tauri::command]
-fn register_context_menu() -> Result<String, String> {
+async fn register_context_menu() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(exe_path) = std::env::current_exe() {
-            let exe_str = exe_path.to_string_lossy().to_string();
-            let cmd_str = format!("\"{}\" \"%1\"", exe_str);
-            
-            // Add for all files (*)
-            let _ = Command::new("reg")
-                .args(["add", "HKCU\\Software\\Classes\\*\\shell\\Bayzip", "/ve", "/d", "Compress with Bayzip", "/f"])
-                .output();
-            let _ = Command::new("reg")
-                .args(["add", "HKCU\\Software\\Classes\\*\\shell\\Bayzip", "/v", "Icon", "/d", &exe_str, "/f"])
-                .output();
-            let _ = Command::new("reg")
-                .args(["add", "HKCU\\Software\\Classes\\*\\shell\\Bayzip\\command", "/ve", "/d", &cmd_str, "/f"])
-                .output();
+        tauri::async_runtime::spawn_blocking(|| {
+            if let Ok(exe_path) = std::env::current_exe() {
+                let exe_str = exe_path.to_string_lossy().to_string();
+                let cmd_str = format!("\"{}\" \"%1\"", exe_str);
 
-            // Add for directories (folders)
-            let _ = Command::new("reg")
-                .args(["add", "HKCU\\Software\\Classes\\Directory\\shell\\Bayzip", "/ve", "/d", "Compress with Bayzip", "/f"])
-                .output();
-            let _ = Command::new("reg")
-                .args(["add", "HKCU\\Software\\Classes\\Directory\\shell\\Bayzip", "/v", "Icon", "/d", &exe_str, "/f"])
-                .output();
-            let _ = Command::new("reg")
-                .args(["add", "HKCU\\Software\\Classes\\Directory\\shell\\Bayzip\\command", "/ve", "/d", &cmd_str, "/f"])
-                .output();
+                // Write a temporary .reg file to import all keys silently in one atomic operation
+                let reg_content = format!(
+                    "Windows Registry Editor Version 5.00\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\Bayzip]\r\n\
+                    @=\"Compress with Bayzip\"\r\n\
+                    \"Icon\"=\"{}\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\Bayzip\\command]\r\n\
+                    @=\"{}\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\Bayzip]\r\n\
+                    @=\"Compress with Bayzip\"\r\n\
+                    \"Icon\"=\"{}\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\Bayzip\\command]\r\n\
+                    @=\"{}\"\r\n",
+                    exe_str.replace('\\', "\\\\").replace('"', "\\\""),
+                    cmd_str.replace('\\', "\\\\").replace('"', "\\\""),
+                    exe_str.replace('\\', "\\\\").replace('"', "\\\""),
+                    cmd_str.replace('\\', "\\\\").replace('"', "\\\""),
+                );
 
-            return Ok("Context menu registered successfully!".into());
-        }
-        Err("Could not determine executable path.".into())
+                let temp_reg = std::env::temp_dir().join("bayzip_context.reg");
+                if std::fs::write(&temp_reg, reg_content).is_ok() {
+                    let mut cmd = Command::new("reg");
+                    cmd.args(["import", &temp_reg.to_string_lossy()]);
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+                    let _ = cmd.output();
+                    let _ = std::fs::remove_file(temp_reg);
+                    return Ok("Context menu registered successfully!".into());
+                }
+            }
+            Err("Could not determine executable path.".into())
+        })
+        .await
+        .map_err(|e| format!("Registry sync error: {}", e))?
     }
     #[cfg(not(target_os = "windows"))]
     {

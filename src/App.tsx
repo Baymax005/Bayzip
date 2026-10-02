@@ -74,12 +74,7 @@ function App() {
       })
       .catch(() => {});
 
-    // 3. Auto-register Explorer right-click context menu (HKCU)
-    invoke<string>("register_context_menu")
-      .then((msg) => setContextMenuStatus(msg))
-      .catch(() => {});
-
-    // 4. Listen to native Tauri file drop events
+    // 3. Listen to native Tauri file drop events
     let unlistenDrop: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((event) => {
@@ -163,12 +158,17 @@ function App() {
     }
   };
 
+  const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
+
   const handleRegisterContextMenu = async () => {
+    setIsSyncingRegistry(true);
     try {
       const res = await invoke<string>("register_context_menu");
       setContextMenuStatus(res);
     } catch (e) {
       setContextMenuStatus("Registration failed: " + String(e));
+    } finally {
+      setIsSyncingRegistry(false);
     }
   };
 
@@ -805,10 +805,19 @@ function App() {
                   </div>
                   <button
                     type="button"
+                    disabled={isSyncingRegistry}
                     onClick={handleRegisterContextMenu}
-                    className="text-xs text-[#60CDFF] hover:underline cursor-pointer bg-[#2A2A2A] px-2 py-1 rounded border border-[#3E3E3E] hover:border-[#60CDFF] transition-colors"
+                    className={`text-xs text-[#60CDFF] hover:underline cursor-pointer bg-[#2A2A2A] px-2.5 py-1 rounded border border-[#3E3E3E] hover:border-[#60CDFF] transition-colors flex items-center space-x-1.5 ${
+                      isSyncingRegistry ? "opacity-75 cursor-not-allowed" : ""
+                    }`}
                   >
-                    Sync Registry
+                    {isSyncingRegistry && (
+                      <svg className="animate-spin h-3 w-3 text-[#60CDFF]" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                    )}
+                    <span>{isSyncingRegistry ? "Syncing..." : "Sync Registry"}</span>
                   </button>
                 </div>
                 {contextMenuStatus && (
