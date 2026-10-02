@@ -4,12 +4,20 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
 interface SystemSpecs {
   total_ram_gb: number;
   free_ram_gb: number;
   cpu_cores: number;
+}
+
+interface CompressProgress {
+  percent: number;
+  current_file: string;
+  bytes_processed: number;
+  total_bytes: number;
 }
 
 interface CompressResult {
@@ -45,8 +53,9 @@ function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
 
-  // Compression execution state
+  // Compression execution & progress state
   const [isCompressing, setIsCompressing] = useState(false);
+  const [progress, setProgress] = useState<CompressProgress | null>(null);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
   const [compressError, setCompressError] = useState<string | null>(null);
 
@@ -71,7 +80,7 @@ function App() {
       .catch(() => {});
 
     // 4. Listen to native Tauri file drop events
-    let unlisten: (() => void) | undefined;
+    let unlistenDrop: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "drop") {
@@ -82,14 +91,27 @@ function App() {
         }
       })
       .then((fn) => {
-        unlisten = fn;
+        unlistenDrop = fn;
       })
       .catch((err) => {
         console.error("Failed to register drag-drop listener:", err);
       });
 
+    // 5. Listen to live compression progress events from Rust
+    let unlistenProgress: (() => void) | undefined;
+    listen<CompressProgress>("compress_progress", (event) => {
+      setProgress(event.payload);
+    })
+      .then((fn) => {
+        unlistenProgress = fn;
+      })
+      .catch((err) => {
+        console.error("Progress listener error:", err);
+      });
+
     return () => {
-      if (unlisten) unlisten();
+      if (unlistenDrop) unlistenDrop();
+      if (unlistenProgress) unlistenProgress();
     };
   }, []);
 
@@ -158,6 +180,12 @@ function App() {
 
     setIsCompressing(true);
     setCompressError(null);
+    setProgress({
+      percent: 0,
+      current_file: "Initializing compression...",
+      bytes_processed: 0,
+      total_bytes: 0,
+    });
 
     try {
       const res = await invoke<CompressResult>("compress_files", {
@@ -174,6 +202,7 @@ function App() {
       setCompressError(String(err));
     } finally {
       setIsCompressing(false);
+      setProgress(null);
     }
   };
 
@@ -585,6 +614,42 @@ function App() {
                     Add to separate archives
                   </div>
                 </label>
+              </div>
+            </div>
+          )}
+
+          {/* Active Compression Progress Card */}
+          {isCompressing && (
+            <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-4 shadow-lg space-y-3">
+              <div className="flex justify-between items-center text-xs">
+                <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#60CDFF] animate-pulse shrink-0"></span>
+                  <span className="text-[#D0D0D0] truncate font-medium">
+                    {progress?.current_file ? `Compressing: ${progress.current_file}` : "Initializing compression..."}
+                  </span>
+                </div>
+                <span className="text-sm font-semibold text-[#60CDFF] font-mono shrink-0">
+                  {progress ? Math.round(progress.percent) : 0}%
+                </span>
+              </div>
+
+              {/* Progress Track & Animated Glow Fill */}
+              <div className="w-full h-2 bg-[#202020] rounded-full overflow-hidden border border-[#3E3E3E]">
+                <div
+                  className="h-full bg-gradient-to-r from-[#0078D4] to-[#60CDFF] transition-all duration-150 ease-out rounded-full shadow-[0_0_10px_rgba(96,205,255,0.7)]"
+                  style={{ width: `${progress ? Math.max(2, progress.percent) : 2}%` }}
+                ></div>
+              </div>
+
+              <div className="flex justify-between items-center text-[11px] text-[#8A8A8A]">
+                <span>
+                  {progress && progress.total_bytes > 0
+                    ? `${formatBytes(progress.bytes_processed)} / ${formatBytes(progress.total_bytes)}`
+                    : "Hardware Acceleration Active"}
+                </span>
+                <span className="text-[#60CDFF] font-medium">
+                  {selectedAlgorithm} • {selectedFormat}
+                </span>
               </div>
             </div>
           )}

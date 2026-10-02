@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Instant;
+use tauri::{AppHandle, Emitter};
 
 #[derive(Serialize)]
 struct SystemSpecs {
@@ -85,6 +86,14 @@ pub struct CompressPayload {
     slider_value: i32,
 }
 
+#[derive(Clone, serde::Serialize)]
+pub struct CompressProgress {
+    pub percent: f64,
+    pub current_file: String,
+    pub bytes_processed: u64,
+    pub total_bytes: u64,
+}
+
 #[derive(serde::Serialize)]
 pub struct CompressResponse {
     success: bool,
@@ -96,7 +105,7 @@ pub struct CompressResponse {
 }
 
 #[tauri::command]
-fn compress_files(payload: CompressPayload) -> Result<CompressResponse, String> {
+fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressResponse, String> {
     if payload.files.is_empty() {
         return Err("No files selected to compress".to_string());
     }
@@ -114,12 +123,21 @@ fn compress_files(payload: CompressPayload) -> Result<CompressResponse, String> 
     
     let output_path = parent_dir.join(&archive_name);
     
+    // Calculate total original size
     let mut total_original: u64 = 0;
     for file_str in &payload.files {
         if let Ok(meta) = std::fs::metadata(file_str) {
             total_original += meta.len();
         }
     }
+
+    // Initial 0% progress event
+    let _ = app.emit("compress_progress", CompressProgress {
+        percent: 0.0,
+        current_file: "Preparing files...".into(),
+        bytes_processed: 0,
+        total_bytes: total_original,
+    });
 
     let zstd_level = match payload.slider_value {
         0 => 1,
@@ -137,6 +155,8 @@ fn compress_files(payload: CompressPayload) -> Result<CompressResponse, String> 
 
     let _ = encoder.write_all(b"BAYZIP\x01");
 
+    let mut bytes_processed: u64 = 0;
+
     for file_str in &payload.files {
         let p = Path::new(file_str);
         let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
@@ -146,12 +166,24 @@ fn compress_files(payload: CompressPayload) -> Result<CompressResponse, String> 
         let _ = encoder.write_all(filename_bytes);
 
         if let Ok(mut f) = File::open(p) {
-            let mut buffer = [0u8; 64 * 1024];
+            let mut buffer = [0u8; 128 * 1024];
             loop {
                 match f.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
                         let _ = encoder.write_all(&buffer[..n]);
+                        bytes_processed += n as u64;
+                        let pct = if total_original > 0 {
+                            ((bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                        } else {
+                            50.0
+                        };
+                        let _ = app.emit("compress_progress", CompressProgress {
+                            percent: pct,
+                            current_file: filename.to_string(),
+                            bytes_processed,
+                            total_bytes: total_original,
+                        });
                     }
                     Err(_) => break,
                 }
@@ -160,6 +192,14 @@ fn compress_files(payload: CompressPayload) -> Result<CompressResponse, String> 
     }
 
     encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
+
+    // Final 100% progress event
+    let _ = app.emit("compress_progress", CompressProgress {
+        percent: 100.0,
+        current_file: "Completed".into(),
+        bytes_processed: total_original,
+        total_bytes: total_original,
+    });
 
     let compressed_size = std::fs::metadata(&output_path)
         .map(|m| m.len())
