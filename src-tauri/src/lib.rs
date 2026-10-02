@@ -44,6 +44,42 @@ fn get_cli_args() -> Vec<String> {
     std::env::args().skip(1).filter(|arg| !arg.starts_with("--")).collect()
 }
 
+fn build_target_reg(target: &str, exe: &str) -> String {
+    format!(
+        "[-HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip]\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip]\r\n\
+        \"MUIVerb\"=\"Bayzip\"\r\n\
+        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\
+        \"SubCommands\"=\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell]\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\01_open]\r\n\
+        \"MUIVerb\"=\"Open in Bayzip...\"\r\n\
+        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\01_open\\command]\r\n\
+        @=\"\\\"{exe}\\\" \\\"%1\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\02_bay]\r\n\
+        \"MUIVerb\"=\"Add to archive (.bay)\"\r\n\
+        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\02_bay\\command]\r\n\
+        @=\"\\\"{exe}\\\" --quick-compress .bay \\\"%1\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\03_zip]\r\n\
+        \"MUIVerb\"=\"Add to archive (.zip)\"\r\n\
+        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\03_zip\\command]\r\n\
+        @=\"\\\"{exe}\\\" --quick-compress .zip \\\"%1\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\04_7z]\r\n\
+        \"MUIVerb\"=\"Add to archive (.7z)\"\r\n\
+        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\04_7z\\command]\r\n\
+        @=\"\\\"{exe}\\\" --quick-compress .7z \\\"%1\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\05_tar]\r\n\
+        \"MUIVerb\"=\"Add to archive (.tar)\"\r\n\
+        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\05_tar\\command]\r\n\
+        @=\"\\\"{exe}\\\" --quick-compress .tar \\\"%1\\\"\"\r\n\r\n"
+    )
+}
+
 #[tauri::command]
 async fn register_context_menu() -> Result<String, String> {
     #[cfg(target_os = "windows")]
@@ -51,25 +87,12 @@ async fn register_context_menu() -> Result<String, String> {
         tauri::async_runtime::spawn_blocking(|| {
             if let Ok(exe_path) = std::env::current_exe() {
                 let exe_str = exe_path.to_string_lossy().to_string();
-                let cmd_str = format!("\"{}\" \"%1\"", exe_str);
+                let escaped_exe = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
 
-                // Write a temporary .reg file to import all keys silently in one atomic operation
                 let reg_content = format!(
-                    "Windows Registry Editor Version 5.00\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\Bayzip]\r\n\
-                    @=\"Compress with Bayzip\"\r\n\
-                    \"Icon\"=\"{}\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\Bayzip\\command]\r\n\
-                    @=\"{}\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\Bayzip]\r\n\
-                    @=\"Compress with Bayzip\"\r\n\
-                    \"Icon\"=\"{}\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\Bayzip\\command]\r\n\
-                    @=\"{}\"\r\n",
-                    exe_str.replace('\\', "\\\\").replace('"', "\\\""),
-                    cmd_str.replace('\\', "\\\\").replace('"', "\\\""),
-                    exe_str.replace('\\', "\\\\").replace('"', "\\\""),
-                    cmd_str.replace('\\', "\\\\").replace('"', "\\\""),
+                    "Windows Registry Editor Version 5.00\r\n\r\n{}{}",
+                    build_target_reg("*", &escaped_exe),
+                    build_target_reg("Directory", &escaped_exe)
                 );
 
                 let temp_reg = std::env::temp_dir().join("bayzip_context.reg");
@@ -79,7 +102,7 @@ async fn register_context_menu() -> Result<String, String> {
                     cmd.creation_flags(CREATE_NO_WINDOW);
                     let _ = cmd.output();
                     let _ = std::fs::remove_file(temp_reg);
-                    return Ok("Context menu registered successfully!".into());
+                    return Ok("Cascading context menu registered successfully!".into());
                 }
             }
             Err("Could not determine executable path.".into())
@@ -91,6 +114,77 @@ async fn register_context_menu() -> Result<String, String> {
     {
         Ok("Context menu not applicable on non-Windows OS".into())
     }
+}
+
+pub fn headless_quick_compress(format: &str, target_path: &str) -> Result<(), String> {
+    let p = Path::new(target_path);
+    if !p.exists() {
+        return Err("Target path does not exist".into());
+    }
+    let parent = p.parent().unwrap_or_else(|| Path::new("."));
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("archive");
+    let ext = if format.starts_with('.') { format.to_string() } else { format!(".{}", format) };
+    let output_path = parent.join(format!("{}{}", stem, ext));
+
+    let out_file = File::create(&output_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+    
+    // Balanced profile level 7 (50% slider equivalent)
+    let mut encoder = zstd::stream::Encoder::new(out_file, 7)
+        .map_err(|e| format!("Encoder error: {}", e))?;
+
+    let _ = encoder.write_all(b"BAYZIP\x01");
+
+    if p.is_file() {
+        let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+        let filename_bytes = filename.as_bytes();
+        let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
+        let _ = encoder.write_all(filename_bytes);
+
+        if let Ok(mut f) = File::open(p) {
+            let mut buffer = [0u8; 128 * 1024];
+            loop {
+                match f.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let _ = encoder.write_all(&buffer[..n]);
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    } else if p.is_dir() {
+        fn add_dir(dir: &Path, base_parent: &Path, encoder: &mut zstd::stream::Encoder<File>) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_file() {
+                        let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
+                        let rel_str = rel_name.to_string_lossy();
+                        let bytes = rel_str.as_bytes();
+                        let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
+                        let _ = encoder.write_all(bytes);
+                        if let Ok(mut f) = File::open(&entry_path) {
+                            let mut buf = [0u8; 128 * 1024];
+                            loop {
+                                match f.read(&mut buf) {
+                                    Ok(0) => break,
+                                    Ok(n) => { let _ = encoder.write_all(&buf[..n]); },
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                    } else if entry_path.is_dir() {
+                        add_dir(&entry_path, base_parent, encoder);
+                    }
+                }
+            }
+        }
+        add_dir(p, parent, &mut encoder);
+    }
+
+    encoder.finish().map_err(|e| format!("Finalize error: {}", e))?;
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
