@@ -3,12 +3,22 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 interface SystemSpecs {
   total_ram_gb: number;
   free_ram_gb: number;
   cpu_cores: number;
+}
+
+interface CompressResult {
+  success: boolean;
+  output_path: string;
+  original_size: number;
+  compressed_size: number;
+  elapsed_ms: number;
+  error?: string;
 }
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
@@ -35,8 +45,13 @@ function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
 
+  // Compression execution state
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
+  const [compressError, setCompressError] = useState<string | null>(null);
+
   useEffect(() => {
-    // 1. Fetch hardware specs
+    // 1. Instant hardware specs query
     invoke<SystemSpecs>("get_system_specs")
       .then((res) => setSpecs(res))
       .catch((err) => console.error("Specs query error:", err));
@@ -48,12 +63,12 @@ function App() {
           setSelectedFiles((prev) => [...new Set([...prev, ...args])]);
         }
       })
-      .catch(() => { });
+      .catch(() => {});
 
     // 3. Auto-register Explorer right-click context menu (HKCU)
     invoke<string>("register_context_menu")
       .then((msg) => setContextMenuStatus(msg))
-      .catch(() => { });
+      .catch(() => {});
 
     // 4. Listen to native Tauri file drop events
     let unlisten: (() => void) | undefined;
@@ -135,10 +150,39 @@ function App() {
     }
   };
 
-  const handleCompress = () => {
-    console.log(
-      `Executing compression. Format: ${selectedFormat}, Algo: ${selectedAlgorithm}, Files: ${selectedFiles.length}`
-    );
+  const handleCompress = async () => {
+    if (selectedFiles.length === 0) {
+      await handleSelectFiles();
+      return;
+    }
+
+    setIsCompressing(true);
+    setCompressError(null);
+
+    try {
+      const res = await invoke<CompressResult>("compress_files", {
+        payload: {
+          files: selectedFiles,
+          format: selectedFormat,
+          algorithm: selectedAlgorithm,
+          slider_value: sliderValue,
+        },
+      });
+      setCompressResult(res);
+    } catch (err) {
+      console.error("Compression execution error:", err);
+      setCompressError(String(err));
+    } finally {
+      setIsCompressing(false);
+    }
+  };
+
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return (bytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
   };
 
   const getSliderLabel = () => {
@@ -155,18 +199,18 @@ function App() {
       <div
         data-tauri-drag-region
         onMouseDown={(e) => {
-          if (e.buttons === 1 && (e.target as HTMLElement).closest("button") === null) {
-            getCurrentWindow().startDragging().catch(() => { });
+          if (e.button === 0 && (e.target as HTMLElement).closest("button") === null) {
+            getCurrentWindow().startDragging().catch(() => {});
           }
         }}
         onDoubleClick={(e) => {
           if ((e.target as HTMLElement).closest("button") === null) {
-            getCurrentWindow().toggleMaximize().catch(() => { });
+            getCurrentWindow().toggleMaximize().catch(() => {});
           }
         }}
         className="h-10 w-full flex justify-between items-center bg-[#202020] cursor-default select-none border-b border-[#2D2D2D] shrink-0"
       >
-        <div className="flex items-center space-x-3 px-4 pointer-events-none">
+        <div data-tauri-drag-region className="flex items-center space-x-3 px-4 pointer-events-none">
           <div className="w-4 h-4 text-[#60CDFF] flex items-center justify-center">
             {/* Simple Zip Icon */}
             <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
@@ -175,6 +219,9 @@ function App() {
           </div>
           <span className="text-xs font-normal text-white tracking-wide">Bayzip</span>
         </div>
+
+        {/* Dedicated Draggable Center Surface */}
+        <div data-tauri-drag-region className="flex-1 h-full cursor-default" />
 
         {/* Window Controls */}
         <div className="flex h-full" data-tauri-drag-region="false">
@@ -500,12 +547,14 @@ function App() {
                       onChange={() => setArchiveToOriginalPath(!archiveToOriginalPath)}
                     />
                     <div
-                      className={`block w-10 h-6 rounded-full transition-colors ${archiveToOriginalPath ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
-                        }`}
+                      className={`block w-10 h-6 rounded-full transition-colors ${
+                        archiveToOriginalPath ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                      }`}
                     ></div>
                     <div
-                      className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${archiveToOriginalPath ? "transform translate-x-4" : ""
-                        }`}
+                      className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${
+                        archiveToOriginalPath ? "transform translate-x-4" : ""
+                      }`}
                     ></div>
                   </div>
                   <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
@@ -522,12 +571,14 @@ function App() {
                       onChange={() => setSeparateArchives(!separateArchives)}
                     />
                     <div
-                      className={`block w-10 h-6 rounded-full transition-colors ${separateArchives ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
-                        }`}
+                      className={`block w-10 h-6 rounded-full transition-colors ${
+                        separateArchives ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                      }`}
                     ></div>
                     <div
-                      className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${separateArchives ? "transform translate-x-4" : ""
-                        }`}
+                      className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${
+                        separateArchives ? "transform translate-x-4" : ""
+                      }`}
                     ></div>
                   </div>
                   <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
@@ -538,18 +589,104 @@ function App() {
             </div>
           )}
 
+          {/* Error Banner */}
+          {compressError && (
+            <div className="bg-red-950/50 border border-red-800 text-red-300 p-4 rounded-lg text-sm">
+              <span className="font-semibold">Compression failed: </span>
+              {compressError}
+            </div>
+          )}
+
           {/* Execute Button */}
           <div className="flex justify-end pt-2">
             <button
               type="button"
+              disabled={isCompressing}
               onClick={handleCompress}
-              className="px-8 py-2.5 bg-[#60CDFF] hover:bg-[#4FB8E6] text-black font-semibold rounded-md shadow-sm transition-colors text-sm cursor-pointer"
+              className={`px-8 py-2.5 bg-[#60CDFF] hover:bg-[#4FB8E6] text-black font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 ${
+                isCompressing ? "opacity-75 cursor-not-allowed" : "cursor-pointer"
+              }`}
             >
-              Compress
+              {isCompressing && (
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-black" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              )}
+              <span>{isCompressing ? "Compressing..." : selectedFiles.length > 0 ? "Compress Now" : "Select Files to Compress"}</span>
             </button>
           </div>
         </div>
       </div>
+
+      {/* Compression Result Modal */}
+      {compressResult && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-md w-full shadow-2xl relative space-y-5">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white">Archive Created Successfully!</h3>
+                <p className="text-xs text-[#A8A8A8]">Completed in {compressResult.elapsed_ms}ms</p>
+              </div>
+            </div>
+
+            <div className="bg-[#2A2A2A] rounded-lg p-4 border border-[#3E3E3E] space-y-2.5">
+              <div className="flex justify-between text-xs">
+                <span className="text-[#A8A8A8]">Original Size:</span>
+                <span className="font-mono text-white">{formatBytes(compressResult.original_size)}</span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-[#A8A8A8]">Compressed Size:</span>
+                <span className="font-mono text-[#60CDFF] font-semibold">
+                  {formatBytes(compressResult.compressed_size)}
+                </span>
+              </div>
+              {compressResult.original_size > 0 && (
+                <div className="flex justify-between text-xs border-t border-[#3E3E3E] pt-2">
+                  <span className="text-[#A8A8A8]">Space Saved:</span>
+                  <span className="font-semibold text-emerald-400">
+                    {Math.max(
+                      0,
+                      Number(((1 - compressResult.compressed_size / compressResult.original_size) * 100).toFixed(1))
+                    )}
+                    %
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="text-xs bg-[#1A1A1A] p-3 rounded border border-[#333]">
+              <span className="text-[#7A7A7A] block mb-1">Archive Path:</span>
+              <span className="text-white font-mono break-all">{compressResult.output_path}</span>
+            </div>
+
+            <div className="flex space-x-3 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => revealItemInDir(compressResult.output_path).catch(() => {})}
+                className="px-4 py-2 bg-[#333333] hover:bg-[#3E3E3E] border border-[#3E3E3E] text-white text-xs font-medium rounded-md transition-colors cursor-pointer"
+              >
+                Show in Folder
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCompressResult(null);
+                  setSelectedFiles([]);
+                }}
+                className="px-6 py-2 bg-[#60CDFF] hover:bg-[#4FB8E6] text-black text-xs font-semibold rounded-md transition-colors cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* About Modal */}
       {isAboutOpen && (
@@ -597,11 +734,14 @@ function App() {
               {/* Windows Explorer Integration */}
               <div className="pt-4 border-t border-[#3E3E3E] space-y-2">
                 <div className="flex justify-between items-center">
-                  <span className="text-xs text-[#A8A8A8]">Windows Right-Click Menu:</span>
+                  <div>
+                    <span className="text-xs text-white block">Windows Explorer Integration</span>
+                    <span className="text-[10px] text-[#A8A8A8]">Adds "Compress with Bayzip" to right-click menu</span>
+                  </div>
                   <button
                     type="button"
                     onClick={handleRegisterContextMenu}
-                    className="text-xs text-[#60CDFF] hover:underline cursor-pointer"
+                    className="text-xs text-[#60CDFF] hover:underline cursor-pointer bg-[#2A2A2A] px-2 py-1 rounded border border-[#3E3E3E] hover:border-[#60CDFF] transition-colors"
                   >
                     Sync Registry
                   </button>
