@@ -82,7 +82,8 @@ function App() {
   const [sliderValue, setSliderValue] = useState<number>(50); // 0, 25, 50, 75, 100
   const [isAdvanced, setIsAdvanced] = useState(false);
 
-  // Compress Options
+  // Compress Options & Naming
+  const [customArchiveName, setCustomArchiveName] = useState<string>("");
   const [selectedFormat, setSelectedFormat] = useState(".bay");
   const [selectedAlgorithm, setSelectedAlgorithm] = useState(FORMAT_ALGORITHMS[".bay"][0]);
   const [selectedEncryption, setSelectedEncryption] = useState("none");
@@ -132,6 +133,15 @@ function App() {
     return () => {
       isCurrent = false;
     };
+  }, [selectedFiles]);
+
+  // Auto-fill archive name from first file stem if currently empty
+  useEffect(() => {
+    if (selectedFiles.length > 0 && !customArchiveName) {
+      const first = selectedFiles[0];
+      const stem = first.split(/[/\\]/).pop()?.replace(/\.[^/.]+$/, "") || "bayzip_archive";
+      setCustomArchiveName(stem);
+    }
   }, [selectedFiles]);
 
   const totalSelectedSize = useMemo(() => {
@@ -387,6 +397,7 @@ function App() {
           format: selectedFormat,
           algorithm: selectedAlgorithm,
           slider_value: sliderValue,
+          custom_name: customArchiveName.trim() || undefined,
         },
       });
       setCompressResult(res);
@@ -457,14 +468,9 @@ function App() {
 
   return (
     <div className="h-screen w-screen bg-[#202020] text-white flex flex-col font-sans select-none overflow-hidden">
-      {/* Windows 11 Native Custom Titlebar - Full Width & Height Grabbable */}
+      {/* Windows 11 Native Custom Titlebar - Full Width & Height Grabbable (Native Drag Region) */}
       <div
         data-tauri-drag-region
-        onMouseDown={(e) => {
-          if (e.button === 0 && !(e.target as HTMLElement).closest("button")) {
-            getCurrentWindow().startDragging().catch(() => {});
-          }
-        }}
         onDoubleClick={(e) => {
           if (!(e.target as HTMLElement).closest("button")) {
             getCurrentWindow().toggleMaximize().catch(() => {});
@@ -625,7 +631,10 @@ function App() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setSelectedFiles([])}
+                      onClick={() => {
+                        setSelectedFiles([]);
+                        setCustomArchiveName("");
+                      }}
                       className="text-red-400 hover:text-red-300 transition-colors cursor-pointer"
                     >
                       Clear all
@@ -752,6 +761,26 @@ function App() {
                   </div>
                 </div>
               )}
+
+              {/* Archive Name Card */}
+              <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-4 flex flex-col space-y-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="font-medium text-[#C8C8C8]">Archive Name</span>
+                  <span className="text-[11px] text-[#888888]">Saved in source folder</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={customArchiveName}
+                    onChange={(e) => setCustomArchiveName(e.target.value)}
+                    placeholder={selectedFiles.length > 0 ? "Archive name..." : "Enter archive name..."}
+                    className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-medium placeholder-[#666]"
+                  />
+                  <span className="bg-[#202020] px-3 py-2 rounded-md border border-[#3E3E3E] text-xs font-mono text-[#60CDFF] shrink-0 font-semibold">
+                    {selectedFormat}
+                  </span>
+                </div>
+              </div>
 
               {/* Hardware Configuration - Fluent Design Card */}
               <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6">
@@ -1329,6 +1358,7 @@ function App() {
                 onClick={() => {
                   setCompressResult(null);
                   setSelectedFiles([]);
+                  setCustomArchiveName("");
                 }}
                 className="px-6 py-2 bg-[#60CDFF] hover:bg-[#4FB8E6] text-black text-xs font-semibold rounded-md transition-colors cursor-pointer"
               >
@@ -1395,81 +1425,121 @@ function App() {
         </div>
       )}
 
-      {/* About Modal */}
+      {/* About Modal - Redesigned Clean Fluent Layout */}
       {isAboutOpen && (
         <div
           onClick={() => setIsAboutOpen(false)}
-          className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-sm w-full mx-4 shadow-2xl relative"
+            className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-6 sm:p-8 max-w-lg w-full shadow-2xl relative space-y-6"
           >
             <button
               type="button"
               onClick={() => setIsAboutOpen(false)}
-              className="absolute top-4 right-4 text-[#A8A8A8] hover:text-white transition-colors cursor-pointer"
+              className="absolute top-4 right-4 text-[#A8A8A8] hover:text-white p-1 rounded-md hover:bg-[#333333] transition-colors cursor-pointer"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-5 h-5">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
 
-            <div className="flex items-center space-x-3 mb-6">
-              <div className="w-8 h-8 text-[#60CDFF] flex items-center justify-center">
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
+            {/* Header */}
+            <div className="flex items-center space-x-3.5">
+              <div className="w-10 h-10 rounded-lg bg-[#1a3847] text-[#60CDFF] flex items-center justify-center border border-[#20495f] shrink-0">
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
                   <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2h12c1.1 0 2-.9 2-2V8l-6-6zm-2 14h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V6h2v2z" />
                 </svg>
               </div>
-              <h2 className="text-xl font-semibold">Bayzip</h2>
-              <span className="text-xs bg-[#333333] text-[#A8A8A8] px-2 py-0.5 rounded-full border border-[#3E3E3E]">
-                v0.1.0
-              </span>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h2 className="text-xl font-bold tracking-tight text-white">Bayzip</h2>
+                  <span className="text-[11px] bg-[#2A2A2A] text-[#60CDFF] px-2 py-0.5 rounded-full border border-[#3E3E3E] font-mono">
+                    v0.1.0
+                  </span>
+                </div>
+                <p className="text-xs text-[#A8A8A8] mt-0.5">High-Performance Hardware-Accelerated Archiver</p>
+              </div>
             </div>
 
-            <div className="space-y-4 text-sm text-[#D0D0D0]">
-              <p>
-                A next-generation compression tool built with Rust and React for extreme hardware utilization and modern UI.
-              </p>
+            <p className="text-xs text-[#C8C8C8] leading-relaxed">
+              Engineered with Rust, Zstandard multi-threading, and React. Built to utilize your machine's full CPU cores and RAM for maximum compression and instant extraction.
+            </p>
 
-              <div className="pt-4 border-t border-[#3E3E3E]">
-                <p className="font-medium text-[#60CDFF] mb-1">Created By</p>
-                <p className="text-white font-medium">Made by Baymax</p>
-                <p className="text-xs text-[#A8A8A8] mt-0.5">CEO of DPG (aka Muhammad Ali)</p>
+            {/* Creator Card */}
+            <div className="bg-[#262626] rounded-lg p-3.5 border border-[#3E3E3E] flex items-center justify-between">
+              <div>
+                <span className="text-[11px] text-[#60CDFF] font-medium uppercase tracking-wider block">Created By</span>
+                <span className="text-sm font-semibold text-white">Made by Baymax</span>
+                <span className="text-xs text-[#8A8A8A] block">CEO of DPG (Muhammad Ali)</span>
               </div>
+              <div className="text-2xl">⚡</div>
+            </div>
 
-              {/* Windows Explorer Integration */}
-              <div className="pt-4 border-t border-[#3E3E3E] space-y-2">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <span className="text-xs text-white block">Windows Explorer Integration</span>
-                    <span className="text-[10px] text-[#A8A8A8]">
-                      Right-click menu: Extract Here, Extract to folder, Open in Bayzip, and .bay association
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isSyncingRegistry}
-                    onClick={handleRegisterContextMenu}
-                    className={`text-xs text-[#60CDFF] hover:underline cursor-pointer bg-[#2A2A2A] px-2.5 py-1 rounded border border-[#3E3E3E] hover:border-[#60CDFF] transition-colors flex items-center space-x-1.5 ${
-                      isSyncingRegistry ? "opacity-75 cursor-not-allowed" : ""
-                    }`}
-                  >
-                    {isSyncingRegistry && (
-                      <svg className="animate-spin h-3 w-3 text-[#60CDFF]" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                    )}
-                    <span>{isSyncingRegistry ? "Syncing..." : "Sync Registry"}</span>
-                  </button>
+            {/* Windows Explorer Integration Card */}
+            <div className="bg-[#262626] rounded-lg p-4 border border-[#3E3E3E] space-y-3">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center space-x-2">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-[#60CDFF]">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+                  </svg>
+                  <span className="text-xs font-semibold text-white">Windows Explorer Integration</span>
                 </div>
-                {contextMenuStatus && (
-                  <p className="text-[11px] text-emerald-400 bg-emerald-950/40 p-2 rounded border border-emerald-900/50">
-                    {contextMenuStatus}
-                  </p>
-                )}
+                <span className="text-[10px] text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-800/60 font-medium">
+                  Native Shell
+                </span>
               </div>
+
+              <div className="text-[11px] text-[#A8A8A8] space-y-1.5 pl-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-[#60CDFF]">•</span>
+                  <span><strong>Right-Click:</strong> "Extract to dedicated folder" & "Extract Here"</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-[#60CDFF]">•</span>
+                  <span><strong>Right-Click:</strong> Quick compress to .bay, .zip, .7z, .tar</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-[#60CDFF]">•</span>
+                  <span><strong>File Icon & Open:</strong> Double-click .bay files to open in Bayzip</span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={isSyncingRegistry}
+                onClick={handleRegisterContextMenu}
+                className={`w-full py-2 bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] hover:border-[#60CDFF] text-[#60CDFF] text-xs font-semibold rounded-md transition-all flex items-center justify-center space-x-2 cursor-pointer ${
+                  isSyncingRegistry ? "opacity-75 cursor-not-allowed" : ""
+                }`}
+              >
+                {isSyncingRegistry ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-[#60CDFF]" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>Syncing Windows Registry...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <span>Sync Windows Explorer Integration</span>
+                  </>
+                )}
+              </button>
+
+              {contextMenuStatus && (
+                <div className="text-[11px] text-emerald-400 bg-emerald-950/40 p-2.5 rounded border border-emerald-900/50 flex items-center space-x-2">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 shrink-0 text-emerald-400">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span>{contextMenuStatus}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

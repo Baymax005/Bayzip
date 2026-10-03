@@ -2,7 +2,7 @@ use sysinfo::System;
 use serde::Serialize;
 use std::process::Command;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Write, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
@@ -102,17 +102,40 @@ async fn register_context_menu() -> Result<String, String> {
                 let reg_content = format!(
                     "Windows Registry Editor Version 5.00\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
-                    @=\"Bayzip.Archive\"\r\n\r\n\
+                    @=\"Bayzip.Archive\"\r\n\
+                    \"Content Type\"=\"application/x-bayzip\"\r\n\
+                    \"PerceivedType\"=\"compressed\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\OpenWithProgids]\r\n\
+                    \"Bayzip.Archive\"=\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive]\r\n\
                     @=\"Bayzip Compressed Archive\"\r\n\
+                    \"FriendlyTypeName\"=\"Bayzip Compressed Archive\"\r\n\
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\DefaultIcon]\r\n\
                     @=\"\\\"{escaped_exe}\\\",0\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell]\r\n\
+                    @=\"open\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open]\r\n\
+                    @=\"Open in Bayzip\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open\\command]\r\n\
                     @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
-                    {}{}",
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\extract_sub]\r\n\
+                    @=\"Extract to dedicated folder\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\extract_sub\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --extract-to-folder \\\"%1\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\extract_here]\r\n\
+                    @=\"Extract Here\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\extract_here\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --extract-here \\\"%1\\\"\"\r\n\r\n\
+                    {}{}{}{}{}",
                     build_target_reg("*", &escaped_exe),
-                    build_target_reg("Directory", &escaped_exe)
+                    build_target_reg("Directory", &escaped_exe),
+                    build_target_reg("SystemFileAssociations\\.bay", &escaped_exe),
+                    build_target_reg("SystemFileAssociations\\.zip", &escaped_exe),
+                    build_target_reg("SystemFileAssociations\\.7z", &escaped_exe)
                 );
 
                 let temp_reg = std::env::temp_dir().join("bayzip_context.reg");
@@ -122,7 +145,14 @@ async fn register_context_menu() -> Result<String, String> {
                     cmd.creation_flags(CREATE_NO_WINDOW);
                     let _ = cmd.output();
                     let _ = std::fs::remove_file(temp_reg);
-                    return Ok("Context menu and .bay file association registered successfully!".into());
+
+                    // Notify Windows Explorer to reload file associations and icons immediately
+                    let mut refresh_cmd = Command::new("cmd");
+                    refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+                    refresh_cmd.creation_flags(CREATE_NO_WINDOW);
+                    let _ = refresh_cmd.output();
+
+                    return Ok("Context menu, extract options, and .bay icon registered successfully!".into());
                 }
             }
             Err("Could not determine executable path.".into())
@@ -290,6 +320,7 @@ pub struct CompressPayload {
     format: String,
     algorithm: String,
     slider_value: i32,
+    custom_name: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -317,6 +348,7 @@ fn write_file_to_archive(
     bytes_processed: &mut u64,
     total_original: u64,
     app: &AppHandle,
+    last_emit: &mut Instant,
 ) {
     let file_meta = std::fs::metadata(filepath).ok();
     let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
@@ -328,24 +360,27 @@ fn write_file_to_archive(
     let _ = encoder.write_all(&file_size.to_le_bytes());
 
     if let Ok(mut f) = File::open(filepath) {
-        let mut buffer = [0u8; 128 * 1024];
+        let mut buffer = [0u8; 256 * 1024];
         loop {
             match f.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => {
                     let _ = encoder.write_all(&buffer[..n]);
                     *bytes_processed += n as u64;
-                    let pct = if total_original > 0 {
-                        ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
-                    } else {
-                        50.0
-                    };
-                    let _ = app.emit("compress_progress", CompressProgress {
-                        percent: pct,
-                        current_file: rel_name.to_string(),
-                        bytes_processed: *bytes_processed,
-                        total_bytes: total_original,
-                    });
+                    if last_emit.elapsed().as_millis() >= 50 {
+                        *last_emit = Instant::now();
+                        let pct = if total_original > 0 {
+                            ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                        } else {
+                            50.0
+                        };
+                        let _ = app.emit("compress_progress", CompressProgress {
+                            percent: pct,
+                            current_file: rel_name.to_string(),
+                            bytes_processed: *bytes_processed,
+                            total_bytes: total_original,
+                        });
+                    }
                 }
                 Err(_) => break,
             }
@@ -361,6 +396,7 @@ fn write_dir_to_archive(
     total_original: u64,
     app: &AppHandle,
     depth: usize,
+    last_emit: &mut Instant,
 ) {
     if depth > 32 {
         return;
@@ -371,9 +407,9 @@ fn write_dir_to_archive(
             if let Ok(m) = std::fs::symlink_metadata(&ep) {
                 if m.is_file() {
                     let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
-                    write_file_to_archive(&ep, &rel.to_string_lossy(), encoder, bytes_processed, total_original, app);
+                    write_file_to_archive(&ep, &rel.to_string_lossy(), encoder, bytes_processed, total_original, app, last_emit);
                 } else if m.is_dir() && !m.file_type().is_symlink() {
-                    write_dir_to_archive(&ep, base_parent, encoder, bytes_processed, total_original, app, depth + 1);
+                    write_dir_to_archive(&ep, base_parent, encoder, bytes_processed, total_original, app, depth + 1, last_emit);
                 }
             }
         }
@@ -390,13 +426,28 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
     let first_path = Path::new(&payload.files[0]);
     let parent_dir = first_path.parent().unwrap_or_else(|| Path::new("."));
     
-    let archive_name = if payload.files.len() == 1 {
-        let stem = first_path.file_stem().and_then(|s| s.to_str()).unwrap_or("archive");
-        format!("{}{}", stem, payload.format)
+    let base_name = if let Some(ref name) = payload.custom_name {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            trimmed.to_string()
+        } else if payload.files.len() == 1 {
+            first_path.file_stem().and_then(|s| s.to_str()).unwrap_or("archive").to_string()
+        } else {
+            "bayzip_archive".to_string()
+        }
+    } else if payload.files.len() == 1 {
+        first_path.file_stem().and_then(|s| s.to_str()).unwrap_or("archive").to_string()
     } else {
-        format!("bayzip_archive{}", payload.format)
+        "bayzip_archive".to_string()
+    };
+
+    let ext = if payload.format.starts_with('.') {
+        payload.format.clone()
+    } else {
+        format!(".{}", payload.format)
     };
     
+    let archive_name = format!("{}{}", base_name, ext);
     let output_path = parent_dir.join(&archive_name);
     
     // Calculate total original size across files & folders
@@ -431,14 +482,15 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
     let _ = encoder.write_all(b"BAYZIP\x02");
 
     let mut bytes_processed: u64 = 0;
+    let mut last_emit = Instant::now();
 
     for file_str in &payload.files {
         let p = Path::new(file_str);
         if p.is_file() {
             let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            write_file_to_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, &app);
+            write_file_to_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, &app, &mut last_emit);
         } else if p.is_dir() {
-            write_dir_to_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, &app, 0);
+            write_dir_to_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, &app, 0, &mut last_emit);
         }
     }
 
@@ -543,6 +595,8 @@ fn extract_bay_archive(
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
 
+    let mut last_emit = Instant::now();
+
     if &magic == b"BAYZIP\x01" {
         // Backwards-compatible legacy single-file format
         let mut len_bytes = [0u8; 4];
@@ -558,29 +612,34 @@ fn extract_bay_archive(
         if let Some(parent) = out_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let mut out_file = File::create(&out_path)
+        let out_file = File::create(&out_path)
             .map_err(|e| format!("Failed to create output file: {}", e))?;
+        let mut writer = BufWriter::with_capacity(512 * 1024, out_file);
         
-        let mut buf = [0u8; 128 * 1024];
+        let mut buf = vec![0u8; 512 * 1024];
         let mut total_copied: u64 = 0;
         loop {
             match decoder.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    out_file.write_all(&buf[..n])
+                    writer.write_all(&buf[..n])
                         .map_err(|e| format!("Failed to write decompressed data: {}", e))?;
                     total_copied += n as u64;
                     if let Some(app_handle) = app {
-                        let _ = app_handle.emit("extract_progress", ExtractProgress {
-                            percent: 50.0,
-                            current_file: filename.clone(),
-                            bytes_extracted: total_copied,
-                        });
+                        if last_emit.elapsed().as_millis() >= 50 {
+                            last_emit = Instant::now();
+                            let _ = app_handle.emit("extract_progress", ExtractProgress {
+                                percent: 50.0,
+                                current_file: filename.clone(),
+                                bytes_extracted: total_copied,
+                            });
+                        }
                     }
                 }
                 Err(e) => return Err(format!("Decompression error: {}", e)),
             }
         }
+        writer.flush().map_err(|e| format!("Flush error: {}", e))?;
         extracted_files.push(out_path.to_string_lossy().to_string());
     } else if &magic == b"BAYZIP\x02" {
         // Robust Multi-file format with entry metadata and file size
@@ -615,11 +674,12 @@ fn extract_bay_archive(
                 let _ = std::fs::create_dir_all(parent);
             }
             
-            let mut out_file = File::create(&out_path)
+            let out_file = File::create(&out_path)
                 .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
+            let mut writer = BufWriter::with_capacity(512 * 1024, out_file);
             
             let mut remaining = file_size;
-            let mut buf = [0u8; 128 * 1024];
+            let mut buf = vec![0u8; 512 * 1024];
             while remaining > 0 {
                 let to_read = (remaining as usize).min(buf.len());
                 let n = decoder.read(&mut buf[..to_read])
@@ -627,19 +687,23 @@ fn extract_bay_archive(
                 if n == 0 {
                     return Err("Premature EOF inside archive entry".into());
                 }
-                out_file.write_all(&buf[..n])
+                writer.write_all(&buf[..n])
                     .map_err(|e| format!("Error writing extracted file: {}", e))?;
                 remaining -= n as u64;
                 total_extracted += n as u64;
                 
                 if let Some(app_handle) = app {
-                    let _ = app_handle.emit("extract_progress", ExtractProgress {
-                        percent: 50.0,
-                        current_file: rel_path_str.clone(),
-                        bytes_extracted: total_extracted,
-                    });
+                    if last_emit.elapsed().as_millis() >= 50 {
+                        last_emit = Instant::now();
+                        let _ = app_handle.emit("extract_progress", ExtractProgress {
+                            percent: 50.0,
+                            current_file: rel_path_str.clone(),
+                            bytes_extracted: total_extracted,
+                        });
+                    }
                 }
             }
+            writer.flush().map_err(|e| format!("Flush error: {}", e))?;
             extracted_files.push(out_path.to_string_lossy().to_string());
         }
     } else {
@@ -666,6 +730,7 @@ fn extract_zip_archive(
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
     let mut extracted = Vec::new();
     let total_entries = archive.len();
+    let mut last_emit = Instant::now();
 
     for i in 0..total_entries {
         let mut file = archive.by_index(i).map_err(|e| format!("Zip entry error: {}", e))?;

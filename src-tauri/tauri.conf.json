@@ -34,6 +34,14 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["bay"],
+        "name": "Bayzip Archive",
+        "description": "Bayzip Compressed Archive",
+        "role": "Viewer"
+      }
     ]
   }
 }
