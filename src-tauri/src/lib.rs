@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::process::Command;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
@@ -57,25 +57,35 @@ fn build_target_reg(target: &str, exe: &str) -> String {
         \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
         [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\01_open\\command]\r\n\
         @=\"\\\"{exe}\\\" \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\02_bay]\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\02_extract_sub]\r\n\
+        \"MUIVerb\"=\"Extract to dedicated folder\"\r\n\
+        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\02_extract_sub\\command]\r\n\
+        @=\"\\\"{exe}\\\" --extract-to-folder \\\"%1\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\03_extract_here]\r\n\
+        \"MUIVerb\"=\"Extract Here\"\r\n\
+        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\03_extract_here\\command]\r\n\
+        @=\"\\\"{exe}\\\" --extract-here \\\"%1\\\"\"\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\04_bay]\r\n\
         \"MUIVerb\"=\"Add to archive (.bay)\"\r\n\
         \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\02_bay\\command]\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\04_bay\\command]\r\n\
         @=\"\\\"{exe}\\\" --quick-compress .bay \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\03_zip]\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\05_zip]\r\n\
         \"MUIVerb\"=\"Add to archive (.zip)\"\r\n\
         \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\03_zip\\command]\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\05_zip\\command]\r\n\
         @=\"\\\"{exe}\\\" --quick-compress .zip \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\04_7z]\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\06_7z]\r\n\
         \"MUIVerb\"=\"Add to archive (.7z)\"\r\n\
         \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\04_7z\\command]\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\06_7z\\command]\r\n\
         @=\"\\\"{exe}\\\" --quick-compress .7z \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\05_tar]\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\07_tar]\r\n\
         \"MUIVerb\"=\"Add to archive (.tar)\"\r\n\
         \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\05_tar\\command]\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip\\shell\\07_tar\\command]\r\n\
         @=\"\\\"{exe}\\\" --quick-compress .tar \\\"%1\\\"\"\r\n\r\n"
     )
 }
@@ -90,7 +100,17 @@ async fn register_context_menu() -> Result<String, String> {
                 let escaped_exe = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
 
                 let reg_content = format!(
-                    "Windows Registry Editor Version 5.00\r\n\r\n{}{}",
+                    "Windows Registry Editor Version 5.00\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
+                    @=\"Bayzip.Archive\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive]\r\n\
+                    @=\"Bayzip Compressed Archive\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\DefaultIcon]\r\n\
+                    @=\"\\\"{escaped_exe}\\\",0\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
+                    {}{}",
                     build_target_reg("*", &escaped_exe),
                     build_target_reg("Directory", &escaped_exe)
                 );
@@ -102,7 +122,7 @@ async fn register_context_menu() -> Result<String, String> {
                     cmd.creation_flags(CREATE_NO_WINDOW);
                     let _ = cmd.output();
                     let _ = std::fs::remove_file(temp_reg);
-                    return Ok("Cascading context menu registered successfully!".into());
+                    return Ok("Context menu and .bay file association registered successfully!".into());
                 }
             }
             Err("Could not determine executable path.".into())
@@ -133,13 +153,18 @@ pub fn headless_quick_compress(format: &str, target_path: &str) -> Result<(), St
     let mut encoder = zstd::stream::Encoder::new(out_file, 7)
         .map_err(|e| format!("Encoder error: {}", e))?;
 
-    let _ = encoder.write_all(b"BAYZIP\x01");
+    let _ = encoder.write_all(b"BAYZIP\x02");
 
     if p.is_file() {
+        let file_meta = std::fs::metadata(p).ok();
+        let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
         let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
         let filename_bytes = filename.as_bytes();
+        
+        let _ = encoder.write_all(&[1u8]); // 1 = file entry
         let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
         let _ = encoder.write_all(filename_bytes);
+        let _ = encoder.write_all(&file_size.to_le_bytes());
 
         if let Ok(mut f) = File::open(p) {
             let mut buffer = [0u8; 128 * 1024];
@@ -166,8 +191,11 @@ pub fn headless_quick_compress(format: &str, target_path: &str) -> Result<(), St
                             let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
                             let rel_str = rel_name.to_string_lossy();
                             let bytes = rel_str.as_bytes();
+                            let file_size = m.len();
+                            let _ = encoder.write_all(&[1u8]);
                             let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
                             let _ = encoder.write_all(bytes);
+                            let _ = encoder.write_all(&file_size.to_le_bytes());
                             if let Ok(mut f) = File::open(&entry_path) {
                                 let mut buf = [0u8; 128 * 1024];
                                 loop {
@@ -188,6 +216,7 @@ pub fn headless_quick_compress(format: &str, target_path: &str) -> Result<(), St
         add_dir(p, parent, &mut encoder, 0);
     }
 
+    let _ = encoder.write_all(&[0u8]); // 0 = EOF
     encoder.finish().map_err(|e| format!("Finalize error: {}", e))?;
     Ok(())
 }
@@ -289,9 +318,14 @@ fn write_file_to_archive(
     total_original: u64,
     app: &AppHandle,
 ) {
+    let file_meta = std::fs::metadata(filepath).ok();
+    let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
+
+    let _ = encoder.write_all(&[1u8]); // 1 = File entry
     let filename_bytes = rel_name.as_bytes();
     let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
     let _ = encoder.write_all(filename_bytes);
+    let _ = encoder.write_all(&file_size.to_le_bytes());
 
     if let Ok(mut f) = File::open(filepath) {
         let mut buffer = [0u8; 128 * 1024];
@@ -394,7 +428,7 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
     let mut encoder = zstd::stream::Encoder::new(out_file, zstd_level)
         .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
 
-    let _ = encoder.write_all(b"BAYZIP\x01");
+    let _ = encoder.write_all(b"BAYZIP\x02");
 
     let mut bytes_processed: u64 = 0;
 
@@ -408,6 +442,7 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
         }
     }
 
+    let _ = encoder.write_all(&[0u8]); // EOF marker
     encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
 
     // Final 100% progress event
@@ -432,6 +467,356 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
     })
 }
 
+#[derive(Clone, serde::Serialize)]
+pub struct ExtractProgress {
+    pub percent: f64,
+    pub current_file: String,
+    pub bytes_extracted: u64,
+}
+
+#[derive(serde::Serialize)]
+pub struct ExtractResponse {
+    pub success: bool,
+    pub output_directory: String,
+    pub file_count: usize,
+    pub elapsed_ms: u64,
+    pub error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ArchiveInfo {
+    pub path: String,
+    pub filename: String,
+    pub size: u64,
+    pub format: String,
+    pub is_archive: bool,
+}
+
+#[tauri::command]
+fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err("File not found".into());
+    }
+    let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("archive").to_string();
+    let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let lower = path.to_lowercase();
+    let (format, is_archive) = if lower.ends_with(".bay") {
+        ("Bayzip Archive (.bay)".to_string(), true)
+    } else if lower.ends_with(".zip") {
+        ("ZIP Archive (.zip)".to_string(), true)
+    } else if lower.ends_with(".7z") {
+        ("7-Zip Archive (.7z)".to_string(), true)
+    } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        ("TAR Archive (.tar)".to_string(), true)
+    } else if lower.ends_with(".rar") {
+        ("RAR Archive (.rar)".to_string(), true)
+    } else {
+        ("Unknown".to_string(), false)
+    };
+
+    Ok(ArchiveInfo {
+        path,
+        filename,
+        size,
+        format,
+        is_archive,
+    })
+}
+
+fn extract_bay_archive(
+    archive_path: &Path,
+    dest_dir: &Path,
+    app: Option<&AppHandle>,
+) -> Result<Vec<String>, String> {
+    let file = File::open(archive_path)
+        .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
+    
+    let mut decoder = zstd::stream::Decoder::new(file)
+        .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
+    
+    let mut magic = [0u8; 7];
+    decoder.read_exact(&mut magic)
+        .map_err(|e| format!("Invalid or corrupted .bay header: {}", e))?;
+    
+    let mut extracted_files = Vec::new();
+    std::fs::create_dir_all(dest_dir)
+        .map_err(|e| format!("Failed to create destination directory: {}", e))?;
+
+    if &magic == b"BAYZIP\x01" {
+        // Backwards-compatible legacy single-file format
+        let mut len_bytes = [0u8; 4];
+        decoder.read_exact(&mut len_bytes)
+            .map_err(|e| format!("Failed to read filename length: {}", e))?;
+        let name_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut name_buf = vec![0u8; name_len];
+        decoder.read_exact(&mut name_buf)
+            .map_err(|e| format!("Failed to read filename: {}", e))?;
+        let filename = String::from_utf8_lossy(&name_buf).to_string();
+        
+        let out_path = dest_dir.join(&filename);
+        if let Some(parent) = out_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut out_file = File::create(&out_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        
+        let mut buf = [0u8; 128 * 1024];
+        let mut total_copied: u64 = 0;
+        loop {
+            match decoder.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    out_file.write_all(&buf[..n])
+                        .map_err(|e| format!("Failed to write decompressed data: {}", e))?;
+                    total_copied += n as u64;
+                    if let Some(app_handle) = app {
+                        let _ = app_handle.emit("extract_progress", ExtractProgress {
+                            percent: 50.0,
+                            current_file: filename.clone(),
+                            bytes_extracted: total_copied,
+                        });
+                    }
+                }
+                Err(e) => return Err(format!("Decompression error: {}", e)),
+            }
+        }
+        extracted_files.push(out_path.to_string_lossy().to_string());
+    } else if &magic == b"BAYZIP\x02" {
+        // Robust Multi-file format with entry metadata and file size
+        let mut total_extracted: u64 = 0;
+        loop {
+            let mut entry_type = [0u8; 1];
+            match decoder.read_exact(&mut entry_type) {
+                Ok(_) => {},
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(format!("Error reading archive entry: {}", e)),
+            }
+            if entry_type[0] == 0 {
+                break;
+            }
+            
+            let mut len_bytes = [0u8; 4];
+            decoder.read_exact(&mut len_bytes)
+                .map_err(|e| format!("Failed to read entry name length: {}", e))?;
+            let name_len = u32::from_le_bytes(len_bytes) as usize;
+            let mut name_buf = vec![0u8; name_len];
+            decoder.read_exact(&mut name_buf)
+                .map_err(|e| format!("Failed to read entry name: {}", e))?;
+            let rel_path_str = String::from_utf8_lossy(&name_buf).to_string();
+            
+            let mut size_bytes = [0u8; 8];
+            decoder.read_exact(&mut size_bytes)
+                .map_err(|e| format!("Failed to read entry size: {}", e))?;
+            let file_size = u64::from_le_bytes(size_bytes);
+            
+            let out_path = dest_dir.join(&rel_path_str);
+            if let Some(parent) = out_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            
+            let mut out_file = File::create(&out_path)
+                .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
+            
+            let mut remaining = file_size;
+            let mut buf = [0u8; 128 * 1024];
+            while remaining > 0 {
+                let to_read = (remaining as usize).min(buf.len());
+                let n = decoder.read(&mut buf[..to_read])
+                    .map_err(|e| format!("Error reading decompressed stream: {}", e))?;
+                if n == 0 {
+                    return Err("Premature EOF inside archive entry".into());
+                }
+                out_file.write_all(&buf[..n])
+                    .map_err(|e| format!("Error writing extracted file: {}", e))?;
+                remaining -= n as u64;
+                total_extracted += n as u64;
+                
+                if let Some(app_handle) = app {
+                    let _ = app_handle.emit("extract_progress", ExtractProgress {
+                        percent: 50.0,
+                        current_file: rel_path_str.clone(),
+                        bytes_extracted: total_extracted,
+                    });
+                }
+            }
+            extracted_files.push(out_path.to_string_lossy().to_string());
+        }
+    } else {
+        return Err("Unrecognized .bay archive format or invalid header".into());
+    }
+
+    if let Some(app_handle) = app {
+        let _ = app_handle.emit("extract_progress", ExtractProgress {
+            percent: 100.0,
+            current_file: "Completed".into(),
+            bytes_extracted: 0,
+        });
+    }
+
+    Ok(extracted_files)
+}
+
+fn extract_zip_archive(
+    archive_path: &Path,
+    dest_dir: &Path,
+    app: Option<&AppHandle>,
+) -> Result<Vec<String>, String> {
+    let file = File::open(archive_path).map_err(|e| format!("Failed to open zip: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
+    let mut extracted = Vec::new();
+    let total_entries = archive.len();
+
+    for i in 0..total_entries {
+        let mut file = archive.by_index(i).map_err(|e| format!("Zip entry error: {}", e))?;
+        let outpath = match file.enclosed_name() {
+            Some(path) => dest_dir.join(path),
+            None => continue,
+        };
+
+        if file.name().ends_with('/') || file.is_dir() {
+            let _ = std::fs::create_dir_all(&outpath);
+        } else {
+            if let Some(p) = outpath.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+            let mut outfile = File::create(&outpath).map_err(|e| format!("Create file error: {}", e))?;
+            std::io::copy(&mut file, &mut outfile).map_err(|e| format!("Extract write error: {}", e))?;
+            extracted.push(outpath.to_string_lossy().to_string());
+        }
+
+        if let Some(app_handle) = app {
+            let pct = ((i + 1) as f64 / total_entries as f64) * 100.0;
+            let _ = app_handle.emit("extract_progress", ExtractProgress {
+                percent: pct,
+                current_file: file.name().to_string(),
+                bytes_extracted: 0,
+            });
+        }
+    }
+    Ok(extracted)
+}
+
+fn extract_tar_archive(
+    archive_path: &Path,
+    dest_dir: &Path,
+) -> Result<Vec<String>, String> {
+    let file = File::open(archive_path).map_err(|e| format!("Failed to open tar: {}", e))?;
+    let is_gz = archive_path.to_string_lossy().to_lowercase().ends_with(".gz") 
+             || archive_path.to_string_lossy().to_lowercase().ends_with(".tgz");
+    
+    std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
+    
+    if is_gz {
+        let tar = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(tar);
+        archive.unpack(dest_dir).map_err(|e| format!("Tar unpack error: {}", e))?;
+    } else {
+        let mut archive = tar::Archive::new(file);
+        archive.unpack(dest_dir).map_err(|e| format!("Tar unpack error: {}", e))?;
+    }
+    Ok(vec![dest_dir.to_string_lossy().to_string()])
+}
+
+fn extract_7z_archive(
+    archive_path: &Path,
+    dest_dir: &Path,
+) -> Result<Vec<String>, String> {
+    std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
+    sevenz_rust::decompress_file(archive_path, dest_dir)
+        .map_err(|e| format!("7z extraction error: {}", e))?;
+    Ok(vec![dest_dir.to_string_lossy().to_string()])
+}
+
+#[tauri::command]
+fn extract_archive(
+    app: AppHandle,
+    archive_path: String,
+    destination: Option<String>,
+) -> Result<ExtractResponse, String> {
+    let path = Path::new(&archive_path);
+    if !path.exists() {
+        return Err("Archive file does not exist".into());
+    }
+
+    let start_time = Instant::now();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("extracted");
+
+    let dest_dir = if let Some(custom_dest) = destination {
+        if custom_dest.trim().is_empty() {
+            parent.join(stem)
+        } else {
+            PathBuf::from(custom_dest)
+        }
+    } else {
+        parent.join(stem)
+    };
+
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let is_tar_gz = path.to_string_lossy().to_lowercase().ends_with(".tar.gz") 
+                 || path.to_string_lossy().to_lowercase().ends_with(".tgz");
+
+    let extracted_files = if ext == "bay" {
+        extract_bay_archive(path, &dest_dir, Some(&app))?
+    } else if ext == "zip" {
+        extract_zip_archive(path, &dest_dir, Some(&app))?
+    } else if ext == "7z" {
+        extract_7z_archive(path, &dest_dir)?
+    } else if ext == "tar" || is_tar_gz {
+        extract_tar_archive(path, &dest_dir)?
+    } else {
+        extract_bay_archive(path, &dest_dir, Some(&app))
+            .or_else(|_| extract_zip_archive(path, &dest_dir, Some(&app)))?
+    };
+
+    Ok(ExtractResponse {
+        success: true,
+        output_directory: dest_dir.to_string_lossy().to_string(),
+        file_count: extracted_files.len(),
+        elapsed_ms: start_time.elapsed().as_millis() as u64,
+        error: None,
+    })
+}
+
+pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
+    let p = Path::new(archive_path);
+    let parent = p.parent().unwrap_or_else(|| Path::new("."));
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let is_tar_gz = p.to_string_lossy().to_lowercase().ends_with(".tar.gz") || p.to_string_lossy().to_lowercase().ends_with(".tgz");
+
+    if ext == "bay" {
+        extract_bay_archive(p, parent, None)?;
+    } else if ext == "zip" {
+        extract_zip_archive(p, parent, None)?;
+    } else if ext == "7z" {
+        extract_7z_archive(p, parent)?;
+    } else if ext == "tar" || is_tar_gz {
+        extract_tar_archive(p, parent)?;
+    }
+    Ok(())
+}
+
+pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
+    let p = Path::new(archive_path);
+    let parent = p.parent().unwrap_or_else(|| Path::new("."));
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("extracted");
+    let dest = parent.join(stem);
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let is_tar_gz = p.to_string_lossy().to_lowercase().ends_with(".tar.gz") || p.to_string_lossy().to_lowercase().ends_with(".tgz");
+
+    if ext == "bay" {
+        extract_bay_archive(p, &dest, None)?;
+    } else if ext == "zip" {
+        extract_zip_archive(p, &dest, None)?;
+    } else if ext == "7z" {
+        extract_7z_archive(p, &dest)?;
+    } else if ext == "tar" || is_tar_gz {
+        extract_tar_archive(p, &dest)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -448,7 +833,9 @@ pub fn run() {
             get_cli_args, 
             register_context_menu,
             compress_files,
-            get_selected_items_info
+            get_selected_items_info,
+            extract_archive,
+            get_archive_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

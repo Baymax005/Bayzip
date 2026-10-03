@@ -27,7 +27,10 @@ sysinfo = "0.30"
 zstd = "0.13"
 aes-gcm = "0.10"
 rand = "0.8"
-unrar = "0.5" # For .rar extraction support
+zip = { version = "2.1", default-features = false, features = ["deflate", "bzip2"] }
+tar = "0.4"
+flate2 = "1.0"
+sevenz-rust = "0.6"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

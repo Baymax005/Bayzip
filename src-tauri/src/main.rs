@@ -9,5 +9,15 @@ fn main() {
         let _ = tauri_app_lib::headless_quick_compress(format, target_file);
         return;
     }
+    if args.len() >= 3 && args[1] == "--extract-here" {
+        let target_file = &args[2];
+        let _ = tauri_app_lib::headless_extract_here(target_file);
+        return;
+    }
+    if args.len() >= 3 && args[1] == "--extract-to-folder" {
+        let target_file = &args[2];
+        let _ = tauri_app_lib::headless_extract_to_subfolder(target_file);
+        return;
+    }
     tauri_app_lib::run();
 }
