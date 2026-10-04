@@ -2,11 +2,18 @@ use sysinfo::System;
 use serde::Serialize;
 use std::process::Command;
 use std::fs::File;
-use std::io::{Read, Write, BufWriter};
+use std::io::{Read, Write, Seek, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use zip::write::SimpleFileOptions;
+use zip::AesMode;
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce, Key
+};
+use sha2::{Sha256, Digest};
+use rand::RngCore;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -74,7 +81,7 @@ fn build_target_reg(target: &str, exe: &str) -> String {
         \"MUIVerb\"=\"Add to archive with Bayzip\"\r\n\
         \"Icon\"=\"\\\"{exe}\\\"\"\r\n\
         \"SubCommands\"=\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell]\r\n\r\n\
+        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell]\r\n\
         [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\01_bay]\r\n\
         \"MUIVerb\"=\"Add to .bay (Ultra-Fast)\"\r\n\
         \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
@@ -345,6 +352,55 @@ fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), Strin
     Ok(())
 }
 
+pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<(), String> {
+    let p = Path::new(target_path_str);
+    if !p.exists() {
+        return Err("Target path does not exist".into());
+    }
+    let parent = p.parent().unwrap_or_else(|| Path::new("."));
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("archive");
+    let ext = if format.starts_with('.') {
+        format.to_string()
+    } else {
+        format!(".{}", format)
+    };
+    let output_path = parent.join(format!("{}{}", stem, ext));
+
+    let fmt_clean = format.trim_start_matches('.').to_lowercase();
+    match fmt_clean.as_str() {
+        "zip" => headless_quick_compress_zip(p, &output_path)?,
+        "7z" => {
+            sevenz_rust::compress_to_path(p, &output_path)
+                .map_err(|e| format!("7z compress error: {}", e))?;
+        },
+        "tar" => {
+            let out_file = File::create(&output_path)
+                .map_err(|e| format!("Failed to create tar file: {}", e))?;
+            let mut builder = tar::Builder::new(BufWriter::new(out_file));
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            if p.is_file() {
+                builder.append_path_with_name(p, name)
+                    .map_err(|e| format!("Tar append file error: {}", e))?;
+            } else if p.is_dir() {
+                builder.append_dir_all(name, p)
+                    .map_err(|e| format!("Tar append dir error: {}", e))?;
+            }
+            builder.finish().map_err(|e| format!("Tar finalize error: {}", e))?;
+        },
+        _ => headless_quick_compress_bay(p, &output_path)?,
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = Command::new("explorer.exe");
+        cmd.arg(format!("/select,{}", output_path.to_string_lossy()));
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = cmd.spawn();
+    }
+    Ok(())
+}
+
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct SelectedItemInfo {
     pub path: String,
@@ -415,6 +471,8 @@ pub struct CompressPayload {
     algorithm: String,
     slider_value: i32,
     custom_name: Option<String>,
+    encryption: Option<String>,
+    password: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -435,23 +493,39 @@ pub struct CompressResponse {
     error: Option<String>,
 }
 
-fn write_file_to_bay_archive(
+fn derive_bay_key(password: &str, salt: &[u8; 16]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(password.as_bytes());
+    hasher.update(salt);
+    let mut derived = hasher.finalize();
+    for _ in 1..5_000 {
+        let mut h = Sha256::new();
+        h.update(derived);
+        h.update(salt);
+        derived = h.finalize();
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&derived);
+    key
+}
+
+fn write_file_to_bay_archive<W: Write>(
     filepath: &Path,
     rel_name: &str,
-    encoder: &mut zstd::stream::Encoder<File>,
+    encoder: &mut W,
     bytes_processed: &mut u64,
     total_original: u64,
     app: &AppHandle,
     last_emit: &mut Instant,
-) {
+) -> Result<(), String> {
     let file_meta = std::fs::metadata(filepath).ok();
     let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
 
-    let _ = encoder.write_all(&[1u8]); // 1 = File entry
+    encoder.write_all(&[1u8]).map_err(|e| e.to_string())?; // 1 = File entry
     let filename_bytes = rel_name.as_bytes();
-    let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
-    let _ = encoder.write_all(filename_bytes);
-    let _ = encoder.write_all(&file_size.to_le_bytes());
+    encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+    encoder.write_all(filename_bytes).map_err(|e| e.to_string())?;
+    encoder.write_all(&file_size.to_le_bytes()).map_err(|e| e.to_string())?;
 
     if let Ok(mut f) = File::open(filepath) {
         let mut buffer = [0u8; 256 * 1024];
@@ -459,7 +533,7 @@ fn write_file_to_bay_archive(
             match f.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let _ = encoder.write_all(&buffer[..n]);
+                    encoder.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
                     *bytes_processed += n as u64;
                     if last_emit.elapsed().as_millis() >= 50 {
                         *last_emit = Instant::now();
@@ -480,20 +554,21 @@ fn write_file_to_bay_archive(
             }
         }
     }
+    Ok(())
 }
 
-fn write_dir_to_bay_archive(
+fn write_dir_to_bay_archive<W: Write>(
     dir: &Path,
     base_parent: &Path,
-    encoder: &mut zstd::stream::Encoder<File>,
+    encoder: &mut W,
     bytes_processed: &mut u64,
     total_original: u64,
     app: &AppHandle,
     depth: usize,
     last_emit: &mut Instant,
-) {
+) -> Result<(), String> {
     if depth > 32 {
-        return;
+        return Ok(());
     }
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -501,63 +576,148 @@ fn write_dir_to_bay_archive(
             if let Ok(m) = std::fs::symlink_metadata(&ep) {
                 if m.is_file() {
                     let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
-                    write_file_to_bay_archive(&ep, &rel.to_string_lossy(), encoder, bytes_processed, total_original, app, last_emit);
+                    write_file_to_bay_archive(&ep, &rel.to_string_lossy(), encoder, bytes_processed, total_original, app, last_emit)?;
                 } else if m.is_dir() && !m.file_type().is_symlink() {
-                    write_dir_to_bay_archive(&ep, base_parent, encoder, bytes_processed, total_original, app, depth + 1, last_emit);
+                    write_dir_to_bay_archive(&ep, base_parent, encoder, bytes_processed, total_original, app, depth + 1, last_emit)?;
                 }
             }
         }
     }
+    Ok(())
 }
 
 fn compress_bay(
     files: &[String],
     output_path: &Path,
+    algorithm: &str,
     slider_value: i32,
+    password: Option<&str>,
     app: &AppHandle,
     total_original: u64,
 ) -> Result<(), String> {
+    let pwd_trimmed = password.map(|s| s.trim()).filter(|s| !s.is_empty());
+    let is_encrypted = pwd_trimmed.is_some();
+
+    let target_dest = if is_encrypted {
+        std::env::temp_dir().join(format!(
+            "bayzip_raw_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ))
+    } else {
+        output_path.to_path_buf()
+    };
+
     let first_path = Path::new(&files[0]);
     let parent_dir = first_path.parent().unwrap_or_else(|| Path::new("."));
 
-    let zstd_level = match slider_value {
-        0 => 1,
-        25 => 3,
-        50 => 7,
-        75 => 14,
-        _ => 19,
-    };
-
-    let out_file = File::create(output_path)
-        .map_err(|e| format!("Failed to create output file: {}", e))?;
-    
-    let mut encoder = zstd::stream::Encoder::new(out_file, zstd_level)
-        .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
-
-    let _ = encoder.write_all(b"BAYZIP\x02");
-
+    let algo_lower = algorithm.to_lowercase();
     let mut bytes_processed: u64 = 0;
     let mut last_emit = Instant::now();
 
-    for file_str in files {
-        let p = Path::new(file_str);
-        if p.is_file() {
-            let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit);
-        } else if p.is_dir() {
-            write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit);
+    let out_file = File::create(&target_dest)
+        .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
+
+    if algo_lower.contains("brotli") {
+        let quality = match slider_value {
+            0 => 1,
+            25 => 4,
+            50 => 7,
+            75 => 9,
+            _ => 11,
+        };
+        let mut encoder = brotli::CompressorWriter::new(BufWriter::new(out_file), 64 * 1024, quality, 22);
+        let _ = encoder.write_all(b"BAYBRO\x02");
+        for file_str in files {
+            let p = Path::new(file_str);
+            if p.is_file() {
+                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
+            } else if p.is_dir() {
+                write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+            }
         }
+        let _ = encoder.write_all(&[0u8]); // EOF
+        encoder.flush().map_err(|e| format!("Brotli finalize error: {}", e))?;
+    } else if algo_lower.contains("lz4") {
+        let mut encoder = lz4_flex::frame::FrameEncoder::new(BufWriter::new(out_file));
+        let _ = encoder.write_all(b"BAYLZ4\x02");
+        for file_str in files {
+            let p = Path::new(file_str);
+            if p.is_file() {
+                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
+            } else if p.is_dir() {
+                write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+            }
+        }
+        let _ = encoder.write_all(&[0u8]); // EOF
+        let _ = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
+    } else {
+        // Default to Zstandard (Recommended)
+        let zstd_level = match slider_value {
+            0 => 1,
+            25 => 3,
+            50 => 7,
+            75 => 14,
+            _ => 19,
+        };
+        let mut encoder = zstd::stream::Encoder::new(BufWriter::new(out_file), zstd_level)
+            .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
+        let _ = encoder.write_all(b"BAYZIP\x02");
+        for file_str in files {
+            let p = Path::new(file_str);
+            if p.is_file() {
+                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
+            } else if p.is_dir() {
+                write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+            }
+        }
+        let _ = encoder.write_all(&[0u8]); // EOF
+        encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
     }
 
-    let _ = encoder.write_all(&[0u8]); // EOF marker
-    encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
+    if let Some(pwd) = pwd_trimmed {
+        let mut raw_data = Vec::new();
+        File::open(&target_dest)
+            .and_then(|mut f| f.read_to_end(&mut raw_data))
+            .map_err(|e| format!("Failed to read unencrypted buffer: {}", e))?;
+        let _ = std::fs::remove_file(&target_dest);
+
+        let mut salt = [0u8; 16];
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut salt);
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+        let key_bytes = derive_bay_key(pwd, &salt);
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher.encrypt(nonce, raw_data.as_ref())
+            .map_err(|e| format!("AES-256 encryption error: {}", e))?;
+
+        let mut final_file = File::create(output_path)
+            .map_err(|e| format!("Failed to create encrypted output file: {}", e))?;
+        final_file.write_all(b"BAYENC\x01").map_err(|e| e.to_string())?;
+        final_file.write_all(&salt).map_err(|e| e.to_string())?;
+        final_file.write_all(&nonce_bytes).map_err(|e| e.to_string())?;
+        final_file.write_all(&ciphertext).map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 
 fn compress_zip(
     files: &[String],
     output_path: &Path,
+    algorithm: &str,
     slider_value: i32,
+    password: Option<&str>,
+    encryption: Option<&str>,
     app: &AppHandle,
     total_original: u64,
 ) -> Result<(), String> {
@@ -565,15 +725,29 @@ fn compress_zip(
         .map_err(|e| format!("Failed to create zip file: {}", e))?;
     let mut writer = zip::ZipWriter::new(out_file);
     
-    let method = if slider_value == 0 {
+    let algo_lower = algorithm.to_lowercase();
+    let method = if algo_lower.contains("bzip2") {
+        zip::CompressionMethod::Bzip2
+    } else if slider_value == 0 || algo_lower.contains("store") {
         zip::CompressionMethod::Stored
     } else {
         zip::CompressionMethod::Deflated
     };
 
-    let options = SimpleFileOptions::default()
+    let mut options = SimpleFileOptions::default()
         .compression_method(method)
         .large_file(true);
+
+    if let Some(pwd) = password {
+        let trimmed = pwd.trim();
+        if !trimmed.is_empty() {
+            let aes_mode = match encryption {
+                Some("aes-128") => AesMode::Aes128,
+                _ => AesMode::Aes256,
+            };
+            options = options.with_aes_encryption(aes_mode, trimmed);
+        }
+    }
 
     let mut bytes_processed: u64 = 0;
     let mut last_emit = Instant::now();
@@ -732,11 +906,19 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 fn compress_7z(
     files: &[String],
     output_path: &Path,
+    password: Option<&str>,
 ) -> Result<(), String> {
+    let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
+
     if files.len() == 1 {
         let p = Path::new(&files[0]);
-        sevenz_rust::compress_to_path(p, output_path)
-            .map_err(|e| format!("7z compress error: {}", e))
+        if let Some(pwd) = pwd_opt {
+            sevenz_rust::compress_to_path_encrypted(p, output_path, pwd.into())
+                .map_err(|e| format!("7z compress encrypted error: {}", e))
+        } else {
+            sevenz_rust::compress_to_path(p, output_path)
+                .map_err(|e| format!("7z compress error: {}", e))
+        }
     } else {
         let temp_dir = std::env::temp_dir().join(format!(
             "bayzip_7z_{}",
@@ -759,7 +941,11 @@ fn compress_7z(
                 }
             }
         }
-        let res = sevenz_rust::compress_to_path(&temp_dir, output_path);
+        let res = if let Some(pwd) = pwd_opt {
+            sevenz_rust::compress_to_path_encrypted(&temp_dir, output_path, pwd.into())
+        } else {
+            sevenz_rust::compress_to_path(&temp_dir, output_path)
+        };
         let _ = std::fs::remove_dir_all(&temp_dir);
         res.map_err(|e| format!("7z compress error: {}", e))
     }
@@ -814,19 +1000,38 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
         total_bytes: total_original,
     });
 
+    let pwd_ref = payload.password.as_deref();
+    let enc_ref = payload.encryption.as_deref();
     let fmt_clean = payload.format.trim_start_matches('.').to_lowercase();
     match fmt_clean.as_str() {
         "zip" => {
-            compress_zip(&payload.files, &output_path, payload.slider_value, &app, total_original)?;
+            compress_zip(
+                &payload.files,
+                &output_path,
+                &payload.algorithm,
+                payload.slider_value,
+                pwd_ref,
+                enc_ref,
+                &app,
+                total_original,
+            )?;
         },
         "tar" => {
             compress_tar(&payload.files, &output_path, &app, total_original)?;
         },
         "7z" => {
-            compress_7z(&payload.files, &output_path)?;
+            compress_7z(&payload.files, &output_path, pwd_ref)?;
         },
         _ => {
-            compress_bay(&payload.files, &output_path, payload.slider_value, &app, total_original)?;
+            compress_bay(
+                &payload.files,
+                &output_path,
+                &payload.algorithm,
+                payload.slider_value,
+                pwd_ref,
+                &app,
+                total_original,
+            )?;
         }
     }
 
@@ -892,8 +1097,15 @@ fn detect_archive_type(path: &Path) -> ArchiveFormat {
     if let Ok(mut file) = File::open(path) {
         let mut magic = [0u8; 16];
         if let Ok(n) = file.read(&mut magic) {
-            // Bayzip magic: BAYZIP\x01 or BAYZIP\x02
-            if n >= 7 && (&magic[..7] == b"BAYZIP\x01" || &magic[..7] == b"BAYZIP\x02") {
+            // Bayzip magic signatures:
+            // BAYZIP\x01, BAYZIP\x02, BAYBRO\x02, BAYLZ4\x02, BAYENC\x01
+            if n >= 7 && (
+                &magic[..7] == b"BAYZIP\x01" ||
+                &magic[..7] == b"BAYZIP\x02" ||
+                &magic[..7] == b"BAYBRO\x02" ||
+                &magic[..7] == b"BAYLZ4\x02" ||
+                &magic[..7] == b"BAYENC\x01"
+            ) {
                 return ArchiveFormat::Bay;
             }
             // Zstandard frame header: 0xFD2FB528 in little-endian -> [0x28, 0xB5, 0x2F, 0xFD]
@@ -981,146 +1193,170 @@ fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
     })
 }
 
-fn extract_bay_archive(
-    archive_path: &Path,
+fn extract_bay_stream<R: Read>(
+    mut decoder: R,
     dest_dir: &Path,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
-    let file = File::open(archive_path)
-        .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
-    
-    let mut decoder = zstd::stream::Decoder::new(file)
-        .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
-    
-    let mut magic = [0u8; 7];
-    decoder.read_exact(&mut magic)
-        .map_err(|e| format!("Invalid or corrupted .bay header: {}", e))?;
-    
     let mut extracted_files = Vec::new();
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
 
     let mut last_emit = Instant::now();
+    let mut total_extracted: u64 = 0;
 
-    if &magic == b"BAYZIP\x01" {
-        // Backwards-compatible legacy single-file format
+    loop {
+        let mut entry_type = [0u8; 1];
+        match decoder.read_exact(&mut entry_type) {
+            Ok(_) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(format!("Error reading archive entry: {}", e)),
+        }
+        if entry_type[0] == 0 {
+            break;
+        }
+
         let mut len_bytes = [0u8; 4];
         decoder.read_exact(&mut len_bytes)
-            .map_err(|e| format!("Failed to read filename length: {}", e))?;
+            .map_err(|e| format!("Failed to read entry name length: {}", e))?;
         let name_len = u32::from_le_bytes(len_bytes) as usize;
         let mut name_buf = vec![0u8; name_len];
         decoder.read_exact(&mut name_buf)
-            .map_err(|e| format!("Failed to read filename: {}", e))?;
-        let filename = String::from_utf8_lossy(&name_buf).to_string();
-        
-        let out_path = dest_dir.join(&filename);
+            .map_err(|e| format!("Failed to read entry name: {}", e))?;
+        let rel_path_str = String::from_utf8_lossy(&name_buf).to_string();
+
+        let mut size_bytes = [0u8; 8];
+        decoder.read_exact(&mut size_bytes)
+            .map_err(|e| format!("Failed to read entry size: {}", e))?;
+        let file_size = u64::from_le_bytes(size_bytes);
+
+        let out_path = dest_dir.join(&rel_path_str);
         if let Some(parent) = out_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+
         let out_file = File::create(&out_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
+            .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
         let mut writer = BufWriter::with_capacity(512 * 1024, out_file);
-        
+
+        let mut remaining = file_size;
         let mut buf = vec![0u8; 512 * 1024];
-        let mut total_copied: u64 = 0;
-        loop {
-            match decoder.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    writer.write_all(&buf[..n])
-                        .map_err(|e| format!("Failed to write decompressed data: {}", e))?;
-                    total_copied += n as u64;
-                    if let Some(app_handle) = app {
-                        if last_emit.elapsed().as_millis() >= 50 {
-                            last_emit = Instant::now();
-                            let _ = app_handle.emit("extract_progress", ExtractProgress {
-                                percent: 50.0,
-                                current_file: filename.clone(),
-                                bytes_extracted: total_copied,
-                            });
-                        }
-                    }
+        while remaining > 0 {
+            let to_read = (remaining as usize).min(buf.len());
+            let n = decoder.read(&mut buf[..to_read])
+                .map_err(|e| format!("Error reading decompressed stream: {}", e))?;
+            if n == 0 {
+                return Err("Premature EOF inside archive entry".into());
+            }
+            writer.write_all(&buf[..n])
+                .map_err(|e| format!("Error writing extracted file: {}", e))?;
+            remaining -= n as u64;
+            total_extracted += n as u64;
+
+            if let Some(app_handle) = app {
+                if last_emit.elapsed().as_millis() >= 50 {
+                    last_emit = Instant::now();
+                    let _ = app_handle.emit("extract_progress", ExtractProgress {
+                        percent: 50.0,
+                        current_file: rel_path_str.clone(),
+                        bytes_extracted: total_extracted,
+                    });
                 }
-                Err(e) => return Err(format!("Decompression error: {}", e)),
             }
         }
         writer.flush().map_err(|e| format!("Flush error: {}", e))?;
         extracted_files.push(out_path.to_string_lossy().to_string());
-    } else if &magic == b"BAYZIP\x02" {
-        // Robust Multi-file format with entry metadata and file size
-        let mut total_extracted: u64 = 0;
-        loop {
-            let mut entry_type = [0u8; 1];
-            match decoder.read_exact(&mut entry_type) {
-                Ok(_) => {},
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(format!("Error reading archive entry: {}", e)),
-            }
-            if entry_type[0] == 0 {
-                break;
-            }
-            
-            let mut len_bytes = [0u8; 4];
-            decoder.read_exact(&mut len_bytes)
-                .map_err(|e| format!("Failed to read entry name length: {}", e))?;
-            let name_len = u32::from_le_bytes(len_bytes) as usize;
-            let mut name_buf = vec![0u8; name_len];
-            decoder.read_exact(&mut name_buf)
-                .map_err(|e| format!("Failed to read entry name: {}", e))?;
-            let rel_path_str = String::from_utf8_lossy(&name_buf).to_string();
-            
-            let mut size_bytes = [0u8; 8];
-            decoder.read_exact(&mut size_bytes)
-                .map_err(|e| format!("Failed to read entry size: {}", e))?;
-            let file_size = u64::from_le_bytes(size_bytes);
-            
-            let out_path = dest_dir.join(&rel_path_str);
-            if let Some(parent) = out_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            
-            let out_file = File::create(&out_path)
-                .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
-            let mut writer = BufWriter::with_capacity(512 * 1024, out_file);
-            
-            let mut remaining = file_size;
-            let mut buf = vec![0u8; 512 * 1024];
-            while remaining > 0 {
-                let to_read = (remaining as usize).min(buf.len());
-                let n = decoder.read(&mut buf[..to_read])
-                    .map_err(|e| format!("Error reading decompressed stream: {}", e))?;
-                if n == 0 {
-                    return Err("Premature EOF inside archive entry".into());
-                }
-                writer.write_all(&buf[..n])
-                    .map_err(|e| format!("Error writing extracted file: {}", e))?;
-                remaining -= n as u64;
-                total_extracted += n as u64;
-                
-                if let Some(app_handle) = app {
-                    if last_emit.elapsed().as_millis() >= 50 {
-                        last_emit = Instant::now();
-                        let _ = app_handle.emit("extract_progress", ExtractProgress {
-                            percent: 50.0,
-                            current_file: rel_path_str.clone(),
-                            bytes_extracted: total_extracted,
-                        });
-                    }
-                }
-            }
-            writer.flush().map_err(|e| format!("Flush error: {}", e))?;
-            extracted_files.push(out_path.to_string_lossy().to_string());
-        }
-    } else {
-        return Err("Unrecognized .bay archive format or invalid header".into());
     }
 
     Ok(extracted_files)
 }
 
+fn extract_bay_archive(
+    archive_path: &Path,
+    dest_dir: &Path,
+    password: Option<&str>,
+    app: Option<&AppHandle>,
+) -> Result<Vec<String>, String> {
+    let mut file = File::open(archive_path)
+        .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
+
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)
+        .map_err(|e| format!("Invalid or corrupted .bay header: {}", e))?;
+
+    if &magic[..8] == b"BAYENC\x01" {
+        let pwd = match password {
+            Some(p) if !p.trim().is_empty() => p.trim(),
+            _ => return Err("Password required: This .bay archive is encrypted with AES-256-GCM.".into()),
+        };
+
+        let mut salt = [0u8; 16];
+        file.read_exact(&mut salt)
+            .map_err(|e| format!("Failed to read encryption salt: {}", e))?;
+        let mut nonce_bytes = [0u8; 12];
+        file.read_exact(&mut nonce_bytes)
+            .map_err(|e| format!("Failed to read encryption nonce: {}", e))?;
+
+        let mut ciphertext = Vec::new();
+        file.read_to_end(&mut ciphertext)
+            .map_err(|e| format!("Failed to read ciphertext: {}", e))?;
+
+        let key_bytes = derive_bay_key(pwd, &salt);
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())
+            .map_err(|_| "Incorrect password: Failed to decrypt AES-256-GCM archive.".to_string())?;
+
+        // Detect compression algorithm inside decrypted plaintext
+        if plaintext.starts_with(b"BAYBRO\x02") {
+            let decoder = brotli::Decompressor::new(&plaintext[8..], 64 * 1024);
+            return extract_bay_stream(decoder, dest_dir, app);
+        } else if plaintext.starts_with(b"BAYLZ4\x02") {
+            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[8..]);
+            return extract_bay_stream(decoder, dest_dir, app);
+        } else if plaintext.starts_with(b"BAYZIP\x02") {
+            let decoder = zstd::stream::Decoder::new(&plaintext[8..])
+                .map_err(|e| format!("Zstd decoder error: {}", e))?;
+            return extract_bay_stream(decoder, dest_dir, app);
+        } else {
+            // Raw Zstandard fallback
+            let decoder = zstd::stream::Decoder::new(&plaintext[..])
+                .map_err(|e| format!("Zstd decoder error: {}", e))?;
+            return extract_bay_stream(decoder, dest_dir, app);
+        }
+    }
+
+    // Rewind file to start for unencrypted formats
+    file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+
+    let mut magic7 = [0u8; 8];
+    let n = file.read(&mut magic7).unwrap_or(0);
+    file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+
+    if n >= 8 && &magic7[..8] == b"BAYBRO\x02" {
+        file.seek(std::io::SeekFrom::Start(8)).map_err(|e| e.to_string())?;
+        let decoder = brotli::Decompressor::new(file, 64 * 1024);
+        extract_bay_stream(decoder, dest_dir, app)
+    } else if n >= 8 && &magic7[..8] == b"BAYLZ4\x02" {
+        file.seek(std::io::SeekFrom::Start(8)).map_err(|e| e.to_string())?;
+        let decoder = lz4_flex::frame::FrameDecoder::new(file);
+        extract_bay_stream(decoder, dest_dir, app)
+    } else {
+        // Standard Zstd
+        let mut decoder = zstd::stream::Decoder::new(file)
+            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
+        let mut header = [0u8; 7];
+        let _ = decoder.read_exact(&mut header);
+        extract_bay_stream(decoder, dest_dir, app)
+    }
+}
+
 fn extract_zip_archive(
     archive_path: &Path,
     dest_dir: &Path,
+    password: Option<&str>,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     let file = File::open(archive_path).map_err(|e| format!("Failed to open zip: {}", e))?;
@@ -1128,8 +1364,33 @@ fn extract_zip_archive(
     let mut extracted = Vec::new();
     let total_entries = archive.len();
 
+    let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
+
     for i in 0..total_entries {
-        let mut file = archive.by_index(i).map_err(|e| format!("Zip entry error: {}", e))?;
+        let mut file = match pwd_opt {
+            Some(pwd) => {
+                match archive.by_index_decrypt(i, pwd.as_bytes()) {
+                    Ok(f) => f,
+                    Err(zip::result::ZipError::InvalidPassword) => {
+                        return Err("Incorrect password: Could not decrypt file".to_string());
+                    },
+                    Err(e) => return Err(format!("Zip entry error: {}", e)),
+                }
+            },
+            None => {
+                match archive.by_index(i) {
+                    Ok(f) => f,
+                    Err(zip::result::ZipError::UnsupportedArchive(zip::result::ZipError::PASSWORD_REQUIRED)) => {
+                        return Err("Password required: This ZIP archive is encrypted with AES/password.".to_string());
+                    },
+                    Err(zip::result::ZipError::InvalidPassword) => {
+                        return Err("Password required: This ZIP archive is encrypted with AES/password.".to_string());
+                    },
+                    Err(e) => return Err(format!("Zip entry error: {}", e)),
+                }
+            }
+        };
+
         let outpath = match file.enclosed_name() {
             Some(path) => dest_dir.join(path),
             None => continue,
@@ -1183,11 +1444,27 @@ fn extract_tar_archive(
 fn extract_7z_archive(
     archive_path: &Path,
     dest_dir: &Path,
+    password: Option<&str>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
-    sevenz_rust::decompress_file(archive_path, dest_dir)
-        .map_err(|e| format!("7z extraction error: {}", e))?;
-    Ok(vec![dest_dir.to_string_lossy().to_string()])
+
+    let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
+    if let Some(pwd) = pwd_opt {
+        sevenz_rust::decompress_file_with_password(archive_path, dest_dir, pwd.into())
+            .map_err(|e| format!("7z extraction error: {}", e))?;
+        return Ok(vec![dest_dir.to_string_lossy().to_string()]);
+    }
+
+    match sevenz_rust::decompress_file(archive_path, dest_dir) {
+        Ok(_) => Ok(vec![dest_dir.to_string_lossy().to_string()]),
+        Err(sevenz_rust::Error::PasswordRequired) => {
+            Err("Password required: This 7z archive is encrypted with AES-256.".into())
+        },
+        Err(e) => {
+            extract_with_system_tar(archive_path, dest_dir)
+                .map_err(|_| format!("7z extraction error: {}", e))
+        }
+    }
 }
 
 fn extract_with_system_tar(
@@ -1223,21 +1500,32 @@ fn extract_with_system_tar(
 fn universal_extract(
     archive_path: &Path,
     dest_dir: &Path,
+    password: Option<&str>,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     let format = detect_archive_type(archive_path);
     match format {
         ArchiveFormat::Bay => {
-            extract_bay_archive(archive_path, dest_dir, app)
+            extract_bay_archive(archive_path, dest_dir, password, app)
         },
         ArchiveFormat::Zip => {
-            extract_zip_archive(archive_path, dest_dir, app)
-                .or_else(|_| extract_bay_archive(archive_path, dest_dir, app))
-                .or_else(|_| extract_with_system_tar(archive_path, dest_dir))
+            extract_zip_archive(archive_path, dest_dir, password, app)
+                .or_else(|e| {
+                    if e.contains("Password") || e.contains("password") {
+                        return Err(e);
+                    }
+                    extract_bay_archive(archive_path, dest_dir, password, app)
+                        .or_else(|_| extract_with_system_tar(archive_path, dest_dir))
+                })
         },
         ArchiveFormat::SevenZip => {
-            extract_7z_archive(archive_path, dest_dir)
-                .or_else(|_| extract_with_system_tar(archive_path, dest_dir))
+            extract_7z_archive(archive_path, dest_dir, password)
+                .or_else(|e| {
+                    if e.contains("Password") || e.contains("password") {
+                        return Err(e);
+                    }
+                    extract_with_system_tar(archive_path, dest_dir)
+                })
         },
         ArchiveFormat::Tar | ArchiveFormat::TarGz => {
             extract_tar_archive(archive_path, dest_dir)
@@ -1247,9 +1535,9 @@ fn universal_extract(
             extract_with_system_tar(archive_path, dest_dir)
         },
         ArchiveFormat::Unknown => {
-            extract_bay_archive(archive_path, dest_dir, app)
-                .or_else(|_| extract_zip_archive(archive_path, dest_dir, app))
-                .or_else(|_| extract_7z_archive(archive_path, dest_dir))
+            extract_bay_archive(archive_path, dest_dir, password, app)
+                .or_else(|_| extract_zip_archive(archive_path, dest_dir, password, app))
+                .or_else(|_| extract_7z_archive(archive_path, dest_dir, password))
                 .or_else(|_| extract_tar_archive(archive_path, dest_dir))
                 .or_else(|_| extract_with_system_tar(archive_path, dest_dir))
         }
@@ -1261,6 +1549,7 @@ fn extract_archive(
     app: AppHandle,
     archive_path: String,
     destination: Option<String>,
+    password: Option<String>,
 ) -> Result<ExtractResponse, String> {
     let path = Path::new(&archive_path);
     if !path.exists() {
@@ -1281,7 +1570,8 @@ fn extract_archive(
         parent.join(stem)
     };
 
-    let extracted_files = universal_extract(path, &dest_dir, Some(&app))?;
+    let pwd_ref = password.as_deref();
+    let extracted_files = universal_extract(path, &dest_dir, pwd_ref, Some(&app))?;
 
     if let Some(app_handle) = Some(&app) {
         let _ = app_handle.emit("extract_progress", ExtractProgress {
@@ -1306,7 +1596,7 @@ pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
         return Err("Archive file does not exist".into());
     }
     let parent = p.parent().unwrap_or_else(|| Path::new("."));
-    universal_extract(p, parent, None)?;
+    universal_extract(p, parent, None, None)?;
 
     #[cfg(target_os = "windows")]
     {
@@ -1326,7 +1616,7 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
     let parent = p.parent().unwrap_or_else(|| Path::new("."));
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("extracted");
     let dest = parent.join(stem);
-    universal_extract(p, &dest, None)?;
+    universal_extract(p, &dest, None, None)?;
 
     #[cfg(target_os = "windows")]
     {
