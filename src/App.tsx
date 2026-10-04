@@ -1494,15 +1494,19 @@ function App() {
               <div className="text-[11px] text-[#A8A8A8] space-y-1.5 pl-1">
                 <div className="flex items-center space-x-2">
                   <span className="text-[#60CDFF]">•</span>
-                  <span><strong>Right-Click:</strong> "Extract to dedicated folder" & "Extract Here"</span>
+                  <span><strong>Extract Menu:</strong> Dedicated "Extract with Bayzip" right-click menu</span>
                 </div>
                 <div className="flex items-center space-x-2">
                   <span className="text-[#60CDFF]">•</span>
-                  <span><strong>Right-Click:</strong> Quick compress to .bay, .zip, .7z, .tar</span>
+                  <span><strong>Compress Menu:</strong> Dedicated "Add to archive with Bayzip" (.bay, .zip, .7z, .tar)</span>
                 </div>
                 <div className="flex items-center space-x-2">
                   <span className="text-[#60CDFF]">•</span>
-                  <span><strong>File Icon & Open:</strong> Double-click .bay files to open in Bayzip</span>
+                  <span><strong>Universal Uncompress:</strong> .bay, .zip, .7z, .rar, .tar, .gz auto-detected</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-[#60CDFF]">•</span>
+                  <span><strong>File Icon & Open:</strong> Double-click .bay files to open directly in Bayzip</span>
                 </div>
               </div>
 
