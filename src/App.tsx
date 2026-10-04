@@ -403,18 +403,53 @@ function App() {
     });
 
     try {
-      const res = await invoke<CompressResult>("compress_files", {
-        payload: {
-          files: selectedFiles,
-          format: selectedFormat,
-          algorithm: selectedAlgorithm,
-          slider_value: sliderValue,
-          custom_name: customArchiveName.trim() || undefined,
-          encryption: selectedEncryption,
-          password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
-        },
-      });
-      setCompressResult(res);
+      if (separateArchives && selectedFiles.length > 1) {
+        let lastRes: CompressResult | null = null;
+        let totalOrig = 0;
+        let totalComp = 0;
+        let totalElapsed = 0;
+
+        for (let i = 0; i < selectedFiles.length; i++) {
+          const file = selectedFiles[i];
+          const res = await invoke<CompressResult>("compress_files", {
+            payload: {
+              files: [file],
+              format: selectedFormat,
+              algorithm: selectedAlgorithm,
+              slider_value: sliderValue,
+              custom_name: undefined, // Each file uses its own name
+              encryption: selectedEncryption,
+              password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
+            },
+          });
+          totalOrig += res.original_size;
+          totalComp += res.compressed_size;
+          totalElapsed += res.elapsed_ms;
+          lastRes = res;
+        }
+
+        if (lastRes) {
+          setCompressResult({
+            ...lastRes,
+            original_size: totalOrig,
+            compressed_size: totalComp,
+            elapsed_ms: totalElapsed,
+          });
+        }
+      } else {
+        const res = await invoke<CompressResult>("compress_files", {
+          payload: {
+            files: selectedFiles,
+            format: selectedFormat,
+            algorithm: selectedAlgorithm,
+            slider_value: sliderValue,
+            custom_name: customArchiveName.trim() || undefined,
+            encryption: selectedEncryption,
+            password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
+          },
+        });
+        setCompressResult(res);
+      }
     } catch (err) {
       console.error("Compression execution error:", err);
       setCompressError(String(err));
