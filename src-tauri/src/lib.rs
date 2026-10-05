@@ -700,30 +700,31 @@ fn compress_zip(
         zip::CompressionMethod::Deflated
     };
 
-    let mut options = SimpleFileOptions::default()
-        .compression_method(method)
-        .large_file(true);
-
-    if let Some(pwd) = password {
-        let trimmed = pwd.trim();
-        if !trimmed.is_empty() {
-            let aes_mode = match encryption {
-                Some("aes-128") => AesMode::Aes128,
-                _ => AesMode::Aes256,
-            };
-            options = options.with_aes_encryption(aes_mode, trimmed);
-        }
-    }
-
     let mut bytes_processed: u64 = 0;
     let mut last_emit = Instant::now();
 
+    let has_pwd = password.map(|p| p.trim()).filter(|p| !p.is_empty());
+    let aes_mode = match encryption {
+        Some("aes-128") => AesMode::Aes128,
+        _ => AesMode::Aes256,
+    };
+
     for file_str in files {
         let p = Path::new(file_str);
+        
+        let options = SimpleFileOptions::default()
+            .compression_method(method)
+            .large_file(true);
+
         if p.is_file() {
             let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            writer.start_file(file_name, options)
-                .map_err(|e| format!("Zip start file error: {}", e))?;
+            if let Some(pwd) = has_pwd {
+                writer.start_file(file_name, options.with_aes_encryption(aes_mode, pwd))
+                    .map_err(|e| format!("Zip start file error: {}", e))?;
+            } else {
+                writer.start_file(file_name, options)
+                    .map_err(|e| format!("Zip start file error: {}", e))?;
+            }
             
             if let Ok(mut f) = File::open(p) {
                 let mut buf = [0u8; 128 * 1024];
@@ -755,11 +756,13 @@ fn compress_zip(
             }
         } else if p.is_dir() {
             let parent_dir = p.parent().unwrap_or(p);
-            fn add_dir_to_zip<'a, W: Write + std::io::Seek>(
+            fn add_dir_to_zip<W: Write + std::io::Seek>(
                 dir: &Path,
                 base: &Path,
                 writer: &mut zip::ZipWriter<W>,
-                options: SimpleFileOptions<'a>,
+                method: zip::CompressionMethod,
+                has_pwd: Option<&str>,
+                aes_mode: AesMode,
                 bytes_processed: &mut u64,
                 total_original: u64,
                 app: &AppHandle,
@@ -773,13 +776,27 @@ fn compress_zip(
                         if let Ok(m) = std::fs::symlink_metadata(&path) {
                             let rel = path.strip_prefix(base).unwrap_or(&path);
                             let rel_str = rel.to_string_lossy().replace('\\', "/");
+                            
+                            let options = SimpleFileOptions::default()
+                                .compression_method(method)
+                                .large_file(true);
+
                             if m.is_dir() && !m.file_type().is_symlink() {
                                 let dir_name = format!("{}/", rel_str);
-                                let _ = writer.add_directory(&dir_name, options);
-                                add_dir_to_zip(&path, base, writer, options, bytes_processed, total_original, app, last_emit, depth + 1)?;
+                                if let Some(pwd) = has_pwd {
+                                    let _ = writer.add_directory(&dir_name, options.with_aes_encryption(aes_mode, pwd));
+                                } else {
+                                    let _ = writer.add_directory(&dir_name, options);
+                                }
+                                add_dir_to_zip(&path, base, writer, method, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1)?;
                             } else if m.is_file() {
-                                writer.start_file(&rel_str, options)
-                                    .map_err(|e| format!("Zip start file error: {}", e))?;
+                                if let Some(pwd) = has_pwd {
+                                    writer.start_file(&rel_str, options.with_aes_encryption(aes_mode, pwd))
+                                        .map_err(|e| format!("Zip start file error: {}", e))?;
+                                } else {
+                                    writer.start_file(&rel_str, options)
+                                        .map_err(|e| format!("Zip start file error: {}", e))?;
+                                }
                                 if let Ok(mut f) = File::open(&path) {
                                     let mut buf = [0u8; 128 * 1024];
                                     loop {
@@ -814,7 +831,7 @@ fn compress_zip(
                 }
                 Ok(())
             }
-            add_dir_to_zip(p, parent_dir, &mut writer, options, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
+            add_dir_to_zip(p, parent_dir, &mut writer, method, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
         }
     }
 
