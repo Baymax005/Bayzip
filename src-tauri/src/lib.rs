@@ -184,40 +184,6 @@ async fn register_context_menu() -> Result<String, String> {
     }
 }
 
-pub fn headless_quick_compress(format: &str, target_path: &str) -> Result<(), String> {
-    let p = Path::new(target_path);
-    if !p.exists() {
-        return Err("Target path does not exist".into());
-    }
-    let parent = p.parent().unwrap_or_else(|| Path::new("."));
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("archive");
-    let ext = if format.starts_with('.') { format.to_string() } else { format!(".{}", format) };
-    let output_path = parent.join(format!("{}{}", stem, ext));
-
-    let fmt_clean = format.trim_start_matches('.').to_lowercase();
-    match fmt_clean.as_str() {
-        "zip" => headless_quick_compress_zip(p, &output_path),
-        "tar" => {
-            let out_file = File::create(&output_path)
-                .map_err(|e| format!("Failed to create tar file: {}", e))?;
-            let mut builder = tar::Builder::new(BufWriter::new(out_file));
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            if p.is_file() {
-                builder.append_path_with_name(p, name).map_err(|e| e.to_string())?;
-            } else if p.is_dir() {
-                builder.append_dir_all(name, p).map_err(|e| e.to_string())?;
-            }
-            builder.finish().map_err(|e| e.to_string())?;
-            Ok(())
-        },
-        "7z" => {
-            sevenz_rust::compress_to_path(p, &output_path)
-                .map_err(|e| format!("7z compress error: {}", e))
-        },
-        _ => headless_quick_compress_bay(p, &output_path),
-    }
-}
-
 fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), String> {
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create zip file: {}", e))?;
@@ -789,11 +755,11 @@ fn compress_zip(
             }
         } else if p.is_dir() {
             let parent_dir = p.parent().unwrap_or(p);
-            fn add_dir_to_zip<W: Write + std::io::Seek>(
+            fn add_dir_to_zip<'a, W: Write + std::io::Seek>(
                 dir: &Path,
                 base: &Path,
                 writer: &mut zip::ZipWriter<W>,
-                options: SimpleFileOptions,
+                options: SimpleFileOptions<'a>,
                 bytes_processed: &mut u64,
                 total_original: u64,
                 app: &AppHandle,
