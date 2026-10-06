@@ -56,6 +56,7 @@ interface ArchiveInfo {
   size: number;
   format: string;
   is_archive: boolean;
+  is_encrypted: boolean;
 }
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
@@ -178,6 +179,7 @@ function App() {
         size: 0,
         format: "Archive",
         is_archive: true,
+        is_encrypted: false,
       });
     }
   };
@@ -465,6 +467,12 @@ function App() {
       return;
     }
 
+    if (archiveInfo?.is_encrypted && !extractPassword.trim()) {
+      setExtractError("Password required: This archive is encrypted. Please enter the password to extract.");
+      setIsPasswordPromptOpen(true);
+      return;
+    }
+
     setIsExtracting(true);
     setExtractError(null);
     setExtractProgress({
@@ -534,14 +542,18 @@ function App() {
         className="h-11 w-full flex justify-between items-center bg-[#202020] cursor-default select-none border-b border-[#2D2D2D] shrink-0"
       >
         {/* Left Branding Area - Fully Grabbable */}
-        <div data-tauri-drag-region className="flex items-center space-x-3 px-4 cursor-default">
-          <div data-tauri-drag-region className="w-4 h-4 text-[#60CDFF] flex items-center justify-center pointer-events-none">
-            {/* Simple Zip Icon */}
-            <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full pointer-events-none">
-              <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2h12c1.1 0 2-.9 2-2V8l-6-6zm-2 14h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V6h2v2z" />
-            </svg>
+        <div data-tauri-drag-region className="flex items-center space-x-2.5 px-4 cursor-default">
+          <div data-tauri-drag-region className="w-5 h-5 flex items-center justify-center pointer-events-none">
+            <img
+              src="/bayzip-logo.png"
+              alt="Bayzip"
+              className="w-4 h-4 object-contain pointer-events-none rounded-sm"
+              onError={(e) => {
+                (e.currentTarget as HTMLElement).style.display = "none";
+              }}
+            />
           </div>
-          <span data-tauri-drag-region className="text-xs font-normal text-white tracking-wide pointer-events-none">
+          <span data-tauri-drag-region className="text-xs font-semibold text-white tracking-wide pointer-events-none">
             Bayzip
           </span>
         </div>
@@ -823,7 +835,17 @@ function App() {
                   <span className="font-medium text-[#C8C8C8]">Archive Name</span>
                   <span className="text-[11px] text-[#888888]">Saved in source folder</span>
                 </div>
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-[#202020] border border-[#3E3E3E] flex items-center justify-center shrink-0">
+                    <img
+                      src="/bayzip-logo.png"
+                      alt="Bayzip"
+                      className="w-5 h-5 object-contain"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = "none";
+                      }}
+                    />
+                  </div>
                   <input
                     type="text"
                     value={customArchiveName}
@@ -1169,10 +1191,18 @@ function App() {
                   </div>
 
                   <div className="flex items-center space-x-4 bg-[#202020] p-4 rounded-md border border-[#3E3E3E]">
-                    <div className="w-10 h-10 rounded-lg bg-[#1a3847] text-[#60CDFF] flex items-center justify-center shrink-0 border border-[#20495f]">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-5 h-5">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-                      </svg>
+                    <div className="relative w-12 h-12 rounded-xl bg-[#142330] border border-[#20495f] flex items-center justify-center shrink-0 shadow">
+                      <img
+                        src="/bayzip-logo.png"
+                        alt="Archive"
+                        className="w-7 h-7 object-contain"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLElement).style.display = "none";
+                        }}
+                      />
+                      <span className="absolute -bottom-1 -right-1 bg-[#60CDFF] text-black text-[8px] font-black font-mono px-1 rounded uppercase">
+                        {archiveInfo.format.replace(".", "").toUpperCase() || "ZIP"}
+                      </span>
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-white truncate" title={selectedArchive}>
@@ -1184,6 +1214,11 @@ function App() {
                         <span className="bg-[#2D2D2D] px-2 py-0.5 rounded text-[11px] text-[#C8C8C8] border border-[#3E3E3E]">
                           {archiveInfo.format}
                         </span>
+                        {archiveInfo.is_encrypted && (
+                          <span className="bg-amber-950/60 text-amber-300 text-[10px] px-1.5 py-0.5 rounded border border-amber-800/80 font-medium flex items-center space-x-1">
+                            <span>🔒 Encrypted</span>
+                          </span>
+                        )}
                       </div>
                     </div>
                     <button
@@ -1256,16 +1291,38 @@ function App() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">
-                    Archive Password <span className="text-[#888] font-normal">(leave blank if unencrypted)</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-medium text-[#C8C8C8]">
+                      Archive Password
+                    </label>
+                    {archiveInfo?.is_encrypted ? (
+                      <span className="text-[11px] font-semibold text-amber-400 bg-amber-950/40 border border-amber-800/60 px-2.5 py-0.5 rounded-full flex items-center space-x-1.5">
+                        <svg className="w-3 h-3 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                        <span>Password Required</span>
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-emerald-400 font-normal">
+                        Unencrypted (No password needed)
+                      </span>
+                    )}
+                  </div>
                   <div className="relative">
                     <input
                       type={showExtractPassword ? "text" : "password"}
                       value={extractPassword}
                       onChange={(e) => setExtractPassword(e.target.value)}
-                      placeholder="Enter archive password..."
-                      className="w-full bg-[#202020] text-sm text-white pl-3 pr-10 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-mono text-xs placeholder-[#666]"
+                      placeholder={
+                        archiveInfo?.is_encrypted
+                          ? "Enter password to decrypt..."
+                          : "Leave blank (unencrypted)"
+                      }
+                      className={`w-full bg-[#202020] text-sm text-white pl-3 pr-10 py-2 rounded-md border outline-none font-mono text-xs placeholder-[#666] transition-colors ${
+                        archiveInfo?.is_encrypted
+                          ? "border-amber-500/60 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/30"
+                          : "border-[#3E3E3E] focus:border-[#60CDFF]"
+                      }`}
                     />
                     <button
                       type="button"
@@ -1430,6 +1487,38 @@ function App() {
               </div>
             </div>
 
+            {/* Archive File Preview Card with Bayzip Logo & ZIP Badge */}
+            <div className="bg-[#1A2530] border border-[#0078D4]/40 rounded-xl p-3.5 flex items-center space-x-3.5 shadow-inner">
+              <div className="relative w-12 h-12 rounded-xl bg-[#0F1922] border border-[#60CDFF]/40 flex items-center justify-center shrink-0 shadow">
+                <img
+                  src="/bayzip-logo.png"
+                  alt="Bayzip Archive"
+                  className="w-7 h-7 object-contain"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLElement).style.display = "none";
+                  }}
+                />
+                <span className="absolute -bottom-1 -right-1 bg-[#60CDFF] text-black text-[8px] font-black font-mono px-1 rounded uppercase tracking-wider">
+                  {compressResult.output_path.split(".").pop()?.toUpperCase() || "ZIP"}
+                </span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#60CDFF] bg-[#60CDFF]/15 px-2 py-0.5 rounded-full border border-[#60CDFF]/30">
+                    Compressed Archive
+                  </span>
+                </div>
+                <h4 className="text-sm font-semibold text-white truncate mt-1" title={compressResult.output_path}>
+                  {compressResult.output_path.split(/[\\/]/).pop()}
+                </h4>
+                <div className="flex items-center space-x-2 text-xs text-[#8BBEE8] mt-0.5">
+                  <span className="font-mono font-medium text-white">{formatBytes(compressResult.compressed_size)}</span>
+                  <span>•</span>
+                  <span>Bayzip Ultra Package</span>
+                </div>
+              </div>
+            </div>
+
             <div className="bg-[#2A2A2A] rounded-lg p-4 border border-[#3E3E3E] space-y-2.5">
               <div className="flex justify-between text-xs">
                 <span className="text-[#A8A8A8]">Original Size:</span>
@@ -1500,6 +1589,24 @@ function App() {
               </div>
             </div>
 
+            {/* Archive Info Card */}
+            <div className="bg-[#1A2530] border border-[#3E3E3E] rounded-lg p-3.5 flex items-center space-x-3.5">
+              <div className="relative w-10 h-10 rounded-lg bg-[#0F1922] border border-[#60CDFF]/30 flex items-center justify-center shrink-0 shadow">
+                <img
+                  src="/bayzip-logo.png"
+                  alt="Bayzip Archive"
+                  className="w-6 h-6 object-contain"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLElement).style.display = "none";
+                  }}
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-[#60CDFF]">Source Archive</span>
+                <p className="text-xs font-semibold text-white truncate">{archiveInfo?.filename || "Extracted Archive"}</p>
+              </div>
+            </div>
+
             <div className="bg-[#2A2A2A] rounded-lg p-4 border border-[#3E3E3E] space-y-2.5">
               <div className="flex justify-between text-xs">
                 <span className="text-[#A8A8A8]">Files Extracted:</span>
@@ -1562,10 +1669,12 @@ function App() {
 
             {/* Header */}
             <div className="flex items-center space-x-3.5">
-              <div className="w-10 h-10 rounded-lg bg-[#1a3847] text-[#60CDFF] flex items-center justify-center border border-[#20495f] shrink-0">
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-                  <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2h12c1.1 0 2-.9 2-2V8l-6-6zm-2 14h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V6h2v2z" />
-                </svg>
+              <div className="w-11 h-11 rounded-xl bg-[#142330] border border-[#20495f] flex items-center justify-center shrink-0 p-1.5 shadow-md">
+                <img
+                  src="/bayzip-logo.png"
+                  alt="Bayzip"
+                  className="w-full h-full object-contain"
+                />
               </div>
               <div>
                 <div className="flex items-center space-x-2">

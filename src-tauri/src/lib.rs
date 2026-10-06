@@ -52,136 +52,151 @@ fn get_cli_args() -> Vec<String> {
     std::env::args().skip(1).filter(|arg| !arg.starts_with("--")).collect()
 }
 
-fn build_target_reg(target: &str, exe: &str) -> String {
-    format!(
-        "[-HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\Bayzip]\r\n\r\n\
-        [-HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract]\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract]\r\n\
-        \"MUIVerb\"=\"Extract with Bayzip\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\
-        \"SubCommands\"=\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell]\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\01_extract_sub]\r\n\
-        \"MUIVerb\"=\"Extract to dedicated folder\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\01_extract_sub\\command]\r\n\
-        @=\"\\\"{exe}\\\" --extract-to-folder \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\02_extract_here]\r\n\
-        \"MUIVerb\"=\"Extract Here\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\02_extract_here\\command]\r\n\
-        @=\"\\\"{exe}\\\" --extract-here \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\03_open]\r\n\
-        \"MUIVerb\"=\"Open in Bayzip...\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\03_open\\command]\r\n\
-        @=\"\\\"{exe}\\\" \\\"%1\\\"\"\r\n\r\n\
-        [-HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress]\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress]\r\n\
-        \"MUIVerb\"=\"Add to archive with Bayzip\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\
-        \"SubCommands\"=\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell]\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\01_bay]\r\n\
-        \"MUIVerb\"=\"Add to .bay (Ultra-Fast)\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\01_bay\\command]\r\n\
-        @=\"\\\"{exe}\\\" --quick-compress .bay \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\02_zip]\r\n\
-        \"MUIVerb\"=\"Add to .zip (Standard)\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\02_zip\\command]\r\n\
-        @=\"\\\"{exe}\\\" --quick-compress .zip \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\03_7z]\r\n\
-        \"MUIVerb\"=\"Add to .7z (High Ratio)\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\03_7z\\command]\r\n\
-        @=\"\\\"{exe}\\\" --quick-compress .7z \\\"%1\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\04_tar]\r\n\
-        \"MUIVerb\"=\"Add to .tar (Universal)\"\r\n\
-        \"Icon\"=\"\\\"{exe}\\\"\"\r\n\r\n\
-        [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\04_tar\\command]\r\n\
-        @=\"\\\"{exe}\\\" --quick-compress .tar \\\"%1\\\"\"\r\n\r\n"
-    )
-}
-
-#[tauri::command]
-async fn register_context_menu() -> Result<String, String> {
+pub fn register_context_menu_sync() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        tauri::async_runtime::spawn_blocking(|| {
-            if let Ok(exe_path) = std::env::current_exe() {
-                let exe_str = exe_path.to_string_lossy().to_string();
-                let escaped_exe = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
+        if let Ok(exe_path) = std::env::current_exe() {
+            let exe_str = exe_path.to_string_lossy().to_string();
+            let escaped_exe = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
 
-                let reg_content = format!(
-                    "Windows Registry Editor Version 5.00\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
-                    @=\"Bayzip.Archive\"\r\n\
-                    \"Content Type\"=\"application/x-bayzip\"\r\n\
-                    \"PerceivedType\"=\"compressed\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\OpenWithProgids]\r\n\
-                    \"Bayzip.Archive\"=\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive]\r\n\
-                    @=\"Bayzip Compressed Archive\"\r\n\
-                    \"FriendlyTypeName\"=\"Bayzip Compressed Archive\"\r\n\
-                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\DefaultIcon]\r\n\
-                    @=\"\\\"{escaped_exe}\\\",0\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell]\r\n\
-                    @=\"open\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open]\r\n\
-                    @=\"Open in Bayzip\"\r\n\
-                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open\\command]\r\n\
-                    @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\extract_sub]\r\n\
-                    @=\"Extract to dedicated folder\"\r\n\
-                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\extract_sub\\command]\r\n\
-                    @=\"\\\"{escaped_exe}\\\" --extract-to-folder \\\"%1\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\extract_here]\r\n\
-                    @=\"Extract Here\"\r\n\
-                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\extract_here\\command]\r\n\
-                    @=\"\\\"{escaped_exe}\\\" --extract-here \\\"%1\\\"\"\r\n\r\n\
-                    {}{}{}{}{}{}{}{}",
-                    build_target_reg("*", &escaped_exe),
-                    build_target_reg("Directory", &escaped_exe),
-                    build_target_reg("SystemFileAssociations\\.bay", &escaped_exe),
-                    build_target_reg("SystemFileAssociations\\.zip", &escaped_exe),
-                    build_target_reg("SystemFileAssociations\\.7z", &escaped_exe),
-                    build_target_reg("SystemFileAssociations\\.rar", &escaped_exe),
-                    build_target_reg("SystemFileAssociations\\.tar", &escaped_exe),
-                    build_target_reg("SystemFileAssociations\\.gz", &escaped_exe)
-                );
+            let archive_exts = [
+                ".bay",
+                ".bay_gamer",
+                ".zip",
+                ".7z",
+                ".rar",
+                ".tar",
+                ".gz",
+                ".tgz",
+            ];
 
-                let temp_reg = std::env::temp_dir().join("bayzip_context.reg");
-                if std::fs::write(&temp_reg, reg_content).is_ok() {
-                    let mut cmd = Command::new("reg");
-                    cmd.args(["import", &temp_reg.to_string_lossy()]);
-                    cmd.creation_flags(CREATE_NO_WINDOW);
-                    let _ = cmd.output();
-                    let _ = std::fs::remove_file(temp_reg);
+            let mut reg_content = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
 
-                    // Notify Windows Explorer to reload file associations and icons immediately
-                    let mut refresh_cmd = Command::new("cmd");
-                    refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
-                    refresh_cmd.creation_flags(CREATE_NO_WINDOW);
-                    let _ = refresh_cmd.output();
+            // 1. Register .bay file association (ProgID)
+            reg_content.push_str(&format!(
+                "[HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
+                @=\"Bayzip.Archive\"\r\n\
+                \"Content Type\"=\"application/x-bayzip\"\r\n\
+                \"PerceivedType\"=\"compressed\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\OpenWithProgids]\r\n\
+                \"Bayzip.Archive\"=\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive]\r\n\
+                @=\"Bayzip Compressed Archive\"\r\n\
+                \"FriendlyTypeName\"=\"Bayzip Compressed Archive\"\r\n\
+                \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\DefaultIcon]\r\n\
+                @=\"\\\"{escaped_exe}\\\",0\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell]\r\n\
+                @=\"open\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open]\r\n\
+                @=\"Open in Bayzip\"\r\n\
+                \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open\\command]\r\n\
+                @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n"
+            ));
 
-                    return Ok("Separate 'Extract with Bayzip' and 'Add to archive with Bayzip' menus registered successfully!".into());
-                }
+            // 2. Register "Extract with Bayzip" for each archive format under SystemFileAssociations and Bayzip.Archive
+            let mut extract_targets = vec!["Bayzip.Archive".to_string()];
+            for ext in &archive_exts {
+                extract_targets.push(format!("SystemFileAssociations\\{}", ext));
             }
-            Err("Could not determine executable path.".into())
-        })
-        .await
-        .map_err(|e| format!("Registry sync error: {}", e))?
+
+            for target in extract_targets {
+                reg_content.push_str(&format!(
+                    "[-HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract]\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract]\r\n\
+                    \"MUIVerb\"=\"Extract with Bayzip\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\
+                    \"SubCommands\"=\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell]\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\01_extract_sub]\r\n\
+                    \"MUIVerb\"=\"Extract to dedicated folder\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\01_extract_sub\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --extract-to-folder \\\"%1\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\02_extract_here]\r\n\
+                    \"MUIVerb\"=\"Extract Here\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\02_extract_here\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --extract-here \\\"%1\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\03_open]\r\n\
+                    \"MUIVerb\"=\"Open in Bayzip...\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\03_open\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n"
+                ));
+            }
+
+            // 3. Register "Add to archive with Bayzip" for * (all files) and Directory (folders)
+            for target in &["*", "Directory"] {
+                reg_content.push_str(&format!(
+                    "[-HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress]\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress]\r\n\
+                    \"MUIVerb\"=\"Add to archive with Bayzip\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\
+                    \"SubCommands\"=\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell]\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\01_bay]\r\n\
+                    \"MUIVerb\"=\"Add to .bay (Ultra-Fast)\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\01_bay\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --quick-compress .bay \\\"%1\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\02_zip]\r\n\
+                    \"MUIVerb\"=\"Add to .zip (Standard)\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\02_zip\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --quick-compress .zip \\\"%1\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\03_7z]\r\n\
+                    \"MUIVerb\"=\"Add to .7z (High Ratio)\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\03_7z\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --quick-compress .7z \\\"%1\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\04_tar]\r\n\
+                    \"MUIVerb\"=\"Add to .tar (Universal)\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\04_tar\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --quick-compress .tar \\\"%1\\\"\"\r\n\r\n"
+                ));
+            }
+
+            // Write as UTF-16 LE with BOM (Required by Windows reg.exe)
+            let temp_reg = std::env::temp_dir().join("bayzip_context.reg");
+            let mut utf16_bytes: Vec<u8> = vec![0xFF, 0xFE];
+            for u in reg_content.encode_utf16() {
+                utf16_bytes.extend_from_slice(&u.to_le_bytes());
+            }
+
+            if std::fs::write(&temp_reg, utf16_bytes).is_ok() {
+                let mut cmd = Command::new("reg");
+                cmd.args(["import", &temp_reg.to_string_lossy()]);
+                cmd.creation_flags(CREATE_NO_WINDOW);
+                let _ = cmd.output();
+                let _ = std::fs::remove_file(temp_reg);
+
+                // Refresh Windows Explorer shell
+                let mut refresh_cmd = Command::new("cmd");
+                refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+                refresh_cmd.creation_flags(CREATE_NO_WINDOW);
+                let _ = refresh_cmd.output();
+
+                return Ok("Context menu registered successfully!".into());
+            }
+        }
+        Err("Could not determine executable path.".into())
     }
     #[cfg(not(target_os = "windows"))]
     {
         Ok("Context menu not applicable on non-Windows OS".into())
     }
+}
+
+#[tauri::command]
+async fn register_context_menu() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        register_context_menu_sync()
+    })
+    .await
+    .map_err(|e| format!("Registry sync error: {}", e))?
 }
 
 fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), String> {
@@ -241,14 +256,14 @@ fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), Strin
 }
 
 fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), String> {
-    let out_file = File::create(output_path)
+    let mut out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create output file: {}", e))?;
+    out_file.write_all(b"BAYZIP\x02\x00")
+        .map_err(|e| format!("Header write error: {}", e))?;
     
     // Balanced profile level 7 (50% slider equivalent)
     let mut encoder = zstd::stream::Encoder::new(out_file, 7)
         .map_err(|e| format!("Encoder error: {}", e))?;
-
-    let _ = encoder.write_all(b"BAYZIP\x02");
 
     let parent = p.parent().unwrap_or(p);
 
@@ -286,7 +301,7 @@ fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), Strin
                     if let Ok(m) = std::fs::symlink_metadata(&entry_path) {
                         if m.is_file() {
                             let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
-                            let rel_str = rel_name.to_string_lossy();
+                            let rel_str = rel_name.to_string_lossy().replace('\\', "/");
                             let bytes = rel_str.as_bytes();
                             let file_size = m.len();
                             let _ = encoder.write_all(&[1u8]);
@@ -566,7 +581,8 @@ fn compress_bay(
 
     let target_dest = if is_encrypted {
         std::env::temp_dir().join(format!(
-            "bayzip_raw_{}",
+            "bayzip_raw_{}_{}",
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -583,10 +599,12 @@ fn compress_bay(
     let mut bytes_processed: u64 = 0;
     let mut last_emit = Instant::now();
 
-    let out_file = File::create(&target_dest)
+    let mut out_file = File::create(&target_dest)
         .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
 
     if algo_lower.contains("brotli") {
+        out_file.write_all(b"BAYBRO\x02\x00")
+            .map_err(|e| format!("Header write error: {}", e))?;
         let quality = match slider_value {
             0 => 1,
             25 => 4,
@@ -595,7 +613,6 @@ fn compress_bay(
             _ => 11,
         };
         let mut encoder = brotli::CompressorWriter::new(BufWriter::new(out_file), 64 * 1024, quality, 22);
-        let _ = encoder.write_all(b"BAYBRO\x02");
         for file_str in files {
             let p = Path::new(file_str);
             if p.is_file() {
@@ -608,8 +625,9 @@ fn compress_bay(
         let _ = encoder.write_all(&[0u8]); // EOF
         encoder.flush().map_err(|e| format!("Brotli finalize error: {}", e))?;
     } else if algo_lower.contains("lz4") {
+        out_file.write_all(b"BAYLZ4\x02\x00")
+            .map_err(|e| format!("Header write error: {}", e))?;
         let mut encoder = lz4_flex::frame::FrameEncoder::new(BufWriter::new(out_file));
-        let _ = encoder.write_all(b"BAYLZ4\x02");
         for file_str in files {
             let p = Path::new(file_str);
             if p.is_file() {
@@ -623,6 +641,8 @@ fn compress_bay(
         let _ = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
     } else {
         // Default to Zstandard (Recommended)
+        out_file.write_all(b"BAYZIP\x02\x00")
+            .map_err(|e| format!("Header write error: {}", e))?;
         let zstd_level = match slider_value {
             0 => 1,
             25 => 3,
@@ -632,7 +652,6 @@ fn compress_bay(
         };
         let mut encoder = zstd::stream::Encoder::new(BufWriter::new(out_file), zstd_level)
             .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
-        let _ = encoder.write_all(b"BAYZIP\x02");
         for file_str in files {
             let p = Path::new(file_str);
             if p.is_file() {
@@ -668,7 +687,7 @@ fn compress_bay(
 
         let mut final_file = File::create(output_path)
             .map_err(|e| format!("Failed to create encrypted output file: {}", e))?;
-        final_file.write_all(b"BAYENC\x01").map_err(|e| e.to_string())?;
+        final_file.write_all(b"BAYENC\x02\x00").map_err(|e| e.to_string())?;
         final_file.write_all(&salt).map_err(|e| e.to_string())?;
         final_file.write_all(&nonce_bytes).map_err(|e| e.to_string())?;
         final_file.write_all(&ciphertext).map_err(|e| e.to_string())?;
@@ -1063,6 +1082,7 @@ pub struct ArchiveInfo {
     pub size: u64,
     pub format: String,
     pub is_archive: bool,
+    pub is_encrypted: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1081,18 +1101,23 @@ fn detect_archive_type(path: &Path) -> ArchiveFormat {
         let mut magic = [0u8; 16];
         if let Ok(n) = file.read(&mut magic) {
             // Bayzip magic signatures:
-            // BAYZIP\x01, BAYZIP\x02, BAYBRO\x02, BAYLZ4\x02, BAYENC\x01
+            // BAYZIP\x01, BAYZIP\x02, BAYBRO\x02, BAYLZ4\x02, BAYENC\x01, BAYENC\x02
             if n >= 7 && (
                 &magic[..7] == b"BAYZIP\x01" ||
                 &magic[..7] == b"BAYZIP\x02" ||
                 &magic[..7] == b"BAYBRO\x02" ||
                 &magic[..7] == b"BAYLZ4\x02" ||
-                &magic[..7] == b"BAYENC\x01"
+                &magic[..7] == b"BAYENC\x01" ||
+                &magic[..7] == b"BAYENC\x02"
             ) {
                 return ArchiveFormat::Bay;
             }
             // Zstandard frame header: 0xFD2FB528 in little-endian -> [0x28, 0xB5, 0x2F, 0xFD]
             if n >= 4 && magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
+                return ArchiveFormat::Bay;
+            }
+            // LZ4 frame header: 0x184D2204 in little-endian -> [0x04, 0x22, 0x4D, 0x18]
+            if n >= 4 && magic[0..4] == [0x04, 0x22, 0x4D, 0x18] {
                 return ArchiveFormat::Bay;
             }
             // PK ZIP: PK\x03\x04 or PK\x05\x06 or PK\x07\x08
@@ -1133,6 +1158,53 @@ fn detect_archive_type(path: &Path) -> ArchiveFormat {
     }
 }
 
+fn is_archive_encrypted(path: &Path) -> bool {
+    let Ok(mut file) = File::open(path) else { return false; };
+    let mut header = [0u8; 16];
+    let n = file.read(&mut header).unwrap_or(0);
+    if n >= 7 && (header.starts_with(b"BAYENC\x01") || header.starts_with(b"BAYENC\x02")) {
+        return true;
+    }
+    // Check ZIP encryption
+    if n >= 4 && header[0] == 0x50 && header[1] == 0x4B {
+        if let Ok(file_for_zip) = File::open(path) {
+            if let Ok(mut zip) = zip::ZipArchive::new(file_for_zip) {
+                for i in 0..zip.len() {
+                    match zip.by_index(i) {
+                        Ok(entry) => {
+                            if entry.encrypted() {
+                                return true;
+                            }
+                        },
+                        Err(zip::result::ZipError::UnsupportedArchive(zip::result::ZipError::PASSWORD_REQUIRED)) => {
+                            return true;
+                        },
+                        Err(zip::result::ZipError::InvalidPassword) => {
+                            return true;
+                        },
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    // Check 7z encryption
+    if n >= 6 && header[0..6] == [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] {
+        match sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty()) {
+            Ok(mut reader) => {
+                if let Err(sevenz_rust::Error::PasswordRequired) = reader.for_each_entries(|_, _| Ok(false)) {
+                    return true;
+                }
+            }
+            Err(sevenz_rust::Error::PasswordRequired) => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 #[tauri::command]
 fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
     let p = Path::new(&path);
@@ -1143,6 +1215,7 @@ fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
     let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     
     let detected = detect_archive_type(p);
+    let is_enc = is_archive_encrypted(p);
     let (format, is_archive) = match detected {
         ArchiveFormat::Bay => ("Bayzip Archive (.bay)".to_string(), true),
         ArchiveFormat::Zip => ("ZIP Archive (.zip)".to_string(), true),
@@ -1151,7 +1224,7 @@ fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
         ArchiveFormat::Tar | ArchiveFormat::TarGz => ("TAR Archive (.tar)".to_string(), true),
         ArchiveFormat::Unknown => {
             let lower = path.to_lowercase();
-            if lower.ends_with(".bay") {
+            if lower.ends_with(".bay") || lower.ends_with(".bay_gamer") {
                 ("Bayzip Archive (.bay)".to_string(), true)
             } else if lower.ends_with(".zip") {
                 ("ZIP Archive (.zip)".to_string(), true)
@@ -1173,6 +1246,7 @@ fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
         size,
         format,
         is_archive,
+        is_encrypted: is_enc,
     })
 }
 
@@ -1188,14 +1262,38 @@ fn extract_bay_stream<R: Read>(
     let mut last_emit = Instant::now();
     let mut total_extracted: u64 = 0;
 
+    let mut first_byte = [0u8; 1];
+    let mut has_first = false;
+
+    // Check if the stream starts with redundant b"BAY..." signature (from legacy files)
+    match decoder.read_exact(&mut first_byte) {
+        Ok(_) => {
+            if first_byte[0] == b'B' {
+                // Peek/skip remaining signature bytes (AYZIP\x02, AYBRO\x02, AYLZ4\x02)
+                let mut rest_sig = [0u8; 6];
+                let _ = decoder.read_exact(&mut rest_sig);
+            } else {
+                has_first = true;
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(extracted_files),
+        Err(e) => return Err(format!("Error reading archive header: {}", e)),
+    }
+
     loop {
-        let mut entry_type = [0u8; 1];
-        match decoder.read_exact(&mut entry_type) {
-            Ok(_) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(format!("Error reading archive entry: {}", e)),
-        }
-        if entry_type[0] == 0 {
+        let entry_type = if has_first {
+            has_first = false;
+            first_byte[0]
+        } else {
+            let mut b = [0u8; 1];
+            match decoder.read_exact(&mut b) {
+                Ok(_) => b[0],
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(format!("Error reading archive entry: {}", e)),
+            }
+        };
+
+        if entry_type == 0 {
             break;
         }
 
@@ -1213,7 +1311,10 @@ fn extract_bay_stream<R: Read>(
             .map_err(|e| format!("Failed to read entry size: {}", e))?;
         let file_size = u64::from_le_bytes(size_bytes);
 
-        let out_path = dest_dir.join(&rel_path_str);
+        let sanitized = rel_path_str.replace('\\', "/");
+        let trimmed_name = sanitized.trim_start_matches('/');
+        let out_path = dest_dir.join(trimmed_name);
+
         if let Some(parent) = out_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -1224,29 +1325,47 @@ fn extract_bay_stream<R: Read>(
 
         let mut remaining = file_size;
         let mut buf = vec![0u8; 512 * 1024];
+        let mut write_err: Option<String> = None;
+
         while remaining > 0 {
             let to_read = (remaining as usize).min(buf.len());
-            let n = decoder.read(&mut buf[..to_read])
-                .map_err(|e| format!("Error reading decompressed stream: {}", e))?;
-            if n == 0 {
-                return Err("Premature EOF inside archive entry".into());
-            }
-            writer.write_all(&buf[..n])
-                .map_err(|e| format!("Error writing extracted file: {}", e))?;
-            remaining -= n as u64;
-            total_extracted += n as u64;
+            match decoder.read(&mut buf[..to_read]) {
+                Ok(0) => {
+                    write_err = Some("Premature EOF inside archive entry".into());
+                    break;
+                }
+                Ok(n) => {
+                    if let Err(e) = writer.write_all(&buf[..n]) {
+                        write_err = Some(format!("Error writing extracted file: {}", e));
+                        break;
+                    }
+                    remaining -= n as u64;
+                    total_extracted += n as u64;
 
-            if let Some(app_handle) = app {
-                if last_emit.elapsed().as_millis() >= 50 {
-                    last_emit = Instant::now();
-                    let _ = app_handle.emit("extract_progress", ExtractProgress {
-                        percent: 50.0,
-                        current_file: rel_path_str.clone(),
-                        bytes_extracted: total_extracted,
-                    });
+                    if let Some(app_handle) = app {
+                        if last_emit.elapsed().as_millis() >= 50 {
+                            last_emit = Instant::now();
+                            let _ = app_handle.emit("extract_progress", ExtractProgress {
+                                percent: 50.0,
+                                current_file: trimmed_name.to_string(),
+                                bytes_extracted: total_extracted,
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    write_err = Some(format!("Error reading decompressed stream: {}", e));
+                    break;
                 }
             }
         }
+
+        if let Some(err) = write_err {
+            drop(writer);
+            let _ = std::fs::remove_file(&out_path);
+            return Err(err);
+        }
+
         writer.flush().map_err(|e| format!("Flush error: {}", e))?;
         extracted_files.push(out_path.to_string_lossy().to_string());
     }
@@ -1264,14 +1383,18 @@ fn extract_bay_archive(
         .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
 
     let mut magic = [0u8; 8];
-    file.read_exact(&mut magic)
+    let n = file.read(&mut magic)
         .map_err(|e| format!("Invalid or corrupted .bay header: {}", e))?;
 
-    if &magic[..8] == b"BAYENC\x01" {
+    if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),
             _ => return Err("Password required: This .bay archive is encrypted with AES-256-GCM.".into()),
         };
+
+        // Determine offset after BAYENC signature
+        let header_len = if magic.starts_with(b"BAYENC\x02") { 8 } else { 7 };
+        file.seek(std::io::SeekFrom::Start(header_len)).map_err(|e| e.to_string())?;
 
         let mut salt = [0u8; 16];
         file.read_exact(&mut salt)
@@ -1292,16 +1415,23 @@ fn extract_bay_archive(
         let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())
             .map_err(|_| "Incorrect password: Failed to decrypt AES-256-GCM archive.".to_string())?;
 
-        // Detect compression algorithm inside decrypted plaintext
+        // Detect container compression inside decrypted plaintext
         if plaintext.starts_with(b"BAYBRO\x02") {
-            let decoder = brotli::Decompressor::new(&plaintext[8..], 64 * 1024);
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
             return extract_bay_stream(decoder, dest_dir, app);
         } else if plaintext.starts_with(b"BAYLZ4\x02") {
-            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[8..]);
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
             return extract_bay_stream(decoder, dest_dir, app);
         } else if plaintext.starts_with(b"BAYZIP\x02") {
-            let decoder = zstd::stream::Decoder::new(&plaintext[8..])
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            let decoder = zstd::stream::Decoder::new(&plaintext[offset..])
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
+            return extract_bay_stream(decoder, dest_dir, app);
+        } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
+            // Raw LZ4 frame
+            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
             return extract_bay_stream(decoder, dest_dir, app);
         } else {
             // Raw Zstandard fallback
@@ -1311,27 +1441,37 @@ fn extract_bay_archive(
         }
     }
 
-    // Rewind file to start for unencrypted formats
+    // Unencrypted .bay
     file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut magic_header = [0u8; 8];
+    let n = file.read(&mut magic_header).unwrap_or(0);
 
-    let mut magic7 = [0u8; 8];
-    let n = file.read(&mut magic7).unwrap_or(0);
-    file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-
-    if n >= 8 && &magic7[..8] == b"BAYBRO\x02" {
-        file.seek(std::io::SeekFrom::Start(8)).map_err(|e| e.to_string())?;
+    if n >= 7 && magic_header.starts_with(b"BAYBRO\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = brotli::Decompressor::new(file, 64 * 1024);
         extract_bay_stream(decoder, dest_dir, app)
-    } else if n >= 8 && &magic7[..8] == b"BAYLZ4\x02" {
-        file.seek(std::io::SeekFrom::Start(8)).map_err(|e| e.to_string())?;
+    } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+        let decoder = lz4_flex::frame::FrameDecoder::new(file);
+        extract_bay_stream(decoder, dest_dir, app)
+    } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+        let decoder = zstd::stream::Decoder::new(file)
+            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
+        extract_bay_stream(decoder, dest_dir, app)
+    } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
+        // Raw LZ4 frame
+        file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
         extract_bay_stream(decoder, dest_dir, app)
     } else {
         // Standard Zstd
-        let mut decoder = zstd::stream::Decoder::new(file)
+        file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let decoder = zstd::stream::Decoder::new(file)
             .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
-        let mut header = [0u8; 7];
-        let _ = decoder.read_exact(&mut header);
         extract_bay_stream(decoder, dest_dir, app)
     }
 }
@@ -1618,6 +1758,14 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    {
+        // Auto-register and sync context menu in background on startup
+        std::thread::spawn(|| {
+            let _ = register_context_menu_sync();
+        });
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
