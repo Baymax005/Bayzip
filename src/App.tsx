@@ -1215,8 +1215,11 @@ function App() {
                           {archiveInfo.format}
                         </span>
                         {archiveInfo.is_encrypted && (
-                          <span className="bg-amber-950/60 text-amber-300 text-[10px] px-1.5 py-0.5 rounded border border-amber-800/80 font-medium flex items-center space-x-1">
-                            <span>🔒 Encrypted</span>
+                          <span className="bg-amber-950/60 text-amber-300 text-[10px] px-2 py-0.5 rounded border border-amber-800/80 font-medium flex items-center space-x-1">
+                            <svg className="w-3 h-3 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                            </svg>
+                            <span>Encrypted</span>
                           </span>
                         )}
                       </div>
@@ -1698,7 +1701,11 @@ function App() {
                 <span className="text-sm font-semibold text-white">Made by Baymax</span>
                 <span className="text-xs text-[#8A8A8A] block">CEO of DPG (Muhammad Ali)</span>
               </div>
-              <div className="text-2xl">⚡</div>
+              <div className="w-8 h-8 rounded-full bg-[#60CDFF]/15 text-[#60CDFF] flex items-center justify-center border border-[#60CDFF]/30">
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+              </div>
             </div>
 
             {/* Windows Explorer Integration Card */}
