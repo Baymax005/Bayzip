@@ -1,3 +1,18 @@
+# Agent & AI metadata
+.agents/
+.gemini/
+.system_generated/
+scratch/
+agent/
+*.agent
+agent-*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
 # Logs
 logs
 *.log
@@ -7,18 +22,37 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Node & Frontend Build
+node_modules/
+dist/
+dist-ssr/
+
+# Rust / Cargo / Tauri
+target/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Temporary and test artifacts
+test_workspace/
+test_temp/
+*.tmp
+*.bak
+*.7z
+*.bay
+*.bayz
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini

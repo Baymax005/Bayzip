@@ -14,6 +14,7 @@ use aes_gcm::{
 };
 use sha2::{Sha256, Digest};
 use rand::RngCore;
+use sevenz_rust2::{ArchiveWriter, ArchiveEntry, EncoderConfiguration, EncoderMethod, Password};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -333,6 +334,67 @@ fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), Strin
     Ok(())
 }
 
+fn headless_quick_compress_7z(p: &Path, output_path: &Path) -> Result<(), String> {
+    let mut sz = ArchiveWriter::create(output_path)
+        .map_err(|e| format!("Failed to create 7z: {}", e))?;
+    sz.set_encrypt_header(false);
+    sz.set_content_methods(vec![EncoderMethod::LZMA2.into()]);
+
+    let parent = p.parent().unwrap_or(p);
+    if p.is_file() {
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+        let mut entry = ArchiveEntry::from_path(p, name.to_string());
+        entry.is_directory = false;
+        entry.has_stream = true;
+        let f = File::open(p).map_err(|e| format!("Failed to open file: {}", e))?;
+        sz.push_archive_entry(entry, Some(f))
+            .map_err(|e| format!("7z entry error: {}", e))?;
+    } else if p.is_dir() {
+        let rel_root = p.strip_prefix(parent).unwrap_or(p).to_string_lossy().replace('\\', "/");
+        let clean_root = rel_root.trim_start_matches('/').trim_end_matches('/');
+        if !clean_root.is_empty() {
+            let mut dir_entry = ArchiveEntry::from_path(p, format!("{}/", clean_root));
+            dir_entry.is_directory = true;
+            dir_entry.has_stream = false;
+            let _ = sz.push_archive_entry::<&[u8]>(dir_entry, None);
+        }
+
+        fn add_dir_7z_quick<W: Write + Seek>(dir: &Path, base: &Path, sz: &mut ArchiveWriter<W>, depth: usize) -> Result<(), String> {
+            if depth > 32 { return Ok(()); }
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Ok(m) = std::fs::symlink_metadata(&path) {
+                        let rel = path.strip_prefix(base).unwrap_or(&path);
+                        let clean = rel.to_string_lossy().replace('\\', "/");
+                        let trimmed = clean.trim_start_matches('/');
+                        if trimmed.is_empty() { continue; }
+
+                        if m.is_dir() && !m.file_type().is_symlink() {
+                            let mut d_entry = ArchiveEntry::from_path(&path, format!("{}/", trimmed.trim_end_matches('/')));
+                            d_entry.is_directory = true;
+                            d_entry.has_stream = false;
+                            let _ = sz.push_archive_entry::<&[u8]>(d_entry, None);
+                            add_dir_7z_quick(&path, base, sz, depth + 1)?;
+                        } else if m.is_file() {
+                            let mut f_entry = ArchiveEntry::from_path(&path, trimmed.to_string());
+                            f_entry.is_directory = false;
+                            f_entry.has_stream = true;
+                            if let Ok(f) = File::open(&path) {
+                                let _ = sz.push_archive_entry(f_entry, Some(f));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        add_dir_7z_quick(p, parent, &mut sz, 0)?;
+    }
+    sz.finish().map_err(|e| format!("7z finalize error: {}", e))?;
+    Ok(())
+}
+
 pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<(), String> {
     let p = Path::new(target_path_str);
     if !p.exists() {
@@ -350,10 +412,7 @@ pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<()
     let fmt_clean = format.trim_start_matches('.').to_lowercase();
     match fmt_clean.as_str() {
         "zip" => headless_quick_compress_zip(p, &output_path)?,
-        "7z" => {
-            sevenz_rust::compress_to_path(p, &output_path)
-                .map_err(|e| format!("7z compress error: {}", e))?;
-        },
+        "7z" => headless_quick_compress_7z(p, &output_path)?,
         "tar" => {
             let out_file = File::create(&output_path)
                 .map_err(|e| format!("Failed to create tar file: {}", e))?;
@@ -775,6 +834,21 @@ fn compress_zip(
             }
         } else if p.is_dir() {
             let parent_dir = p.parent().unwrap_or(p);
+            let root_rel = p.strip_prefix(parent_dir).unwrap_or(p);
+            let root_str = root_rel.to_string_lossy().replace('\\', "/");
+            let clean_root = root_str.trim_start_matches('/').trim_end_matches('/');
+            if !clean_root.is_empty() {
+                let dir_name = format!("{}/", clean_root);
+                let options = SimpleFileOptions::default()
+                    .compression_method(method)
+                    .large_file(true);
+                if let Some(pwd) = has_pwd {
+                    let _ = writer.add_directory(&dir_name, options.with_aes_encryption(aes_mode, pwd));
+                } else {
+                    let _ = writer.add_directory(&dir_name, options);
+                }
+            }
+
             fn add_dir_to_zip<W: Write + std::io::Seek>(
                 dir: &Path,
                 base: &Path,
@@ -795,13 +869,15 @@ fn compress_zip(
                         if let Ok(m) = std::fs::symlink_metadata(&path) {
                             let rel = path.strip_prefix(base).unwrap_or(&path);
                             let rel_str = rel.to_string_lossy().replace('\\', "/");
+                            let clean_rel = rel_str.trim_start_matches('/').trim_end_matches('/');
+                            if clean_rel.is_empty() { continue; }
                             
                             let options = SimpleFileOptions::default()
                                 .compression_method(method)
                                 .large_file(true);
 
                             if m.is_dir() && !m.file_type().is_symlink() {
-                                let dir_name = format!("{}/", rel_str);
+                                let dir_name = format!("{}/", clean_rel);
                                 if let Some(pwd) = has_pwd {
                                     let _ = writer.add_directory(&dir_name, options.with_aes_encryption(aes_mode, pwd));
                                 } else {
@@ -810,10 +886,10 @@ fn compress_zip(
                                 add_dir_to_zip(&path, base, writer, method, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1)?;
                             } else if m.is_file() {
                                 if let Some(pwd) = has_pwd {
-                                    writer.start_file(&rel_str, options.with_aes_encryption(aes_mode, pwd))
+                                    writer.start_file(clean_rel, options.with_aes_encryption(aes_mode, pwd))
                                         .map_err(|e| format!("Zip start file error: {}", e))?;
                                 } else {
-                                    writer.start_file(&rel_str, options)
+                                    writer.start_file(clean_rel, options)
                                         .map_err(|e| format!("Zip start file error: {}", e))?;
                                 }
                                 if let Ok(mut f) = File::open(&path) {
@@ -891,66 +967,132 @@ fn compress_tar(
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
-}
-
 fn compress_7z(
     files: &[String],
     output_path: &Path,
     password: Option<&str>,
+    app: &AppHandle,
+    total_original: u64,
 ) -> Result<(), String> {
-    let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
-
-    if files.len() == 1 {
-        let p = Path::new(&files[0]);
-        if let Some(pwd) = pwd_opt {
-            sevenz_rust::compress_to_path_encrypted(p, output_path, pwd.into())
-                .map_err(|e| format!("7z compress encrypted error: {}", e))
-        } else {
-            sevenz_rust::compress_to_path(p, output_path)
-                .map_err(|e| format!("7z compress error: {}", e))
-        }
-    } else {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "bayzip_7z_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ));
-        std::fs::create_dir_all(&temp_dir)
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-        
-        for file_str in files {
-            let p = Path::new(file_str);
-            if let Some(name) = p.file_name() {
-                let target = temp_dir.join(name);
-                if p.is_file() {
-                    let _ = std::fs::copy(p, &target);
-                } else if p.is_dir() {
-                    let _ = copy_dir_recursive(p, &target);
-                }
-            }
-        }
-        let res = if let Some(pwd) = pwd_opt {
-            sevenz_rust::compress_to_path_encrypted(&temp_dir, output_path, pwd.into())
-        } else {
-            sevenz_rust::compress_to_path(&temp_dir, output_path)
-        };
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        res.map_err(|e| format!("7z compress error: {}", e))
+    if let Some(parent) = output_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
+
+    let mut sz = ArchiveWriter::create(output_path)
+        .map_err(|e| format!("Failed to create 7z archive: {}", e))?;
+
+    let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
+    let mut methods: Vec<EncoderConfiguration> = Vec::new();
+    if let Some(pwd) = pwd_opt {
+        methods.push(sevenz_rust2::encoder_options::AesEncoderOptions::new(pwd.into()).into());
+        sz.set_encrypt_header(true);
+    } else {
+        sz.set_encrypt_header(false);
+    }
+    methods.push(EncoderMethod::LZMA2.into());
+    sz.set_content_methods(methods);
+
+    let mut bytes_processed: u64 = 0;
+    let mut last_emit = Instant::now();
+
+    for file_str in files {
+        let p = Path::new(file_str);
+        if !p.exists() {
+            continue;
+        }
+        let parent = p.parent().unwrap_or(p);
+
+        if p.is_file() {
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            let mut entry = ArchiveEntry::from_path(p, name.to_string());
+            entry.is_directory = false;
+            entry.has_stream = true;
+            let f = File::open(p).map_err(|e| format!("Failed to open file {:?}: {}", p, e))?;
+            sz.push_archive_entry(entry, Some(f))
+                .map_err(|e| format!("7z entry error: {}", e))?;
+            bytes_processed += std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+
+            let pct = if total_original > 0 {
+                ((bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+            } else {
+                50.0
+            };
+            let _ = app.emit("compress_progress", CompressProgress {
+                percent: pct,
+                current_file: name.to_string(),
+                bytes_processed,
+                total_bytes: total_original,
+            });
+        } else if p.is_dir() {
+            let rel_root = p.strip_prefix(parent).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            let clean_root = rel_root.trim_start_matches('/').trim_end_matches('/');
+            if !clean_root.is_empty() {
+                let mut dir_entry = ArchiveEntry::from_path(p, format!("{}/", clean_root));
+                dir_entry.is_directory = true;
+                dir_entry.has_stream = false;
+                let _ = sz.push_archive_entry::<&[u8]>(dir_entry, None);
+            }
+
+            fn add_dir_7z<W: Write + Seek>(
+                dir: &Path,
+                base: &Path,
+                sz: &mut ArchiveWriter<W>,
+                bytes_processed: &mut u64,
+                total_original: u64,
+                app: &AppHandle,
+                last_emit: &mut Instant,
+                depth: usize,
+            ) -> Result<(), String> {
+                if depth > 32 { return Ok(()); }
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Ok(m) = std::fs::symlink_metadata(&path) {
+                            let rel = path.strip_prefix(base).unwrap_or(&path);
+                            let clean = rel.to_string_lossy().replace('\\', "/");
+                            let trimmed = clean.trim_start_matches('/');
+                            if trimmed.is_empty() { continue; }
+
+                            if m.is_dir() && !m.file_type().is_symlink() {
+                                let mut d_entry = ArchiveEntry::from_path(&path, format!("{}/", trimmed.trim_end_matches('/')));
+                                d_entry.is_directory = true;
+                                d_entry.has_stream = false;
+                                let _ = sz.push_archive_entry::<&[u8]>(d_entry, None);
+                                add_dir_7z(&path, base, sz, bytes_processed, total_original, app, last_emit, depth + 1)?;
+                            } else if m.is_file() {
+                                let mut f_entry = ArchiveEntry::from_path(&path, trimmed.to_string());
+                                f_entry.is_directory = false;
+                                f_entry.has_stream = true;
+                                let f = File::open(&path).map_err(|e| format!("Failed to open file: {}", e))?;
+                                sz.push_archive_entry(f_entry, Some(f))
+                                    .map_err(|e| format!("7z entry error: {}", e))?;
+                                *bytes_processed += m.len();
+                                if last_emit.elapsed().as_millis() >= 50 {
+                                    *last_emit = Instant::now();
+                                    let pct = if total_original > 0 {
+                                        ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                                    } else {
+                                        50.0
+                                    };
+                                    let _ = app.emit("compress_progress", CompressProgress {
+                                        percent: pct,
+                                        current_file: trimmed.to_string(),
+                                        bytes_processed: *bytes_processed,
+                                        total_bytes: total_original,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            add_dir_7z(p, parent, &mut sz, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
+        }
+    }
+
+    sz.finish().map_err(|e| format!("7z finalize error: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1022,7 +1164,7 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
             compress_tar(&payload.files, &output_path, &app, total_original)?;
         },
         "7z" => {
-            compress_7z(&payload.files, &output_path, pwd_ref)?;
+            compress_7z(&payload.files, &output_path, pwd_ref, &app, total_original)?;
         },
         _ => {
             compress_bay(
@@ -1075,6 +1217,13 @@ pub struct ExtractResponse {
     pub error: Option<String>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ArchiveEntryItem {
+    pub name: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
 #[derive(serde::Serialize)]
 pub struct ArchiveInfo {
     pub path: String,
@@ -1083,6 +1232,9 @@ pub struct ArchiveInfo {
     pub format: String,
     pub is_archive: bool,
     pub is_encrypted: bool,
+    pub file_count: usize,
+    pub total_uncompressed_size: u64,
+    pub entries: Vec<ArchiveEntryItem>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1190,24 +1342,276 @@ fn is_archive_encrypted(path: &Path) -> bool {
     }
     // Check 7z encryption
     if n >= 6 && header[0..6] == [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] {
-        match sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty()) {
-            Ok(mut reader) => {
-                if let Err(sevenz_rust::Error::PasswordRequired) = reader.for_each_entries(|_, _| Ok(false)) {
+        if let Ok(file) = File::open(path) {
+            match sevenz_rust2::ArchiveReader::new(file, Password::empty()) {
+                Ok(mut reader) => {
+                    if let Err(sevenz_rust2::Error::PasswordRequired) = reader.for_each_entries(|_, _| Ok(false)) {
+                        return true;
+                    }
+                }
+                Err(sevenz_rust2::Error::PasswordRequired) => {
                     return true;
                 }
+                _ => {}
             }
-            Err(sevenz_rust::Error::PasswordRequired) => {
-                return true;
-            }
-            _ => {}
         }
     }
     false
 }
 
-#[tauri::command]
-fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
-    let p = Path::new(&path);
+fn list_zip_entries(p: &Path, _password: Option<&str>) -> (Vec<ArchiveEntryItem>, usize, u64) {
+    let mut items = Vec::new();
+    let mut total_uncompressed = 0;
+    if let Ok(file) = File::open(p) {
+        if let Ok(mut archive) = zip::ZipArchive::new(file) {
+            for i in 0..archive.len() {
+                if let Ok(entry) = archive.by_index_raw(i) {
+                    let clean = entry.name().replace('\\', "/");
+                    let name = clean.trim_start_matches('/').to_string();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let size = entry.size();
+                    let is_dir = entry.is_dir() || clean.ends_with('/');
+                    total_uncompressed += size;
+                    items.push(ArchiveEntryItem {
+                        name,
+                        size,
+                        is_dir,
+                    });
+                }
+            }
+        }
+    }
+    let count = items.len();
+    (items, count, total_uncompressed)
+}
+
+fn list_7z_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryItem>, usize, u64) {
+    let mut items = Vec::new();
+    let mut total_uncompressed = 0;
+    if let Ok(file) = File::open(p) {
+        let pwd = password.map(|s| Password::from(s)).unwrap_or_else(Password::empty);
+        if let Ok(sz) = sevenz_rust2::ArchiveReader::new(file, pwd) {
+            for entry in sz.archive().files.iter() {
+                let raw_name = entry.name();
+                let clean = raw_name.replace('\\', "/");
+                let trimmed = clean.trim_start_matches('/');
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let size = entry.size();
+                let is_dir = entry.is_directory() || trimmed.ends_with('/');
+                total_uncompressed += size;
+                items.push(ArchiveEntryItem {
+                    name: trimmed.to_string(),
+                    size,
+                    is_dir,
+                });
+            }
+        }
+    }
+    let count = items.len();
+    (items, count, total_uncompressed)
+}
+
+fn list_tar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
+    let mut items = Vec::new();
+    let mut total_uncompressed = 0;
+    let is_gz = p.to_string_lossy().to_lowercase().ends_with(".gz") || p.to_string_lossy().to_lowercase().ends_with(".tgz");
+    if let Ok(file) = File::open(p) {
+        if is_gz {
+            let gz = flate2::read::GzDecoder::new(file);
+            let mut archive = tar::Archive::new(gz);
+            if let Ok(entries) = archive.entries() {
+                for entry in entries.flatten() {
+                    if let Ok(path) = entry.path() {
+                        let name = path.to_string_lossy().replace('\\', "/").trim_start_matches('/').to_string();
+                        if !name.is_empty() {
+                            let size = entry.size();
+                            let is_dir = entry.header().entry_type().is_dir();
+                            total_uncompressed += size;
+                            items.push(ArchiveEntryItem { name, size, is_dir });
+                        }
+                    }
+                }
+            }
+        } else {
+            let mut archive = tar::Archive::new(file);
+            if let Ok(entries) = archive.entries() {
+                for entry in entries.flatten() {
+                    if let Ok(path) = entry.path() {
+                        let name = path.to_string_lossy().replace('\\', "/").trim_start_matches('/').to_string();
+                        if !name.is_empty() {
+                            let size = entry.size();
+                            let is_dir = entry.header().entry_type().is_dir();
+                            total_uncompressed += size;
+                            items.push(ArchiveEntryItem { name, size, is_dir });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let count = items.len();
+    (items, count, total_uncompressed)
+}
+
+fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem>, usize, u64) {
+    let mut items = Vec::new();
+    let mut total_size = 0u64;
+
+    let mut first_byte = [0u8; 1];
+    let mut has_first = false;
+    if decoder.read_exact(&mut first_byte).is_ok() {
+        if first_byte[0] == b'B' {
+            let mut rest = [0u8; 6];
+            let _ = decoder.read_exact(&mut rest);
+        } else {
+            has_first = true;
+        }
+    } else {
+        return (items, 0, 0);
+    }
+
+    loop {
+        let entry_type = if has_first {
+            has_first = false;
+            first_byte[0]
+        } else {
+            let mut b = [0u8; 1];
+            match decoder.read_exact(&mut b) {
+                Ok(_) => b[0],
+                Err(_) => break,
+            }
+        };
+
+        if entry_type == 0 {
+            break;
+        }
+
+        let mut len_bytes = [0u8; 4];
+        if decoder.read_exact(&mut len_bytes).is_err() { break; }
+        let name_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut name_buf = vec![0u8; name_len];
+        if decoder.read_exact(&mut name_buf).is_err() { break; }
+        let raw_name = String::from_utf8_lossy(&name_buf);
+        let clean = raw_name.replace('\\', "/");
+        let name = clean.trim_start_matches('/').to_string();
+
+        let mut size_bytes = [0u8; 8];
+        if decoder.read_exact(&mut size_bytes).is_err() { break; }
+        let file_size = u64::from_le_bytes(size_bytes);
+
+        total_size += file_size;
+        items.push(ArchiveEntryItem {
+            name,
+            size: file_size,
+            is_dir: false,
+        });
+
+        // Skip file_size bytes
+        let mut skipped = 0;
+        let mut discard = [0u8; 64 * 1024];
+        while skipped < file_size {
+            let to_read = ((file_size - skipped) as usize).min(discard.len());
+            match decoder.read(&mut discard[..to_read]) {
+                Ok(0) => break,
+                Ok(n) => skipped += n as u64,
+                Err(_) => break,
+            }
+        }
+    }
+
+    let count = items.len();
+    (items, count, total_size)
+}
+
+fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryItem>, usize, u64) {
+    let Ok(mut file) = File::open(p) else { return (Vec::new(), 0, 0); };
+    let mut magic = [0u8; 8];
+    let Ok(n) = file.read(&mut magic) else { return (Vec::new(), 0, 0); };
+
+    if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
+        let Some(pwd) = password.filter(|s| !s.trim().is_empty()) else {
+            return (Vec::new(), 0, 0);
+        };
+        let header_len = if magic.starts_with(b"BAYENC\x02") { 8 } else { 7 };
+        if file.seek(std::io::SeekFrom::Start(header_len)).is_err() { return (Vec::new(), 0, 0); }
+        let mut salt = [0u8; 16];
+        if file.read_exact(&mut salt).is_err() { return (Vec::new(), 0, 0); }
+        let mut nonce_bytes = [0u8; 12];
+        if file.read_exact(&mut nonce_bytes).is_err() { return (Vec::new(), 0, 0); }
+        let mut ciphertext = Vec::new();
+        if file.read_to_end(&mut ciphertext).is_err() { return (Vec::new(), 0, 0); }
+
+        let key_bytes = derive_bay_key(pwd, &salt);
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let Ok(plaintext) = cipher.decrypt(nonce, ciphertext.as_ref()) else {
+            return (Vec::new(), 0, 0);
+        };
+
+        if plaintext.starts_with(b"BAYBRO\x02") {
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
+            return list_bay_stream_entries(decoder);
+        } else if plaintext.starts_with(b"BAYLZ4\x02") {
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
+            return list_bay_stream_entries(decoder);
+        } else if plaintext.starts_with(b"BAYZIP\x02") {
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            if let Ok(decoder) = zstd::stream::Decoder::new(&plaintext[offset..]) {
+                return list_bay_stream_entries(decoder);
+            }
+        } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
+            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
+            return list_bay_stream_entries(decoder);
+        } else if let Ok(decoder) = zstd::stream::Decoder::new(&plaintext[..]) {
+            return list_bay_stream_entries(decoder);
+        }
+        return (Vec::new(), 0, 0);
+    }
+
+    let _ = file.seek(std::io::SeekFrom::Start(0));
+    let mut magic_header = [0u8; 8];
+    let n = file.read(&mut magic_header).unwrap_or(0);
+    if n >= 7 && magic_header.starts_with(b"BAYBRO\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        let _ = file.seek(std::io::SeekFrom::Start(offset));
+        let decoder = brotli::Decompressor::new(file, 64 * 1024);
+        list_bay_stream_entries(decoder)
+    } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        let _ = file.seek(std::io::SeekFrom::Start(offset));
+        let decoder = lz4_flex::frame::FrameDecoder::new(file);
+        list_bay_stream_entries(decoder)
+    } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        let _ = file.seek(std::io::SeekFrom::Start(offset));
+        if let Ok(decoder) = zstd::stream::Decoder::new(file) {
+            list_bay_stream_entries(decoder)
+        } else {
+            (Vec::new(), 0, 0)
+        }
+    } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
+        let _ = file.seek(std::io::SeekFrom::Start(0));
+        let decoder = lz4_flex::frame::FrameDecoder::new(file);
+        list_bay_stream_entries(decoder)
+    } else {
+        let _ = file.seek(std::io::SeekFrom::Start(0));
+        if let Ok(decoder) = zstd::stream::Decoder::new(file) {
+            list_bay_stream_entries(decoder)
+        } else {
+            (Vec::new(), 0, 0)
+        }
+    }
+}
+
+pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo, String> {
+    let p = Path::new(path);
     if !p.exists() {
         return Err("File not found".into());
     }
@@ -1216,6 +1620,29 @@ fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
     
     let detected = detect_archive_type(p);
     let is_enc = is_archive_encrypted(p);
+    let pwd_ref = password;
+
+    let (entries, file_count, total_uncompressed_size) = match detected {
+        ArchiveFormat::Zip => list_zip_entries(p, pwd_ref),
+        ArchiveFormat::SevenZip => list_7z_entries(p, pwd_ref),
+        ArchiveFormat::Tar | ArchiveFormat::TarGz => list_tar_entries(p),
+        ArchiveFormat::Bay => list_bay_entries(p, pwd_ref),
+        _ => {
+            let lower = path.to_lowercase();
+            if lower.ends_with(".zip") {
+                list_zip_entries(p, pwd_ref)
+            } else if lower.ends_with(".7z") {
+                list_7z_entries(p, pwd_ref)
+            } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+                list_tar_entries(p)
+            } else if lower.ends_with(".bay") || lower.ends_with(".bay_gamer") {
+                list_bay_entries(p, pwd_ref)
+            } else {
+                (Vec::new(), 0, 0)
+            }
+        }
+    };
+
     let (format, is_archive) = match detected {
         ArchiveFormat::Bay => ("Bayzip Archive (.bay)".to_string(), true),
         ArchiveFormat::Zip => ("ZIP Archive (.zip)".to_string(), true),
@@ -1241,13 +1668,21 @@ fn get_archive_info(path: String) -> Result<ArchiveInfo, String> {
     };
 
     Ok(ArchiveInfo {
-        path,
+        path: path.to_string(),
         filename,
         size,
         format,
         is_archive,
         is_encrypted: is_enc,
+        file_count,
+        total_uncompressed_size,
+        entries,
     })
+}
+
+#[tauri::command]
+fn get_archive_info(path: String, password: Option<String>) -> Result<ArchiveInfo, String> {
+    inspect_archive(&path, password.as_deref())
 }
 
 fn extract_bay_stream<R: Read>(
@@ -1482,6 +1917,9 @@ fn extract_zip_archive(
     password: Option<&str>,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
+    std::fs::create_dir_all(dest_dir)
+        .map_err(|e| format!("Failed to create destination directory: {}", e))?;
+
     let file = File::open(archive_path).map_err(|e| format!("Failed to open zip: {}", e))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
     let mut extracted = Vec::new();
@@ -1514,12 +1952,21 @@ fn extract_zip_archive(
             }
         };
 
-        let outpath = match file.enclosed_name() {
-            Some(path) => dest_dir.join(path),
-            None => continue,
-        };
+        let raw_name = file.name();
+        let clean = raw_name.replace('\\', "/");
+        let sanitized = clean.trim_start_matches('/');
+        if sanitized.is_empty() {
+            continue;
+        }
 
-        if file.name().ends_with('/') || file.is_dir() {
+        let safe_path = PathBuf::from(sanitized);
+        if safe_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            continue;
+        }
+
+        let outpath = dest_dir.join(&safe_path);
+
+        if file.is_dir() || clean.ends_with('/') {
             let _ = std::fs::create_dir_all(&outpath);
         } else {
             if let Some(p) = outpath.parent() {
@@ -1535,7 +1982,7 @@ fn extract_zip_archive(
             let pct = ((i + 1) as f64 / total_entries.max(1) as f64) * 100.0;
             let _ = app_handle.emit("extract_progress", ExtractProgress {
                 percent: pct,
-                current_file: file.name().to_string(),
+                current_file: sanitized.to_string(),
                 bytes_extracted: 0,
             });
         }
@@ -1568,24 +2015,91 @@ fn extract_7z_archive(
     archive_path: &Path,
     dest_dir: &Path,
     password: Option<&str>,
+    app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
 
     let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
-    if let Some(pwd) = pwd_opt {
-        sevenz_rust::decompress_file_with_password(archive_path, dest_dir, pwd.into())
-            .map_err(|e| format!("7z extraction error: {}", e))?;
-        return Ok(vec![dest_dir.to_string_lossy().to_string()]);
-    }
+    let file = File::open(archive_path).map_err(|e| format!("Failed to open 7z: {}", e))?;
 
-    match sevenz_rust::decompress_file(archive_path, dest_dir) {
-        Ok(_) => Ok(vec![dest_dir.to_string_lossy().to_string()]),
-        Err(sevenz_rust::Error::PasswordRequired) => {
-            Err("Password required: This 7z archive is encrypted with AES-256.".into())
-        },
+    let pwd = pwd_opt.map(|s| Password::from(s)).unwrap_or_else(Password::empty);
+
+    let mut sz_reader = match sevenz_rust2::ArchiveReader::new(file, pwd) {
+        Ok(r) => r,
+        Err(sevenz_rust2::Error::PasswordRequired) => {
+            return Err("Password required: This 7z archive is encrypted with AES-256.".into());
+        }
         Err(e) => {
-            extract_with_system_tar(archive_path, dest_dir)
-                .map_err(|_| format!("7z extraction error: {}", e))
+            return extract_with_system_tar(archive_path, dest_dir)
+                .map_err(|_| format!("7z open error: {}", e));
+        }
+    };
+
+    let total_files = sz_reader.archive().files.len();
+    let mut extracted = Vec::new();
+    let mut processed_count = 0;
+    let mut last_emit = Instant::now();
+
+    let res = sz_reader.for_each_entries(|entry, reader| {
+        let raw_name = entry.name();
+        let clean = raw_name.replace('\\', "/");
+        let trimmed = clean.trim_start_matches('/');
+        if trimmed.is_empty() {
+            return Ok(true);
+        }
+
+        let safe_path = PathBuf::from(trimmed);
+        if safe_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return Ok(true);
+        }
+
+        let out_path = dest_dir.join(&safe_path);
+
+        if entry.is_directory() || clean.ends_with('/') {
+            let _ = std::fs::create_dir_all(&out_path);
+        } else {
+            if let Some(p) = out_path.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+            let out_file = File::create(&out_path)
+                .map_err(sevenz_rust2::Error::from)?;
+            let mut writer = BufWriter::with_capacity(256 * 1024, out_file);
+            std::io::copy(reader, &mut writer).map_err(sevenz_rust2::Error::from)?;
+            extracted.push(out_path.to_string_lossy().to_string());
+        }
+
+        processed_count += 1;
+        if let Some(app_handle) = app {
+            if last_emit.elapsed().as_millis() >= 50 || processed_count == total_files {
+                last_emit = Instant::now();
+                let pct = if total_files > 0 {
+                    ((processed_count as f64 / total_files as f64) * 100.0).min(99.0)
+                } else {
+                    50.0
+                };
+                let _ = app_handle.emit("extract_progress", ExtractProgress {
+                    percent: pct,
+                    current_file: trimmed.to_string(),
+                    bytes_extracted: 0,
+                });
+            }
+        }
+
+        Ok(true)
+    });
+
+    match res {
+        Ok(_) => Ok(extracted),
+        Err(sevenz_rust2::Error::PasswordRequired) => {
+            Err("Password required: This 7z archive is encrypted with AES-256.".into())
+        }
+        Err(e) => {
+            if e.to_string().to_lowercase().contains("password") {
+                Err("Incorrect password: Could not decrypt 7z archive.".into())
+            } else {
+                extract_with_system_tar(archive_path, dest_dir)
+                    .map_err(|_| format!("7z extraction error: {}", e))
+            }
         }
     }
 }
@@ -1620,7 +2134,7 @@ fn extract_with_system_tar(
     Ok(files)
 }
 
-fn universal_extract(
+pub fn universal_extract(
     archive_path: &Path,
     dest_dir: &Path,
     password: Option<&str>,
@@ -1642,7 +2156,7 @@ fn universal_extract(
                 })
         },
         ArchiveFormat::SevenZip => {
-            extract_7z_archive(archive_path, dest_dir, password)
+            extract_7z_archive(archive_path, dest_dir, password, app)
                 .or_else(|e| {
                     if e.contains("Password") || e.contains("password") {
                         return Err(e);
@@ -1658,9 +2172,9 @@ fn universal_extract(
             extract_with_system_tar(archive_path, dest_dir)
         },
         ArchiveFormat::Unknown => {
-            extract_bay_archive(archive_path, dest_dir, password, app)
-                .or_else(|_| extract_zip_archive(archive_path, dest_dir, password, app))
-                .or_else(|_| extract_7z_archive(archive_path, dest_dir, password))
+            extract_zip_archive(archive_path, dest_dir, password, app)
+                .or_else(|_| extract_7z_archive(archive_path, dest_dir, password, app))
+                .or_else(|_| extract_bay_archive(archive_path, dest_dir, password, app))
                 .or_else(|_| extract_tar_archive(archive_path, dest_dir))
                 .or_else(|_| extract_with_system_tar(archive_path, dest_dir))
         }

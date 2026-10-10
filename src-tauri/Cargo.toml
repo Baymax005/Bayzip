@@ -31,7 +31,7 @@ sha2 = "0.10"
 zip = { version = "2.1", default-features = false, features = ["deflate", "bzip2", "aes-crypto"] }
 tar = "0.4"
 flate2 = "1.0"
-sevenz-rust = { version = "0.6", features = ["compress", "aes256"] }
+sevenz-rust2 = { version = "0.23.0", features = ["compress", "aes256"] }
 brotli = "9.0"
 lz4_flex = "0.11"
 
