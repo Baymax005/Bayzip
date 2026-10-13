@@ -89,8 +89,21 @@ function App() {
 
   // System Specs
   const [specs, setSpecs] = useState<SystemSpecs | null>(null);
+  const [isRefreshingSpecs, setIsRefreshingSpecs] = useState(false);
   const [sliderValue, setSliderValue] = useState<number>(50); // 0, 25, 50, 75, 100
   const [isAdvanced, setIsAdvanced] = useState(false);
+
+  const handleRefreshSpecs = async () => {
+    setIsRefreshingSpecs(true);
+    try {
+      const res = await invoke<SystemSpecs>("get_system_specs");
+      setSpecs(res);
+    } catch (err) {
+      console.error("Specs query error:", err);
+    } finally {
+      setTimeout(() => setIsRefreshingSpecs(false), 500);
+    }
+  };
 
   // Compress Options & Naming
   const [customArchiveName, setCustomArchiveName] = useState<string>("");
@@ -834,7 +847,7 @@ function App() {
                 </div>
               ) : (
                 <div className="bg-[#2D2D2D] border border-dashed border-[#3E3E3E] hover:border-[#60CDFF] rounded-lg p-8 text-center transition-colors flex flex-col items-center justify-center space-y-4 group">
-                  <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#60CDFF] shadow-[0_0_15px_rgba(96,205,255,0.25)] flex items-center justify-center text-[#60CDFF] transition-all">
+                  <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#3E3E3E] group-hover:border-[#60CDFF] group-hover:shadow-[0_0_15px_rgba(96,205,255,0.25)] flex items-center justify-center text-[#60CDFF] transition-all duration-200">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
                       <path
                         strokeLinecap="round"
@@ -900,10 +913,38 @@ function App() {
               {/* Hardware Configuration - Fluent Design Card */}
               <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6">
                 <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-sm font-medium">Hardware Allocation</h3>
-                  <span className="text-xs bg-[#3E3E3E] text-[#A8A8A8] px-2 py-1 rounded-md">
-                    HARDWARE PROFILING ACTIVE
-                  </span>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="text-sm font-medium">Hardware Allocation</h3>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={handleRefreshSpecs}
+                      disabled={isRefreshingSpecs}
+                      title="Refresh available RAM & system hardware specs"
+                      className="flex items-center space-x-1.5 text-xs bg-[#202020] hover:bg-[#2A2A2A] border border-[#3E3E3E] hover:border-[#60CDFF] text-[#60CDFF] px-2.5 py-1 rounded-md transition-all duration-200 hover:shadow-[0_0_10px_rgba(96,205,255,0.3)] cursor-pointer group disabled:opacity-50"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        className={`w-3.5 h-3.5 text-[#60CDFF] transition-transform ${
+                          isRefreshingSpecs ? "animate-spin" : "group-hover:rotate-180 duration-500"
+                        }`}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                        />
+                      </svg>
+                      <span className="text-[11px] font-medium hidden sm:inline">Refresh RAM</span>
+                    </button>
+                    <span className="text-xs bg-[#3E3E3E] text-[#A8A8A8] px-2 py-1 rounded-md">
+                      HARDWARE PROFILING ACTIVE
+                    </span>
+                  </div>
                 </div>
 
                 <div className="mb-6">
@@ -1398,7 +1439,7 @@ function App() {
                   onClick={handleSelectArchive}
                   className="bg-[#2D2D2D] border border-dashed border-[#3E3E3E] hover:border-[#60CDFF] rounded-lg p-8 text-center transition-colors flex flex-col items-center justify-center space-y-4 cursor-pointer group"
                 >
-                  <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#60CDFF] shadow-[0_0_15px_rgba(96,205,255,0.25)] flex items-center justify-center text-[#60CDFF] transition-all">
+                  <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#3E3E3E] group-hover:border-[#60CDFF] group-hover:shadow-[0_0_15px_rgba(96,205,255,0.25)] flex items-center justify-center text-[#60CDFF] transition-all duration-200">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
                       <path
                         strokeLinecap="round"

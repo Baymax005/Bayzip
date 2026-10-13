@@ -86,6 +86,14 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             let mut reg_content = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
 
+            // 0. Remove any Windows Photos / UserChoice hijacks on .bay and .bay_gamer
+            reg_content.push_str(
+                "[-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay\\UserChoice]\r\n\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay\\UserChoiceLatest]\r\n\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay_gamer\\UserChoice]\r\n\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay_gamer\\UserChoiceLatest]\r\n\r\n"
+            );
+
             // 1. Register .bay and .bay_gamer file association (ProgIDs & DefaultIcons)
             reg_content.push_str(&format!(
                 "[HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
@@ -96,12 +104,16 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\OpenWithProgids]\r\n\
                 \"Bayzip.Archive\"=\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
+                @=\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive]\r\n\
                 @=\"Bayzip Compressed Archive\"\r\n\
                 \"FriendlyTypeName\"=\"Bayzip Compressed Archive\"\r\n\
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\DefaultIcon]\r\n\
                 @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
+                @=\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell]\r\n\
                 @=\"open\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open]\r\n\
@@ -117,12 +129,16 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer\\OpenWithProgids]\r\n\
                 \"Bayzip.GamerArchive\"=\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
+                @=\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive]\r\n\
                 @=\"Bayzip Gamer Mod Pack\"\r\n\
                 \"FriendlyTypeName\"=\"Bayzip Gamer Mod Pack\"\r\n\
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\DefaultIcon]\r\n\
                 @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
+                @=\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell]\r\n\
                 @=\"open\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell\\open]\r\n\
@@ -130,8 +146,18 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell\\open\\command]\r\n\
                 @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\AppX9rkaq77s0jzh1tyccadx9ghba15r6t3h\\DefaultIcon]\r\n\
-                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n"
+                [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay\\OpenWithProgids]\r\n\
+                \"Bayzip.Archive\"=hex(0):\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay_gamer\\OpenWithProgids]\r\n\
+                \"Bayzip.GamerArchive\"=hex(0):\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Bayzip\\Capabilities]\r\n\
+                \"ApplicationDescription\"=\"Bayzip Archiver\"\r\n\
+                \"ApplicationName\"=\"Bayzip\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Bayzip\\Capabilities\\FileAssociations]\r\n\
+                \".bay\"=\"Bayzip.Archive\"\r\n\
+                \".bay_gamer\"=\"Bayzip.GamerArchive\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\RegisteredApplications]\r\n\
+                \"Bayzip\"=\"Software\\\\Bayzip\\\\Capabilities\"\r\n\r\n"
             ));
 
             // 2. Register "Extract with Bayzip" for each archive format under SystemFileAssociations and Bayzip ProgIDs
@@ -227,6 +253,23 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 refresh_cmd.args(["/C", "ie4uinit.exe -ClearIconCache & ie4uinit.exe -show"]);
                 refresh_cmd.creation_flags(CREATE_NO_WINDOW);
                 let _ = refresh_cmd.output();
+
+                #[cfg(target_os = "windows")]
+                {
+                    #[link(name = "shell32")]
+                    extern "system" {
+                        fn SHChangeNotify(
+                            w_event_id: i32,
+                            u_flags: u32,
+                            dw_item1: *const std::ffi::c_void,
+                            dw_item2: *const std::ffi::c_void,
+                        );
+                    }
+                    unsafe {
+                        // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_IDLIST = 0
+                        SHChangeNotify(0x0800_0000, 0, std::ptr::null(), std::ptr::null());
+                    }
+                }
 
                 return Ok("Context menu registered successfully!".into());
             }
