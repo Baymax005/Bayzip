@@ -50,7 +50,11 @@ fn get_system_specs() -> SystemSpecs {
 
 #[tauri::command]
 fn get_cli_args() -> Vec<String> {
-    std::env::args().skip(1).filter(|arg| !arg.starts_with("--")).collect()
+    std::env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with("--"))
+        .map(|arg| arg.trim_matches('\"').to_string())
+        .collect()
 }
 
 pub fn register_context_menu_sync() -> Result<String, String> {
@@ -144,20 +148,25 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\
                     \"SubCommands\"=\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell]\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\01_extract_sub]\r\n\
-                    \"MUIVerb\"=\"Extract to dedicated folder\"\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\01_extract_dialog]\r\n\
+                    \"MUIVerb\"=\"Extract files...\"\r\n\
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\01_extract_sub\\command]\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\01_extract_dialog\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --gui-extract \\\"%1\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\02_extract_sub]\r\n\
+                    \"MUIVerb\"=\"Extract to subfolder\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\02_extract_sub\\command]\r\n\
                     @=\"\\\"{escaped_exe}\\\" --extract-to-folder \\\"%1\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\02_extract_here]\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\03_extract_here]\r\n\
                     \"MUIVerb\"=\"Extract Here\"\r\n\
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\02_extract_here\\command]\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\03_extract_here\\command]\r\n\
                     @=\"\\\"{escaped_exe}\\\" --extract-here \\\"%1\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\03_open]\r\n\
-                    \"MUIVerb\"=\"Open in Bayzip...\"\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\04_open]\r\n\
+                    \"MUIVerb\"=\"Open in Bayzip\"\r\n\
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
-                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\03_open\\command]\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\04_open\\command]\r\n\
                     @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n"
                 ));
             }
@@ -171,6 +180,11 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\
                     \"SubCommands\"=\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell]\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\00_options]\r\n\
+                    \"MUIVerb\"=\"Add to archive...\"\r\n\
+                    \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                    [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\00_options\\command]\r\n\
+                    @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\01_bay]\r\n\
                     \"MUIVerb\"=\"Add to .bay (Ultra-Fast)\"\r\n\
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
@@ -472,10 +486,10 @@ pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<()
 
     #[cfg(target_os = "windows")]
     {
-        let mut cmd = Command::new("explorer.exe");
-        cmd.arg(format!("/select,{}", output_path.to_string_lossy()));
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        let _ = cmd.spawn();
+        let mut refresh_cmd = Command::new("cmd");
+        refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+        refresh_cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = refresh_cmd.output();
     }
     Ok(())
 }
@@ -2279,10 +2293,10 @@ pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let mut cmd = Command::new("explorer.exe");
-        cmd.arg(parent);
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        let _ = cmd.spawn();
+        let mut refresh_cmd = Command::new("cmd");
+        refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+        refresh_cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = refresh_cmd.output();
     }
     Ok(())
 }
@@ -2295,14 +2309,15 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
     let parent = p.parent().unwrap_or_else(|| Path::new("."));
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("extracted");
     let dest = parent.join(stem);
+    let _ = std::fs::create_dir_all(&dest);
     universal_extract(p, &dest, None, None)?;
 
     #[cfg(target_os = "windows")]
     {
-        let mut cmd = Command::new("explorer.exe");
-        cmd.arg(&dest);
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        let _ = cmd.spawn();
+        let mut refresh_cmd = Command::new("cmd");
+        refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+        refresh_cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = refresh_cmd.output();
     }
     Ok(())
 }

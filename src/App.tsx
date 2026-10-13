@@ -833,8 +833,8 @@ function App() {
                   </div>
                 </div>
               ) : (
-                <div className="bg-[#2D2D2D] border border-dashed border-[#3E3E3E] hover:border-[#60CDFF] rounded-lg p-8 text-center transition-colors flex flex-col items-center justify-center space-y-4">
-                  <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#3E3E3E] flex items-center justify-center text-[#60CDFF]">
+                <div className="bg-[#2D2D2D] border border-dashed border-[#3E3E3E] hover:border-[#60CDFF] rounded-lg p-8 text-center transition-colors flex flex-col items-center justify-center space-y-4 group">
+                  <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#60CDFF] shadow-[0_0_15px_rgba(96,205,255,0.25)] flex items-center justify-center text-[#60CDFF] transition-all">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
                       <path
                         strokeLinecap="round"
@@ -1398,7 +1398,7 @@ function App() {
                   onClick={handleSelectArchive}
                   className="bg-[#2D2D2D] border border-dashed border-[#3E3E3E] hover:border-[#60CDFF] rounded-lg p-8 text-center transition-colors flex flex-col items-center justify-center space-y-4 cursor-pointer group"
                 >
-                  <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#3E3E3E] group-hover:border-[#60CDFF] flex items-center justify-center text-[#60CDFF] transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#60CDFF] shadow-[0_0_15px_rgba(96,205,255,0.25)] flex items-center justify-center text-[#60CDFF] transition-all">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
                       <path
                         strokeLinecap="round"
