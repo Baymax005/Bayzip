@@ -1,78 +1,77 @@
 # 📦 Bayzip
 
-**Bayzip** is a modern, ultra-fast, high-compression archiving tool designed for Windows. Built on **Tauri 2**, **Rust**, and **React**, it combines state-of-the-art compression algorithms with a sleek Windows 11 Fluent dark interface and deep Windows File Explorer integration.
+**Bayzip** is a modern file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. It offers fast multi-algorithm compression, archive extraction, and Windows File Explorer shell integration.
 
 ---
 
-## ⚡ Highlights
+## ⚡ Current Features
 
-- 🚀 **Next-Gen Compression**: Support for **Zstandard**, **Brotli**, **LZ4**, **LZMA2**, **Deflate**, and **BZip2**.
-- 🎮 **Gamer Mod Pack (`.bay_gamer`)**: Tailored for gamers with NVMe-speed decompression (3+ GB/s) for mods, textures, and fast asset streaming.
-- 🪟 **Seamless Windows Integration**:
-  - Native Windows File Explorer context menus (*"Add to archive with Bayzip"*, *"Extract with Bayzip"*).
-  - High-resolution custom icons and file associations for `.bay` and `.bay_gamer`.
-  - Smart ZIP compatibility: creates 100% Windows Explorer compatible `.zip` files (standard Deflate with dynamic ZIP64 handling).
-- 🔒 **Military-Grade Security**: Optional AES-256 and AES-128 encryption with PBKDF2/Argon-strength key derivation.
-- 💻 **Hardware-Adaptive Engine**: Real-time system specs monitoring (CPU cores and RAM) with a customizable hardware allocation slider.
-- 🎨 **Modern Fluent UI**: Clean, responsive dark aesthetic with real-time compression progress, speed benchmarks, and compression ratio analytics.
-
----
-
-## 📂 Supported Formats & Algorithms
-
-| Format | Extensions | Supported Compression Algorithms | Recommended Use Case |
-|---|---|---|---|
-| **Bayzip Archive** | `.bay` | Zstandard (Default), Brotli, LZ4 | General backups, extreme compression ratio & fast decompression |
-| **Gamer Mod Pack** | `.bay_gamer` | Zstd-Fast (Auto) | Game mods, high-res texture packs, lightning-fast game loading |
-| **7-Zip Archive** | `.7z` | LZMA2, LZMA, BZip2 | Maximum archive density, cross-platform distribution |
-| **ZIP Archive** | `.zip` | Deflate (Standard), Store, BZip2 | Universal cross-platform and Windows File Explorer compatibility |
-| **TAR Archive** | `.tar` | None (Store / Packaging) | Raw archival container |
-
----
-
-## 🛠️ Windows File Explorer Features
-
-- **Context Menu Integration**: Right-click any file or directory to instantly add to `.bay`, `.zip`, `.7z`, or `.tar`.
-- **1-Click Extraction**: Right-click any supported archive to extract to a dedicated folder or directly in place.
-- **File Associations**: Double-clicking `.bay` or `.bay_gamer` files launches Bayzip with an instant archive inspector.
+- **Multi-Format Compression**:
+  - **`.bay`**: High-performance custom archive format supporting **Zstandard**, **Brotli**, and **LZ4** algorithms.
+  - **`.bay_gamer`**: Gaming mod pack preset using fast Zstandard compression for quick packing and unpacking.
+  - **`.7z`**: 7-Zip format using **LZMA2** compression.
+  - **`.zip`**: Standard ZIP format with **Deflate**, uncompressed **Store**, and **BZip2** options (with Windows Explorer compatibility safeguards).
+  - **`.tar`**: Uncompressed TAR container packaging.
+- **Archive Extraction & Inspection**:
+  - Extracts and lists contents of `.bay`, `.bay_gamer`, `.zip`, `.7z`, `.tar`, `.gz`, `.tgz`, and `.rar` archives.
+  - In-app archive file search to filter entries before extracting.
+- **Windows File Explorer Integration**:
+  - **Context Menus**: Right-click files or folders to quickly compress to `.bay`, `.zip`, `.7z`, or `.tar`.
+  - **Quick Extract**: Right-click archives to *"Extract to dedicated folder"*, *"Extract Here"*, or *"Open in Bayzip"*.
+  - **File Associations & Icons**: Shows Bayzip icons on `.bay` and `.bay_gamer` files in File Explorer.
+- **Password Protection**:
+  - Encrypt archives with **AES-256** or **AES-128**.
+  - Password prompt for extracting encrypted archives.
+- **Hardware-Aware Performance Slider**:
+  - Live system specs detection (CPU cores and free RAM).
+  - Slider controls compression intensity and displays estimated RAM and CPU usage.
+- **User Interface**:
+  - Dark Windows 11 Fluent-style UI.
+  - Drag-and-drop support for files and folders.
+  - Progress bar with percentage, current file, elapsed time, and compression ratio.
+  - Separate archives option (compress each selected file/folder into its own archive).
 
 ---
 
-## 🚀 Getting Started
+## 📂 Supported Formats
 
-### Prerequisites
+| Format | Extensions | Creation / Compression | Extraction | Compression Method |
+|---|---|:---:|:---:|---|
+| **Bayzip** | `.bay` | ✅ | ✅ | Zstandard, Brotli, LZ4 |
+| **Bayzip Gamer** | `.bay_gamer` | ✅ | ✅ | Zstd-Fast |
+| **ZIP** | `.zip` | ✅ | ✅ | Deflate, Store, BZip2 |
+| **7-Zip** | `.7z` | ✅ | ✅ | LZMA2 |
+| **TAR** | `.tar` | ✅ | ✅ | Uncompressed (Store) |
+| **GZip / TarGz** | `.gz`, `.tgz` | — | ✅ | Deflate / Tar |
+| **RAR** | `.rar` | — | ✅ | Decompress only |
 
-- [Node.js](https://nodejs.org/) (v18 or newer)
-- [Rust & Cargo](https://www.rust-lang.org/tools/install) (1.75+ or newer)
-- Windows 10 / 11
+---
 
-### Running in Development Mode
+## 🚀 Building & Running
+
+### Requirements
+
+- [Node.js](https://nodejs.org/) (v18+)
+- [Rust](https://www.rust-lang.org/) (1.75+)
+- Windows 10 or 11
+
+### Run in Development
 
 ```bash
-# 1. Install frontend dependencies
 npm install
-
-# 2. Run the Tauri development app
 npm run tauri dev
 ```
 
-### Building the Production Executable (.exe)
-
-To generate the standalone Windows installer and portable `.exe`:
+### Build Production Executable (.exe)
 
 ```bash
 npm run tauri build
 ```
 
-The compiled binaries and installers will be generated in:
-```
-src-tauri/target/release/bundle/nsis/
-src-tauri/target/release/bundle/msi/
-src-tauri/target/release/
-```
+The compiled installer and executable will be placed in `src-tauri/target/release/bundle/nsis/`.
 
 ---
 
 ## 📜 License
 
-Private & Proprietary © Bayzip. All rights reserved.
+Private © Bayzip.
