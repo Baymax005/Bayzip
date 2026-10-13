@@ -72,7 +72,7 @@ const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
   ".bay_gamer": ["Zstd-Fast (Auto)"],
   ".7z": ["LZMA2", "LZMA", "BZip2"],
-  ".zip": ["Deflate", "BZip2", "None (Store)"],
+  ".zip": ["Deflate (Standard)", "None (Store)", "BZip2 (Requires 3rd-party App)"],
   ".tar": ["None (Store)"],
 };
 
@@ -1047,6 +1047,26 @@ function App() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Windows Explorer Incompatibility Notice for BZip2 in .zip */}
+                  {selectedFormat === ".zip" && selectedAlgorithm.toLowerCase().includes("bzip2") && (
+                    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-xs text-amber-200">
+                      <svg className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <div className="space-y-1">
+                        <p className="font-semibold text-amber-300">Windows Explorer Incompatibility Notice</p>
+                        <p className="text-amber-200/90 leading-relaxed">
+                          Windows File Explorer does not support BZip2 inside <code>.zip</code> files and will extract them as empty (0 KB) files.
+                        </p>
+                        <p className="text-amber-200/80 leading-relaxed">
+                          • For standard Windows Explorer compatibility, choose <strong>Deflate (Standard)</strong>.
+                          <br />
+                          • If you want BZip2 compression, select the <strong>.7z</strong> format instead.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   {selectedEncryption !== "none" && (
                     <div>

@@ -60,6 +60,15 @@ pub fn register_context_menu_sync() -> Result<String, String> {
             let exe_str = exe_path.to_string_lossy().to_string();
             let escaped_exe = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
 
+            let app_dir = std::env::var_os("LOCALAPPDATA")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir())
+                .join("Bayzip");
+            let _ = std::fs::create_dir_all(&app_dir);
+            let icon_file = app_dir.join("bayzip.ico");
+            let _ = std::fs::write(&icon_file, include_bytes!("../icons/icon.ico"));
+            let icon_path_str = icon_file.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+
             let archive_exts = [
                 ".bay",
                 ".bay_gamer",
@@ -73,12 +82,14 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             let mut reg_content = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
 
-            // 1. Register .bay file association (ProgID)
+            // 1. Register .bay and .bay_gamer file association (ProgIDs & DefaultIcons)
             reg_content.push_str(&format!(
                 "[HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
                 @=\"Bayzip.Archive\"\r\n\
                 \"Content Type\"=\"application/x-bayzip\"\r\n\
                 \"PerceivedType\"=\"compressed\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\DefaultIcon]\r\n\
+                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\OpenWithProgids]\r\n\
                 \"Bayzip.Archive\"=\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive]\r\n\
@@ -86,18 +97,41 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 \"FriendlyTypeName\"=\"Bayzip Compressed Archive\"\r\n\
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\DefaultIcon]\r\n\
-                @=\"\\\"{escaped_exe}\\\",0\"\r\n\r\n\
+                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell]\r\n\
                 @=\"open\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open]\r\n\
                 @=\"Open in Bayzip\"\r\n\
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open\\command]\r\n\
-                @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n"
+                @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer]\r\n\
+                @=\"Bayzip.GamerArchive\"\r\n\
+                \"Content Type\"=\"application/x-bayzip-gamer\"\r\n\
+                \"PerceivedType\"=\"compressed\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer\\DefaultIcon]\r\n\
+                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer\\OpenWithProgids]\r\n\
+                \"Bayzip.GamerArchive\"=\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive]\r\n\
+                @=\"Bayzip Gamer Mod Pack\"\r\n\
+                \"FriendlyTypeName\"=\"Bayzip Gamer Mod Pack\"\r\n\
+                \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\DefaultIcon]\r\n\
+                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell]\r\n\
+                @=\"open\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell\\open]\r\n\
+                @=\"Open in Bayzip\"\r\n\
+                \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell\\open\\command]\r\n\
+                @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\AppX9rkaq77s0jzh1tyccadx9ghba15r6t3h\\DefaultIcon]\r\n\
+                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n"
             ));
 
-            // 2. Register "Extract with Bayzip" for each archive format under SystemFileAssociations and Bayzip.Archive
-            let mut extract_targets = vec!["Bayzip.Archive".to_string()];
+            // 2. Register "Extract with Bayzip" for each archive format under SystemFileAssociations and Bayzip ProgIDs
+            let mut extract_targets = vec!["Bayzip.Archive".to_string(), "Bayzip.GamerArchive".to_string()];
             for ext in &archive_exts {
                 extract_targets.push(format!("SystemFileAssociations\\{}", ext));
             }
@@ -174,9 +208,9 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 let _ = cmd.output();
                 let _ = std::fs::remove_file(temp_reg);
 
-                // Refresh Windows Explorer shell
+                // Refresh Windows Explorer shell & clear icon cache
                 let mut refresh_cmd = Command::new("cmd");
-                refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+                refresh_cmd.args(["/C", "ie4uinit.exe -ClearIconCache & ie4uinit.exe -show"]);
                 refresh_cmd.creation_flags(CREATE_NO_WINDOW);
                 let _ = refresh_cmd.output();
 
@@ -204,9 +238,10 @@ fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), Strin
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create zip file: {}", e))?;
     let mut writer = zip::ZipWriter::new(out_file);
+    let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
-        .large_file(true);
+        .large_file(file_len >= 0xFFFF_FFFF);
 
     let parent = p.parent().unwrap_or(p);
 
@@ -223,7 +258,6 @@ fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), Strin
             dir: &Path,
             base: &Path,
             writer: &mut zip::ZipWriter<W>,
-            options: SimpleFileOptions,
             depth: usize,
         ) -> Result<(), String> {
             if depth > 32 { return Ok(()); }
@@ -234,10 +268,16 @@ fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), Strin
                         let rel = path.strip_prefix(base).unwrap_or(&path);
                         let rel_str = rel.to_string_lossy().replace('\\', "/");
                         if m.is_dir() && !m.file_type().is_symlink() {
-                            let _ = writer.add_directory(format!("{}/", rel_str), options);
-                            add_dir(&path, base, writer, options, depth + 1)?;
+                            let dir_opt = SimpleFileOptions::default()
+                                .compression_method(zip::CompressionMethod::Deflated)
+                                .large_file(false);
+                            let _ = writer.add_directory(format!("{}/", rel_str), dir_opt);
+                            add_dir(&path, base, writer, depth + 1)?;
                         } else if m.is_file() {
-                            writer.start_file(&rel_str, options)
+                            let file_opt = SimpleFileOptions::default()
+                                .compression_method(zip::CompressionMethod::Deflated)
+                                .large_file(m.len() >= 0xFFFF_FFFF);
+                            writer.start_file(&rel_str, file_opt)
                                 .map_err(|e| format!("Zip start error: {}", e))?;
                             if let Ok(mut f) = File::open(&path) {
                                 std::io::copy(&mut f, writer)
@@ -249,7 +289,7 @@ fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), Strin
             }
             Ok(())
         }
-        add_dir(p, parent, &mut writer, options, 0)?;
+        add_dir(p, parent, &mut writer, 0)?;
     }
 
     writer.finish().map_err(|e| format!("Failed to finalize zip: {}", e))?;
@@ -790,9 +830,10 @@ fn compress_zip(
     for file_str in files {
         let p = Path::new(file_str);
         
+        let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         let options = SimpleFileOptions::default()
             .compression_method(method)
-            .large_file(true);
+            .large_file(file_len >= 0xFFFF_FFFF);
 
         if p.is_file() {
             let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
@@ -839,13 +880,13 @@ fn compress_zip(
             let clean_root = root_str.trim_start_matches('/').trim_end_matches('/');
             if !clean_root.is_empty() {
                 let dir_name = format!("{}/", clean_root);
-                let options = SimpleFileOptions::default()
+                let dir_options = SimpleFileOptions::default()
                     .compression_method(method)
-                    .large_file(true);
+                    .large_file(false);
                 if let Some(pwd) = has_pwd {
-                    let _ = writer.add_directory(&dir_name, options.with_aes_encryption(aes_mode, pwd));
+                    let _ = writer.add_directory(&dir_name, dir_options.with_aes_encryption(aes_mode, pwd));
                 } else {
-                    let _ = writer.add_directory(&dir_name, options);
+                    let _ = writer.add_directory(&dir_name, dir_options);
                 }
             }
 
@@ -872,9 +913,10 @@ fn compress_zip(
                             let clean_rel = rel_str.trim_start_matches('/').trim_end_matches('/');
                             if clean_rel.is_empty() { continue; }
                             
+                            let is_large = m.len() >= 0xFFFF_FFFF;
                             let options = SimpleFileOptions::default()
                                 .compression_method(method)
-                                .large_file(true);
+                                .large_file(is_large);
 
                             if m.is_dir() && !m.file_type().is_symlink() {
                                 let dir_name = format!("{}/", clean_rel);

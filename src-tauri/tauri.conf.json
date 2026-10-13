@@ -41,6 +41,12 @@
         "name": "Bayzip Archive",
         "description": "Bayzip Compressed Archive",
         "role": "Viewer"
+      },
+      {
+        "ext": ["bay_gamer"],
+        "name": "Bayzip Gamer Mod Pack",
+        "description": "Bayzip Gamer Compressed Archive",
+        "role": "Viewer"
       }
     ]
   }
