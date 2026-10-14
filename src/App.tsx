@@ -652,32 +652,32 @@ function App() {
 
   const getSliderLabel = () => {
     if (selectedFormat === ".tar") {
-      return "STORE (Direct Packaging - No Compression)";
+      return "Direct Packaging (Store)";
     }
     if (selectedFormat === ".zip") {
-      if (sliderValue === 0) return "STORE (No Compression - Instant)";
-      return "DEFLATE (Standard Zip Compression)";
+      if (sliderValue === 0) return "Store (Instant)";
+      return "Deflate (Standard)";
     }
     if (selectedFormat === ".7z") {
-      if (sliderValue === 0) return "LZMA2 FASTEST (Level 1)";
-      if (sliderValue === 25) return "LZMA2 FAST (Level 3)";
-      if (sliderValue === 50) return "LZMA2 BALANCED (Level 5)";
-      if (sliderValue === 75) return "LZMA2 MAXIMUM (Level 7)";
-      return "LZMA2 ULTRA (Level 9)";
+      if (sliderValue === 0) return "Fastest (Level 1)";
+      if (sliderValue === 25) return "Fast (Level 3)";
+      if (sliderValue === 50) return "Balanced (Level 5)";
+      if (sliderValue === 75) return "High (Level 7)";
+      return "Maximum (Level 9)";
     }
     if (selectedFormat === ".bay_gamer") {
-      if (sliderValue === 0) return "LEVEL 1 (1 Core Eco)";
-      if (sliderValue === 25) return "LEVEL 1 (Fast Mod Pack)";
-      if (sliderValue === 50) return "LEVEL 2 (Balanced Game Stream)";
-      if (sliderValue === 75) return "LEVEL 3 (Ultra Speed - Game Capped)";
-      return "LEVEL 3 (Ultra Speed - All Threads)";
+      if (sliderValue === 0) return "Eco (1 Core)";
+      if (sliderValue === 25) return "Fast";
+      if (sliderValue === 50) return "Balanced";
+      if (sliderValue === 75) return "High Performance";
+      return "Maximum Power";
     }
     // Default .bay (Zstandard)
-    if (sliderValue === 0) return "LEVEL 1 (Eco / 1 Core)";
-    if (sliderValue === 25) return "LEVEL 3 (Fast)";
-    if (sliderValue === 50) return "LEVEL 7 (Balanced)";
-    if (sliderValue === 75) return "LEVEL 14 (High Compression)";
-    return "LEVEL 19 (Max Compression)";
+    if (sliderValue === 0) return "Eco (1 Core)";
+    if (sliderValue === 25) return "Fast";
+    if (sliderValue === 50) return "Balanced";
+    if (sliderValue === 75) return "High Performance";
+    return "Maximum Power";
   };
 
   return (
@@ -936,6 +936,66 @@ function App() {
                 </div>
               </div>
 
+              {/* Active Compression Progress Card - High Visibility Placement */}
+              {isCompressing && (
+                <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-4 shadow-lg space-y-3 animate-fadeIn">
+                  <div className="flex justify-between items-center text-xs">
+                    <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                      <span className="w-2.5 h-2.5 rounded-full bg-[#60CDFF] animate-pulse shrink-0"></span>
+                      <span className="text-[#D0D0D0] truncate font-medium">
+                        {isCancellingCompress
+                          ? "Cancelling compression..."
+                          : progress?.current_file
+                          ? `Compressing: ${progress.current_file}`
+                          : "Initializing compression..."}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2.5 shrink-0">
+                      <span className="text-sm font-semibold text-[#60CDFF] font-mono">
+                        {progress ? Math.round(progress.percent) : 0}%
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCancelCompress}
+                        disabled={isCancellingCompress}
+                        className="w-7 h-7 flex items-center justify-center text-[#FF99A4] hover:text-white bg-red-950/40 hover:bg-red-900/70 border border-red-800/60 hover:border-red-600 rounded-md transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-sm group"
+                        title="Cancel Compression"
+                      >
+                        {isCancellingCompress ? (
+                          <svg className="animate-spin h-3.5 w-3.5 text-[#FF99A4]" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Progress Track & Animated Glow Fill */}
+                  <div className="w-full h-2 bg-[#202020] rounded-full overflow-hidden border border-[#3E3E3E]">
+                    <div
+                      className="h-full bg-gradient-to-r from-[#0078D4] to-[#60CDFF] transition-all duration-150 ease-out rounded-full shadow-[0_0_10px_rgba(96,205,255,0.7)]"
+                      style={{ width: `${progress ? Math.max(2, progress.percent) : 2}%` }}
+                    ></div>
+                  </div>
+
+                  <div className="flex justify-between items-center text-[11px] text-[#8A8A8A]">
+                    <span>
+                      {progress && progress.total_bytes > 0
+                        ? `${formatBytes(progress.bytes_processed)} / ${formatBytes(progress.total_bytes)}`
+                        : "Hardware Acceleration Active"}
+                    </span>
+                    <span className="text-[#60CDFF] font-medium">
+                      {selectedAlgorithm} • {selectedFormat}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Hardware Configuration - Fluent Design Card */}
               <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6">
                 <div className="flex justify-between items-center mb-6">
@@ -995,9 +1055,6 @@ function App() {
                   <div className="mb-6">
                     <div className="flex justify-between items-end mb-2">
                       <span className="text-sm font-semibold text-[#60CDFF]">{getSliderLabel()}</span>
-                      {selectedFormat === ".zip" && (
-                        <span className="text-[11px] text-[#A8A8A8]">0% = Store, 25-100% = Deflate</span>
-                      )}
                     </div>
 
                     <div className="relative pt-2 pb-8">
@@ -1281,60 +1338,6 @@ function App() {
                 </div>
               )}
 
-              {/* Active Compression Progress Card */}
-              {isCompressing && (
-                <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-4 shadow-lg space-y-3">
-                  <div className="flex justify-between items-center text-xs">
-                    <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                      <span className="w-2.5 h-2.5 rounded-full bg-[#60CDFF] animate-pulse shrink-0"></span>
-                      <span className="text-[#D0D0D0] truncate font-medium">
-                        {isCancellingCompress
-                          ? "Cancelling compression..."
-                          : progress?.current_file
-                          ? `Compressing: ${progress.current_file}`
-                          : "Initializing compression..."}
-                      </span>
-                    </div>
-                    <div className="flex items-center space-x-3 shrink-0">
-                      <span className="text-sm font-semibold text-[#60CDFF] font-mono">
-                        {progress ? Math.round(progress.percent) : 0}%
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleCancelCompress}
-                        disabled={isCancellingCompress}
-                        className="px-2.5 py-1 text-xs font-medium text-[#FF99A4] hover:text-[#FFB3BA] bg-red-950/40 hover:bg-red-900/60 border border-red-800/60 hover:border-red-600 rounded transition-all cursor-pointer flex items-center space-x-1.5 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                        title="Cancel Compression"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                        <span>{isCancellingCompress ? "Cancelling..." : "Cancel"}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Progress Track & Animated Glow Fill */}
-                  <div className="w-full h-2 bg-[#202020] rounded-full overflow-hidden border border-[#3E3E3E]">
-                    <div
-                      className="h-full bg-gradient-to-r from-[#0078D4] to-[#60CDFF] transition-all duration-150 ease-out rounded-full shadow-[0_0_10px_rgba(96,205,255,0.7)]"
-                      style={{ width: `${progress ? Math.max(2, progress.percent) : 2}%` }}
-                    ></div>
-                  </div>
-
-                  <div className="flex justify-between items-center text-[11px] text-[#8A8A8A]">
-                    <span>
-                      {progress && progress.total_bytes > 0
-                        ? `${formatBytes(progress.bytes_processed)} / ${formatBytes(progress.total_bytes)}`
-                        : "Hardware Acceleration Active"}
-                    </span>
-                    <span className="text-[#60CDFF] font-medium">
-                      {selectedAlgorithm} • {selectedFormat}
-                    </span>
-                  </div>
-                </div>
-              )}
-
               {/* Error Banner */}
               {compressError && (
                 <div className="bg-red-950/50 border border-red-800 text-red-300 p-4 rounded-lg text-sm">
@@ -1344,20 +1347,7 @@ function App() {
               )}
 
               {/* Execute Button */}
-              <div className="flex justify-end items-center space-x-3 pt-2">
-                {isCompressing && (
-                  <button
-                    type="button"
-                    onClick={handleCancelCompress}
-                    disabled={isCancellingCompress}
-                    className="px-5 py-2.5 bg-[#2D2D2D] hover:bg-[#383838] text-[#FF99A4] hover:text-[#FFB3BA] border border-red-900/60 hover:border-red-700/80 font-medium rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    <span>{isCancellingCompress ? "Cancelling..." : "Cancel"}</span>
-                  </button>
-                )}
+              <div className="flex justify-end pt-2">
                 <button
                   type="button"
                   disabled={isCompressing}
