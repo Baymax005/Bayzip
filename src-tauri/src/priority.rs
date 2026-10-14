@@ -1,17 +1,18 @@
 #[cfg(target_os = "windows")]
 extern "system" {
-    fn GetCurrentProcess() -> *mut std::ffi::c_void;
-    fn SetPriorityClass(hProcess: *mut std::ffi::c_void, dwPriorityClass: u32) -> i32;
+    fn GetCurrentThread() -> *mut std::ffi::c_void;
+    fn SetThreadPriority(hThread: *mut std::ffi::c_void, nPriority: i32) -> i32;
 }
 
 #[cfg(target_os = "windows")]
-const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
+const THREAD_PRIORITY_BELOW_NORMAL: i32 = -1;
 #[cfg(target_os = "windows")]
-const NORMAL_PRIORITY_CLASS: u32 = 0x00000020;
+const THREAD_PRIORITY_NORMAL: i32 = 0;
 
-/// RAII guard that temporarily lowers process priority to BELOW_NORMAL during
-/// intensive compression or extraction operations, ensuring that foreground games,
-/// audio rendering, and OS responsiveness stay 100% smooth even under maximum thread load.
+/// RAII guard that temporarily lowers worker thread priority to THREAD_PRIORITY_BELOW_NORMAL
+/// during intensive compression or extraction operations, ensuring that foreground games,
+/// audio rendering, and OS responsiveness stay 100% smooth without triggering Windows process-level
+/// background I/O disk throttling (IoPriorityLow).
 pub struct ScopedPriorityGuard {
     #[cfg(target_os = "windows")]
     active: bool,
@@ -22,7 +23,7 @@ impl ScopedPriorityGuard {
         #[cfg(target_os = "windows")]
         {
             unsafe {
-                SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+                SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
             }
             Self { active: true }
         }
@@ -44,7 +45,7 @@ impl Drop for ScopedPriorityGuard {
         #[cfg(target_os = "windows")]
         if self.active {
             unsafe {
-                SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+                SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
             }
         }
     }

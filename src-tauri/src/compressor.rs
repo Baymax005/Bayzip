@@ -133,7 +133,7 @@ pub fn write_file_to_bay_archive<W: Write>(
     encoder.write_all(&file_size.to_le_bytes()).map_err(|e| e.to_string())?;
 
     if let Ok(mut f) = File::open(filepath) {
-        let mut buffer = [0u8; 256 * 1024];
+        let mut buffer = vec![0u8; 1024 * 1024]; // 1 MB chunk buffer
         loop {
             if is_compression_cancelled() {
                 return Err("Compression cancelled by user".to_string());
@@ -237,11 +237,14 @@ pub fn compress_bay(
         let mut bytes_processed: u64 = 0;
         let mut last_emit = Instant::now();
 
-        let mut out_file = File::create(&target_dest)
+        let out_file = File::create(&target_dest)
             .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
+        // 4 MB buffer to prevent disk thrashing and maximize sequential write speeds
+        let buf_out = BufWriter::with_capacity(4 * 1024 * 1024, out_file);
 
         if algo_lower.contains("brotli") {
-            out_file.write_all(b"BAYBRO\x02\x00")
+            let mut out_writer = buf_out;
+            out_writer.write_all(b"BAYBRO\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
             let quality = match slider_value {
                 0 => 1,
@@ -250,7 +253,7 @@ pub fn compress_bay(
                 75 => 9,
                 _ => 11,
             };
-            let mut encoder = brotli::CompressorWriter::new(BufWriter::new(out_file), 64 * 1024, quality, 22);
+            let mut encoder = brotli::CompressorWriter::new(out_writer, 64 * 1024, quality, 22);
             for file_str in files {
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
@@ -269,9 +272,10 @@ pub fn compress_bay(
             let _ = encoder.write_all(&[0u8]); // EOF
             encoder.flush().map_err(|e| format!("Brotli finalize error: {}", e))?;
         } else if algo_lower.contains("lz4") {
-            out_file.write_all(b"BAYLZ4\x02\x00")
+            let mut out_writer = buf_out;
+            out_writer.write_all(b"BAYLZ4\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
-            let mut encoder = lz4_flex::frame::FrameEncoder::new(BufWriter::new(out_file));
+            let mut encoder = lz4_flex::frame::FrameEncoder::new(out_writer);
             for file_str in files {
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
@@ -291,14 +295,15 @@ pub fn compress_bay(
             let _ = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
         } else {
             // Default to Zstandard or .bay_gamer preset
-            out_file.write_all(b"BAYZIP\x02\x00")
+            let mut out_writer = buf_out;
+            out_writer.write_all(b"BAYZIP\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
             let is_gamer = algo_lower.contains("gamer");
             let zstd_level = calculate_zstd_level(slider_value, is_gamer);
             let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
             let threads = calculate_target_threads(slider_value, total_cores);
 
-            let mut encoder = zstd::stream::Encoder::new(BufWriter::new(out_file), zstd_level)
+            let mut encoder = zstd::stream::Encoder::new(out_writer, zstd_level)
                 .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
             let _ = encoder.multithread(threads as u32);
             for file_str in files {
