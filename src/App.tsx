@@ -1,72 +1,27 @@
 import { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
-interface SystemSpecs {
-  total_ram_gb: number;
-  free_ram_gb: number;
-  cpu_cores: number;
-}
+import { Titlebar } from "./components/Titlebar";
+import { AboutModal } from "./components/AboutModal";
+import { PasswordModal } from "./components/PasswordModal";
+import { ResultModals } from "./components/ResultModals";
 
-interface CompressProgress {
-  percent: number;
-  current_file: string;
-  bytes_processed: number;
-  total_bytes: number;
-}
-
-interface CompressResult {
-  success: boolean;
-  output_path: string;
-  original_size: number;
-  compressed_size: number;
-  elapsed_ms: number;
-  error?: string;
-}
-
-interface SelectedItemInfo {
-  path: string;
-  name: string;
-  size: number;
-  is_dir: boolean;
-}
-
-interface ExtractProgress {
-  percent: number;
-  current_file: string;
-  bytes_extracted: number;
-}
-
-interface ExtractResult {
-  success: boolean;
-  output_directory: string;
-  file_count: number;
-  elapsed_ms: number;
-  error?: string;
-}
-
-interface ArchiveEntryItem {
-  name: string;
-  size: number;
-  is_dir: boolean;
-}
-
-interface ArchiveInfo {
-  path: string;
-  filename: string;
-  size: number;
-  format: string;
-  is_archive: boolean;
-  is_encrypted: boolean;
-  file_count?: number;
-  total_uncompressed_size?: number;
-  entries?: ArchiveEntryItem[];
-}
+import {
+  SystemSpecs,
+  CompressProgress,
+  CompressResult,
+  SelectedItemInfo,
+  ExtractProgress,
+  ExtractResult,
+  ArchiveEntryItem,
+  ArchiveInfo,
+  StartupCommand,
+} from "./types";
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
@@ -89,11 +44,6 @@ const ARCHIVE_EXTS = [
   ".bz2",
   ".xz",
 ];
-
-interface StartupCommand {
-  action?: "compress" | "extract" | null;
-  paths: string[];
-}
 
 function getArchiveStemName(filename: string): string {
   if (!filename) return "extracted";
@@ -686,82 +636,8 @@ function App() {
 
   return (
     <div className="h-screen w-screen bg-[#202020] text-white flex flex-col font-sans select-none overflow-hidden">
-      {/* Windows 11 Native Custom Titlebar - Full Width & Height Grabbable (Native Drag Region) */}
-      <div
-        data-tauri-drag-region
-        onDoubleClick={(e) => {
-          if (!(e.target as HTMLElement).closest("button")) {
-            getCurrentWindow().toggleMaximize().catch(() => {});
-          }
-        }}
-        className="h-11 w-full flex justify-between items-center bg-[#202020] cursor-default select-none border-b border-[#2D2D2D] shrink-0"
-      >
-        {/* Left Branding Area - Fully Grabbable */}
-        <div data-tauri-drag-region className="flex items-center space-x-2.5 px-4 cursor-default">
-          <div data-tauri-drag-region className="w-5 h-5 flex items-center justify-center pointer-events-none">
-            <img
-              src="/bayzip-logo.png"
-              alt="Bayzip"
-              className="w-4 h-4 object-contain pointer-events-none rounded-sm"
-              onError={(e) => {
-                (e.currentTarget as HTMLElement).style.display = "none";
-              }}
-            />
-          </div>
-          <span data-tauri-drag-region className="text-xs font-semibold text-white tracking-wide pointer-events-none">
-            Bayzip
-          </span>
-        </div>
-
-        {/* Dedicated Draggable Center Surface - Covers entire expanse */}
-        <div data-tauri-drag-region className="flex-1 h-full cursor-default" />
-
-        {/* Window Controls */}
-        <div className="flex h-full" data-tauri-drag-region="false">
-          {/* Windows Minimize */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              getCurrentWindow().minimize().catch((err) => console.error("Minimize error:", err));
-            }}
-            className="h-full px-4 hover:bg-[#333333] flex items-center justify-center text-[#A8A8A8] hover:text-white transition-colors cursor-pointer"
-            title="Minimize"
-          >
-            <svg width="10" height="1" viewBox="0 0 10 1">
-              <rect width="10" height="1" fill="currentColor" />
-            </svg>
-          </button>
-          {/* Windows Maximize */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              getCurrentWindow().toggleMaximize().catch((err) => console.error("Maximize error:", err));
-            }}
-            className="h-full px-4 hover:bg-[#333333] flex items-center justify-center text-[#A8A8A8] hover:text-white transition-colors cursor-pointer"
-            title="Maximize"
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <path d="M0,0v10h10V0H0z M9,9H1V1h8V9z" fill="currentColor" />
-            </svg>
-          </button>
-          {/* Windows Close */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              getCurrentWindow().close().catch((err) => console.error("Close error:", err));
-            }}
-            className="h-full px-4 hover:bg-[#E81123] hover:text-white flex items-center justify-center text-[#A8A8A8] transition-colors cursor-pointer"
-            title="Close"
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <path d="M10,1L9,0L5,4L1,0L0,1l4,4l-4,4l1,1l4-4l4,4l1-1l-4-4L10,1z" fill="currentColor" />
-            </svg>
-          </button>
-        </div>
-      </div>
+      {/* Windows 11 Native Custom Titlebar */}
+      <Titlebar />
 
       {/* Main Scrollable Body */}
       <div className="flex-1 flex flex-col p-6 overflow-y-auto custom-scrollbar">
@@ -1803,402 +1679,45 @@ function App() {
         </div>
       </div>
 
-      {/* Compression Result Modal */}
-      {compressResult && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-md w-full shadow-2xl relative space-y-5">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-white">Archive Created Successfully!</h3>
-                <p className="text-xs text-[#A8A8A8]">Completed in {compressResult.elapsed_ms}ms</p>
-              </div>
-            </div>
+      {/* Result Modals (Compression & Extraction) */}
+      <ResultModals
+        compressResult={compressResult}
+        onCloseCompressResult={() => {
+          setCompressResult(null);
+          setSelectedFiles([]);
+          setCustomArchiveName("");
+        }}
+        extractResult={extractResult}
+        archiveInfo={archiveInfo}
+        onCloseExtractResult={() => {
+          setExtractResult(null);
+          setSelectedArchive(null);
+          setArchiveInfo(null);
+        }}
+        formatBytes={formatBytes}
+      />
 
-            {/* Archive File Preview Card with Bayzip Logo & ZIP Badge */}
-            <div className="bg-[#1A2530] border border-[#0078D4]/40 rounded-xl p-3.5 flex items-center space-x-3.5 shadow-inner">
-              <div className="relative w-12 h-12 rounded-xl bg-[#0F1922] border border-[#60CDFF]/40 flex items-center justify-center shrink-0 shadow">
-                <img
-                  src="/bayzip-logo.png"
-                  alt="Bayzip Archive"
-                  className="w-7 h-7 object-contain"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLElement).style.display = "none";
-                  }}
-                />
-                <span className="absolute -bottom-1 -right-1 bg-[#60CDFF] text-black text-[8px] font-black font-mono px-1 rounded uppercase tracking-wider">
-                  {compressResult.output_path.split(".").pop()?.toUpperCase() || "ZIP"}
-                </span>
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center space-x-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#60CDFF] bg-[#60CDFF]/15 px-2 py-0.5 rounded-full border border-[#60CDFF]/30">
-                    Compressed Archive
-                  </span>
-                </div>
-                <h4 className="text-sm font-semibold text-white truncate mt-1" title={compressResult.output_path}>
-                  {compressResult.output_path.split(/[\\/]/).pop()}
-                </h4>
-                <div className="flex items-center space-x-2 text-xs text-[#8BBEE8] mt-0.5">
-                  <span className="font-mono font-medium text-white">{formatBytes(compressResult.compressed_size)}</span>
-                  <span>•</span>
-                  <span>Bayzip Ultra Package</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-[#2A2A2A] rounded-lg p-4 border border-[#3E3E3E] space-y-2.5">
-              <div className="flex justify-between text-xs">
-                <span className="text-[#A8A8A8]">Original Size:</span>
-                <span className="font-mono text-white">{formatBytes(compressResult.original_size)}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-[#A8A8A8]">Compressed Size:</span>
-                <span className="font-mono text-[#60CDFF] font-semibold">
-                  {formatBytes(compressResult.compressed_size)}
-                </span>
-              </div>
-              {compressResult.original_size > 0 && (
-                <div className="flex justify-between text-xs border-t border-[#3E3E3E] pt-2">
-                  <span className="text-[#A8A8A8]">Space Saved:</span>
-                  <span className="font-semibold text-emerald-400">
-                    {Math.max(
-                      0,
-                      Number(((1 - compressResult.compressed_size / compressResult.original_size) * 100).toFixed(1))
-                    )}
-                    %
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <div className="text-xs bg-[#1A1A1A] p-3 rounded border border-[#333]">
-              <span className="text-[#7A7A7A] block mb-1">Archive Path:</span>
-              <span className="text-white font-mono break-all">{compressResult.output_path}</span>
-            </div>
-
-            <div className="flex space-x-3 justify-end pt-2">
-              <button
-                type="button"
-                onClick={() => revealItemInDir(compressResult.output_path).catch(() => {})}
-                className="px-4 py-2 bg-[#333333] hover:bg-[#3E3E3E] border border-[#3E3E3E] text-white text-xs font-medium rounded-md transition-colors cursor-pointer"
-              >
-                Show in Folder
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setCompressResult(null);
-                  setSelectedFiles([]);
-                  setCustomArchiveName("");
-                }}
-                className="px-6 py-2 bg-[#60CDFF] hover:bg-[#4FB8E6] text-black text-xs font-semibold rounded-md transition-colors cursor-pointer"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Extraction Result Modal */}
-      {extractResult && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-md w-full shadow-2xl relative space-y-5">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-white">Extraction Complete!</h3>
-                <p className="text-xs text-[#A8A8A8]">Completed in {extractResult.elapsed_ms}ms</p>
-              </div>
-            </div>
-
-            {/* Archive Info Card */}
-            <div className="bg-[#1A2530] border border-[#3E3E3E] rounded-lg p-3.5 flex items-center space-x-3.5">
-              <div className="relative w-10 h-10 rounded-lg bg-[#0F1922] border border-[#60CDFF]/30 flex items-center justify-center shrink-0 shadow">
-                <img
-                  src="/bayzip-logo.png"
-                  alt="Bayzip Archive"
-                  className="w-6 h-6 object-contain"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLElement).style.display = "none";
-                  }}
-                />
-              </div>
-              <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-[#60CDFF]">Source Archive</span>
-                <p className="text-xs font-semibold text-white truncate">{archiveInfo?.filename || "Extracted Archive"}</p>
-              </div>
-            </div>
-
-            <div className="bg-[#2A2A2A] rounded-lg p-4 border border-[#3E3E3E] space-y-2.5">
-              <div className="flex justify-between text-xs">
-                <span className="text-[#A8A8A8]">Files Extracted:</span>
-                <span className="font-mono text-white font-medium">{extractResult.file_count} item{extractResult.file_count !== 1 ? "s" : ""}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-[#A8A8A8]">Format:</span>
-                <span className="font-mono text-[#60CDFF]">{archiveInfo?.format || "Archive"}</span>
-              </div>
-            </div>
-
-            <div className="text-xs bg-[#1A1A1A] p-3 rounded border border-[#333]">
-              <span className="text-[#7A7A7A] block mb-1">Extracted To:</span>
-              <span className="text-white font-mono break-all">{extractResult.output_directory}</span>
-            </div>
-
-            <div className="flex space-x-3 justify-end pt-2">
-              <button
-                type="button"
-                onClick={() => revealItemInDir(extractResult.output_directory).catch(() => {})}
-                className="px-4 py-2 bg-[#333333] hover:bg-[#3E3E3E] border border-[#3E3E3E] text-white text-xs font-medium rounded-md transition-colors cursor-pointer"
-              >
-                Open Folder
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setExtractResult(null);
-                  setSelectedArchive(null);
-                  setArchiveInfo(null);
-                }}
-                className="px-6 py-2 bg-[#60CDFF] hover:bg-[#4FB8E6] text-black text-xs font-semibold rounded-md transition-colors cursor-pointer"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* About Modal - Redesigned Clean Fluent Layout */}
-      {isAboutOpen && (
-        <div
-          onClick={() => setIsAboutOpen(false)}
-          className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-6 sm:p-8 max-w-lg w-full shadow-2xl relative space-y-6"
-          >
-            <button
-              type="button"
-              onClick={() => setIsAboutOpen(false)}
-              className="absolute top-4 right-4 text-[#A8A8A8] hover:text-white p-1 rounded-md hover:bg-[#333333] transition-colors cursor-pointer"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-
-            {/* Header */}
-            <div className="flex items-center space-x-3.5">
-              <div className="w-11 h-11 rounded-xl bg-[#142330] border border-[#20495f] flex items-center justify-center shrink-0 p-1.5 shadow-md">
-                <img
-                  src="/bayzip-logo.png"
-                  alt="Bayzip"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <h2 className="text-xl font-bold tracking-tight text-white">Bayzip</h2>
-                  <span className="text-[11px] bg-[#2A2A2A] text-[#60CDFF] px-2 py-0.5 rounded-full border border-[#3E3E3E] font-mono">
-                    v0.1.0
-                  </span>
-                </div>
-                <p className="text-xs text-[#A8A8A8] mt-0.5">High-Performance Hardware-Accelerated Archiver</p>
-              </div>
-            </div>
-
-            <p className="text-xs text-[#C8C8C8] leading-relaxed">
-              Engineered with Rust, Zstandard multi-threading, and React. Built to utilize your machine's full CPU cores and RAM for maximum compression and instant extraction.
-            </p>
-
-            {/* Creator Card */}
-            <div className="bg-[#262626] rounded-lg p-3.5 border border-[#3E3E3E] flex items-center justify-between">
-              <div>
-                <span className="text-[11px] text-[#60CDFF] font-medium uppercase tracking-wider block">Created By</span>
-                <span className="text-sm font-semibold text-white">Made by Baymax</span>
-                <span className="text-xs text-[#8A8A8A] block">CEO of DPG (Muhammad Ali)</span>
-              </div>
-              <div className="w-8 h-8 rounded-full bg-[#60CDFF]/15 text-[#60CDFF] flex items-center justify-center border border-[#60CDFF]/30">
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                </svg>
-              </div>
-            </div>
-
-            {/* Windows Explorer Integration Card */}
-            <div className="bg-[#262626] rounded-lg p-4 border border-[#3E3E3E] space-y-3">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center space-x-2">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-[#60CDFF]">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
-                  </svg>
-                  <span className="text-xs font-semibold text-white">Windows Explorer Integration</span>
-                </div>
-                <span className="text-[10px] text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-800/60 font-medium">
-                  Native Shell
-                </span>
-              </div>
-
-              <div className="text-[11px] text-[#A8A8A8] space-y-1.5 pl-1">
-                <div className="flex items-center space-x-2">
-                  <span className="text-[#60CDFF]">•</span>
-                  <span><strong>Extract Menu:</strong> Dedicated "Extract with Bayzip" right-click menu</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-[#60CDFF]">•</span>
-                  <span><strong>Compress Menu:</strong> Dedicated "Add to archive with Bayzip" (.bay, .zip, .7z, .tar)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-[#60CDFF]">•</span>
-                  <span><strong>Universal Uncompress:</strong> .bay, .zip, .7z, .rar, .tar, .gz auto-detected</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-[#60CDFF]">•</span>
-                  <span><strong>File Icon & Open:</strong> Double-click .bay files to open directly in Bayzip</span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                disabled={isSyncingRegistry}
-                onClick={handleRegisterContextMenu}
-                className={`w-full py-2 bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] hover:border-[#60CDFF] text-[#60CDFF] text-xs font-semibold rounded-md transition-all flex items-center justify-center space-x-2 cursor-pointer ${
-                  isSyncingRegistry ? "opacity-75 cursor-not-allowed" : ""
-                }`}
-              >
-                {isSyncingRegistry ? (
-                  <>
-                    <svg className="animate-spin h-3.5 w-3.5 text-[#60CDFF]" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span>Syncing Windows Registry...</span>
-                  </>
-                ) : (
-                  <>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    <span>Sync Windows Explorer Integration</span>
-                  </>
-                )}
-              </button>
-
-              {contextMenuStatus && (
-                <div className="text-[11px] text-emerald-400 bg-emerald-950/40 p-2.5 rounded border border-emerald-900/50 flex items-center space-x-2">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 shrink-0 text-emerald-400">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                  </svg>
-                  <span>{contextMenuStatus}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* About Modal */}
+      <AboutModal
+        isOpen={isAboutOpen}
+        onClose={() => setIsAboutOpen(false)}
+        isSyncingRegistry={isSyncingRegistry}
+        contextMenuStatus={contextMenuStatus}
+        onRegisterContextMenu={handleRegisterContextMenu}
+      />
 
       {/* Password Prompt Modal for Encrypted Archives */}
-      {isPasswordPromptOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#252525] border border-[#3E3E3E] rounded-xl w-full max-w-md shadow-2xl p-6 space-y-4">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-full bg-[#60CDFF]/15 border border-[#60CDFF]/30 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold text-white">Password Required</h3>
-                <p className="text-xs text-[#A8A8A8]">This archive is encrypted with AES. Enter the password to unlock.</p>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-[#C8C8C8] mb-1.5">
-                Decryption Password
-              </label>
-              <div className="relative">
-                <input
-                  type={showExtractPassword ? "text" : "password"}
-                  value={extractPassword}
-                  onChange={(e) => setExtractPassword(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && extractPassword.trim()) {
-                      handleExtract();
-                    }
-                  }}
-                  autoFocus
-                  placeholder="Enter archive password..."
-                  className="w-full bg-[#1B1B1B] text-white text-sm pl-3 pr-10 py-2.5 rounded-lg border border-[#444] focus:border-[#60CDFF] outline-none font-mono placeholder-[#666]"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowExtractPassword(!showExtractPassword)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#888] hover:text-white cursor-pointer"
-                  title={showExtractPassword ? "Hide password" : "Show password"}
-                >
-                  {showExtractPassword ? (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {extractError && (
-              <div className="text-xs text-rose-400 bg-rose-950/40 p-2.5 rounded border border-rose-900/50">
-                {extractError}
-              </div>
-            )}
-
-            <div className="flex justify-end space-x-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsPasswordPromptOpen(false)}
-                className="px-4 py-2 bg-[#333] hover:bg-[#3D3D3D] text-[#CCCCCC] text-xs font-medium rounded-lg transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={!extractPassword.trim() || isExtracting}
-                onClick={handleExtract}
-                className="px-4 py-2 bg-[#60CDFF] hover:bg-[#52B2DE] disabled:opacity-50 disabled:cursor-not-allowed text-black text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5"
-              >
-                {isExtracting ? (
-                  <>
-                    <svg className="animate-spin h-3.5 w-3.5 text-black" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span>Decrypting...</span>
-                  </>
-                ) : (
-                  <span>Decrypt & Extract</span>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PasswordModal
+        isOpen={isPasswordPromptOpen}
+        onClose={() => setIsPasswordPromptOpen(false)}
+        password={extractPassword}
+        setPassword={setExtractPassword}
+        showPassword={showExtractPassword}
+        setShowPassword={setShowExtractPassword}
+        isExtracting={isExtracting}
+        extractError={extractError}
+        onSubmit={handleExtract}
+      />
     </div>
   );
 }
