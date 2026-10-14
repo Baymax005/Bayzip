@@ -150,6 +150,7 @@ function App() {
 
   // Compression execution state
   const [isCompressing, setIsCompressing] = useState(false);
+  const [isCancellingCompress, setIsCancellingCompress] = useState(false);
   const [progress, setProgress] = useState<CompressProgress | null>(null);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
   const [compressError, setCompressError] = useState<string | null>(null);
@@ -485,6 +486,15 @@ function App() {
     }
   };
 
+  const handleCancelCompress = async () => {
+    try {
+      setIsCancellingCompress(true);
+      await invoke("cancel_compression");
+    } catch (e) {
+      console.error("Failed to cancel compression:", e);
+    }
+  };
+
   const handleCompress = async () => {
     if (selectedFiles.length === 0) {
       await handleSelectFiles();
@@ -497,6 +507,7 @@ function App() {
     }
 
     setIsCompressing(true);
+    setIsCancellingCompress(false);
     setCompressError(null);
     setProgress({
       percent: 0,
@@ -556,10 +567,17 @@ function App() {
         setCompressResult(res);
       }
     } catch (err) {
-      console.error("Compression execution error:", err);
-      setCompressError(String(err));
+      const errStr = String(err);
+      if (errStr.toLowerCase().includes("cancel")) {
+        console.log("Compression cancelled by user.");
+        setCompressError(null);
+      } else {
+        console.error("Compression execution error:", err);
+        setCompressError(errStr);
+      }
     } finally {
       setIsCompressing(false);
+      setIsCancellingCompress(false);
       setProgress(null);
     }
   };
@@ -1270,12 +1288,30 @@ function App() {
                     <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
                       <span className="w-2.5 h-2.5 rounded-full bg-[#60CDFF] animate-pulse shrink-0"></span>
                       <span className="text-[#D0D0D0] truncate font-medium">
-                        {progress?.current_file ? `Compressing: ${progress.current_file}` : "Initializing compression..."}
+                        {isCancellingCompress
+                          ? "Cancelling compression..."
+                          : progress?.current_file
+                          ? `Compressing: ${progress.current_file}`
+                          : "Initializing compression..."}
                       </span>
                     </div>
-                    <span className="text-sm font-semibold text-[#60CDFF] font-mono shrink-0">
-                      {progress ? Math.round(progress.percent) : 0}%
-                    </span>
+                    <div className="flex items-center space-x-3 shrink-0">
+                      <span className="text-sm font-semibold text-[#60CDFF] font-mono">
+                        {progress ? Math.round(progress.percent) : 0}%
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCancelCompress}
+                        disabled={isCancellingCompress}
+                        className="px-2.5 py-1 text-xs font-medium text-[#FF99A4] hover:text-[#FFB3BA] bg-red-950/40 hover:bg-red-900/60 border border-red-800/60 hover:border-red-600 rounded transition-all cursor-pointer flex items-center space-x-1.5 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                        title="Cancel Compression"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        <span>{isCancellingCompress ? "Cancelling..." : "Cancel"}</span>
+                      </button>
+                    </div>
                   </div>
 
                   {/* Progress Track & Animated Glow Fill */}
@@ -1308,7 +1344,20 @@ function App() {
               )}
 
               {/* Execute Button */}
-              <div className="flex justify-end pt-2">
+              <div className="flex justify-end items-center space-x-3 pt-2">
+                {isCompressing && (
+                  <button
+                    type="button"
+                    onClick={handleCancelCompress}
+                    disabled={isCancellingCompress}
+                    className="px-5 py-2.5 bg-[#2D2D2D] hover:bg-[#383838] text-[#FF99A4] hover:text-[#FFB3BA] border border-red-900/60 hover:border-red-700/80 font-medium rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    <span>{isCancellingCompress ? "Cancelling..." : "Cancel"}</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isCompressing}
@@ -1324,7 +1373,13 @@ function App() {
                     </svg>
                   )}
                   <span>
-                    {isCompressing ? "Compressing..." : selectedFiles.length > 0 ? "Compress Now" : "Select Files to Compress"}
+                    {isCompressing
+                      ? isCancellingCompress
+                        ? "Cancelling..."
+                        : "Compressing..."
+                      : selectedFiles.length > 0
+                      ? "Compress Now"
+                      : "Select Files to Compress"}
                   </span>
                 </button>
               </div>

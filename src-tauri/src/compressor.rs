@@ -20,6 +20,22 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub static CANCEL_COMPRESSION: AtomicBool = AtomicBool::new(false);
+
+pub fn cancel_compression_flag() {
+    CANCEL_COMPRESSION.store(true, Ordering::SeqCst);
+}
+
+pub fn is_compression_cancelled() -> bool {
+    CANCEL_COMPRESSION.load(Ordering::Relaxed)
+}
+
+pub fn reset_compression_cancel_flag() {
+    CANCEL_COMPRESSION.store(false, Ordering::SeqCst);
+}
+
 use crate::types::{CompressPayload, CompressResponse, CompressProgress};
 use crate::priority::ScopedPriorityGuard;
 use crate::inspector::{archive_stem_name, derive_bay_key};
@@ -119,9 +135,15 @@ pub fn write_file_to_bay_archive<W: Write>(
     if let Ok(mut f) = File::open(filepath) {
         let mut buffer = [0u8; 256 * 1024];
         loop {
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
+            }
             match f.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => {
+                    if is_compression_cancelled() {
+                        return Err("Compression cancelled by user".to_string());
+                    }
                     encoder.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
                     *bytes_processed += n as u64;
                     if last_emit.elapsed().as_millis() >= 50 {
@@ -161,6 +183,9 @@ pub fn write_dir_to_bay_archive<W: Write>(
     }
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
+            }
             let ep = entry.path();
             if let Ok(m) = std::fs::symlink_metadata(&ep) {
                 if m.is_file() {
@@ -184,6 +209,10 @@ pub fn compress_bay(
     app: &AppHandle,
     total_original: u64,
 ) -> Result<(), String> {
+    if is_compression_cancelled() {
+        return Err("Compression cancelled by user".to_string());
+    }
+
     let pwd_trimmed = password.map(|s| s.trim()).filter(|s| !s.is_empty());
     let is_encrypted = pwd_trimmed.is_some();
 
@@ -200,107 +229,144 @@ pub fn compress_bay(
         output_path.to_path_buf()
     };
 
-    let first_path = Path::new(&files[0]);
-    let parent_dir = first_path.parent().unwrap_or_else(|| Path::new("."));
+    let res = (|| -> Result<(), String> {
+        let first_path = Path::new(&files[0]);
+        let parent_dir = first_path.parent().unwrap_or_else(|| Path::new("."));
 
-    let algo_lower = algorithm.to_lowercase();
-    let mut bytes_processed: u64 = 0;
-    let mut last_emit = Instant::now();
+        let algo_lower = algorithm.to_lowercase();
+        let mut bytes_processed: u64 = 0;
+        let mut last_emit = Instant::now();
 
-    let mut out_file = File::create(&target_dest)
-        .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
+        let mut out_file = File::create(&target_dest)
+            .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
 
-    if algo_lower.contains("brotli") {
-        out_file.write_all(b"BAYBRO\x02\x00")
-            .map_err(|e| format!("Header write error: {}", e))?;
-        let quality = match slider_value {
-            0 => 1,
-            25 => 4,
-            50 => 7,
-            75 => 9,
-            _ => 11,
-        };
-        let mut encoder = brotli::CompressorWriter::new(BufWriter::new(out_file), 64 * 1024, quality, 22);
-        for file_str in files {
-            let p = Path::new(file_str);
-            if p.is_file() {
-                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-                write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
-            } else if p.is_dir() {
-                write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+        if algo_lower.contains("brotli") {
+            out_file.write_all(b"BAYBRO\x02\x00")
+                .map_err(|e| format!("Header write error: {}", e))?;
+            let quality = match slider_value {
+                0 => 1,
+                25 => 4,
+                50 => 7,
+                75 => 9,
+                _ => 11,
+            };
+            let mut encoder = brotli::CompressorWriter::new(BufWriter::new(out_file), 64 * 1024, quality, 22);
+            for file_str in files {
+                if is_compression_cancelled() {
+                    return Err("Compression cancelled by user".to_string());
+                }
+                let p = Path::new(file_str);
+                if p.is_file() {
+                    let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                    write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
+                } else if p.is_dir() {
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+                }
             }
-        }
-        let _ = encoder.write_all(&[0u8]); // EOF
-        encoder.flush().map_err(|e| format!("Brotli finalize error: {}", e))?;
-    } else if algo_lower.contains("lz4") {
-        out_file.write_all(b"BAYLZ4\x02\x00")
-            .map_err(|e| format!("Header write error: {}", e))?;
-        let mut encoder = lz4_flex::frame::FrameEncoder::new(BufWriter::new(out_file));
-        for file_str in files {
-            let p = Path::new(file_str);
-            if p.is_file() {
-                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-                write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
-            } else if p.is_dir() {
-                write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
             }
-        }
-        let _ = encoder.write_all(&[0u8]); // EOF
-        let _ = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
-    } else {
-        // Default to Zstandard or .bay_gamer preset
-        out_file.write_all(b"BAYZIP\x02\x00")
-            .map_err(|e| format!("Header write error: {}", e))?;
-        let is_gamer = algo_lower.contains("gamer");
-        let zstd_level = calculate_zstd_level(slider_value, is_gamer);
-        let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-        let threads = calculate_target_threads(slider_value, total_cores);
-
-        let mut encoder = zstd::stream::Encoder::new(BufWriter::new(out_file), zstd_level)
-            .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
-        let _ = encoder.multithread(threads as u32);
-        for file_str in files {
-            let p = Path::new(file_str);
-            if p.is_file() {
-                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-                write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
-            } else if p.is_dir() {
-                write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+            let _ = encoder.write_all(&[0u8]); // EOF
+            encoder.flush().map_err(|e| format!("Brotli finalize error: {}", e))?;
+        } else if algo_lower.contains("lz4") {
+            out_file.write_all(b"BAYLZ4\x02\x00")
+                .map_err(|e| format!("Header write error: {}", e))?;
+            let mut encoder = lz4_flex::frame::FrameEncoder::new(BufWriter::new(out_file));
+            for file_str in files {
+                if is_compression_cancelled() {
+                    return Err("Compression cancelled by user".to_string());
+                }
+                let p = Path::new(file_str);
+                if p.is_file() {
+                    let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                    write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
+                } else if p.is_dir() {
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+                }
             }
-        }
-        let _ = encoder.write_all(&[0u8]); // EOF
-        encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
-    }
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
+            }
+            let _ = encoder.write_all(&[0u8]); // EOF
+            let _ = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
+        } else {
+            // Default to Zstandard or .bay_gamer preset
+            out_file.write_all(b"BAYZIP\x02\x00")
+                .map_err(|e| format!("Header write error: {}", e))?;
+            let is_gamer = algo_lower.contains("gamer");
+            let zstd_level = calculate_zstd_level(slider_value, is_gamer);
+            let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+            let threads = calculate_target_threads(slider_value, total_cores);
 
-    if let Some(pwd) = pwd_trimmed {
-        let mut raw_data = Vec::new();
-        File::open(&target_dest)
-            .and_then(|mut f| f.read_to_end(&mut raw_data))
-            .map_err(|e| format!("Failed to read unencrypted buffer: {}", e))?;
+            let mut encoder = zstd::stream::Encoder::new(BufWriter::new(out_file), zstd_level)
+                .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
+            let _ = encoder.multithread(threads as u32);
+            for file_str in files {
+                if is_compression_cancelled() {
+                    return Err("Compression cancelled by user".to_string());
+                }
+                let p = Path::new(file_str);
+                if p.is_file() {
+                    let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                    write_file_to_bay_archive(p, filename, &mut encoder, &mut bytes_processed, total_original, app, &mut last_emit)?;
+                } else if p.is_dir() {
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+                }
+            }
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
+            }
+            let _ = encoder.write_all(&[0u8]); // EOF
+            encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
+        }
+
+        if let Some(pwd) = pwd_trimmed {
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
+            }
+            let mut raw_data = Vec::new();
+            File::open(&target_dest)
+                .and_then(|mut f| f.read_to_end(&mut raw_data))
+                .map_err(|e| format!("Failed to read unencrypted buffer: {}", e))?;
+            let _ = std::fs::remove_file(&target_dest);
+
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
+            }
+
+            let mut salt = [0u8; 16];
+            let mut nonce_bytes = [0u8; 12];
+            rand::thread_rng().fill_bytes(&mut salt);
+            rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+            let key_bytes = derive_bay_key(pwd, &salt);
+            let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+            let cipher = Aes256Gcm::new(key);
+            let nonce = Nonce::from_slice(&nonce_bytes);
+
+            let ciphertext = cipher.encrypt(nonce, raw_data.as_ref())
+                .map_err(|e| format!("AES-256 encryption error: {}", e))?;
+
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
+            }
+
+            let mut final_file = File::create(output_path)
+                .map_err(|e| format!("Failed to create encrypted output file: {}", e))?;
+            final_file.write_all(b"BAYENC\x02\x00").map_err(|e| e.to_string())?;
+            final_file.write_all(&salt).map_err(|e| e.to_string())?;
+            final_file.write_all(&nonce_bytes).map_err(|e| e.to_string())?;
+            final_file.write_all(&ciphertext).map_err(|e| e.to_string())?;
+        }
+
+        Ok(())
+    })();
+
+    if res.is_err() && is_encrypted && target_dest.exists() {
         let _ = std::fs::remove_file(&target_dest);
-
-        let mut salt = [0u8; 16];
-        let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut salt);
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
-
-        let key_bytes = derive_bay_key(pwd, &salt);
-        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let ciphertext = cipher.encrypt(nonce, raw_data.as_ref())
-            .map_err(|e| format!("AES-256 encryption error: {}", e))?;
-
-        let mut final_file = File::create(output_path)
-            .map_err(|e| format!("Failed to create encrypted output file: {}", e))?;
-        final_file.write_all(b"BAYENC\x02\x00").map_err(|e| e.to_string())?;
-        final_file.write_all(&salt).map_err(|e| e.to_string())?;
-        final_file.write_all(&nonce_bytes).map_err(|e| e.to_string())?;
-        final_file.write_all(&ciphertext).map_err(|e| e.to_string())?;
     }
 
-    Ok(())
+    res
 }
 
 pub fn compress_zip(
@@ -313,6 +379,10 @@ pub fn compress_zip(
     app: &AppHandle,
     total_original: u64,
 ) -> Result<(), String> {
+    if is_compression_cancelled() {
+        return Err("Compression cancelled by user".to_string());
+    }
+
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create zip file: {}", e))?;
     let mut writer = zip::ZipWriter::new(out_file);
@@ -336,6 +406,9 @@ pub fn compress_zip(
     };
 
     for file_str in files {
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
         let p = Path::new(file_str);
         
         let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
@@ -356,9 +429,15 @@ pub fn compress_zip(
             if let Ok(mut f) = File::open(p) {
                 let mut buf = [0u8; 128 * 1024];
                 loop {
+                    if is_compression_cancelled() {
+                        return Err("Compression cancelled by user".to_string());
+                    }
                     match f.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            if is_compression_cancelled() {
+                                return Err("Compression cancelled by user".to_string());
+                            }
                             writer.write_all(&buf[..n])
                                 .map_err(|e| format!("Zip write error: {}", e))?;
                             bytes_processed += n as u64;
@@ -414,6 +493,9 @@ pub fn compress_zip(
                 if depth > 32 { return Ok(()); }
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
+                        if is_compression_cancelled() {
+                            return Err("Compression cancelled by user".to_string());
+                        }
                         let path = entry.path();
                         if let Ok(m) = std::fs::symlink_metadata(&path) {
                             let rel = path.strip_prefix(base).unwrap_or(&path);
@@ -445,9 +527,15 @@ pub fn compress_zip(
                                 if let Ok(mut f) = File::open(&path) {
                                     let mut buf = [0u8; 128 * 1024];
                                     loop {
+                                        if is_compression_cancelled() {
+                                            return Err("Compression cancelled by user".to_string());
+                                        }
                                         match f.read(&mut buf) {
                                             Ok(0) => break,
                                             Ok(n) => {
+                                                if is_compression_cancelled() {
+                                                    return Err("Compression cancelled by user".to_string());
+                                                }
                                                 writer.write_all(&buf[..n])
                                                     .map_err(|e| format!("Zip write error: {}", e))?;
                                                 *bytes_processed += n as u64;
@@ -480,6 +568,10 @@ pub fn compress_zip(
         }
     }
 
+    if is_compression_cancelled() {
+        return Err("Compression cancelled by user".to_string());
+    }
+
     writer.finish().map_err(|e| format!("Failed to finalize zip archive: {}", e))?;
     Ok(())
 }
@@ -490,11 +582,18 @@ pub fn compress_tar(
     app: &AppHandle,
     total_original: u64,
 ) -> Result<(), String> {
+    if is_compression_cancelled() {
+        return Err("Compression cancelled by user".to_string());
+    }
+
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create tar file: {}", e))?;
     let mut builder = tar::Builder::new(BufWriter::new(out_file));
 
     for (i, file_str) in files.iter().enumerate() {
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
         let p = Path::new(file_str);
         let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
         if p.is_file() {
@@ -513,6 +612,10 @@ pub fn compress_tar(
         });
     }
 
+    if is_compression_cancelled() {
+        return Err("Compression cancelled by user".to_string());
+    }
+
     builder.finish().map_err(|e| format!("Tar finalize error: {}", e))?;
     Ok(())
 }
@@ -525,6 +628,10 @@ pub fn compress_7z(
     app: &AppHandle,
     total_original: u64,
 ) -> Result<(), String> {
+    if is_compression_cancelled() {
+        return Err("Compression cancelled by user".to_string());
+    }
+
     if let Some(parent) = output_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -563,6 +670,9 @@ pub fn compress_7z(
     let mut last_emit = Instant::now();
 
     for file_str in files {
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
         let p = Path::new(file_str);
         if !p.exists() {
             continue;
@@ -613,6 +723,9 @@ pub fn compress_7z(
                 if depth > 32 { return Ok(()); }
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
+                        if is_compression_cancelled() {
+                            return Err("Compression cancelled by user".to_string());
+                        }
                         let path = entry.path();
                         if let Ok(m) = std::fs::symlink_metadata(&path) {
                             let rel = path.strip_prefix(base).unwrap_or(&path);
@@ -656,6 +769,10 @@ pub fn compress_7z(
             }
             add_dir_7z(p, parent, &mut sz, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
         }
+    }
+
+    if is_compression_cancelled() {
+        return Err("Compression cancelled by user".to_string());
     }
 
     sz.finish().map_err(|e| format!("7z finalize error: {}", e))?;
@@ -923,6 +1040,7 @@ pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<()
 }
 
 pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<CompressResponse, String> {
+    reset_compression_cancel_flag();
     let _priority_guard = ScopedPriorityGuard::new();
 
     if payload.files.is_empty() {
@@ -986,7 +1104,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
     let pwd_ref = payload.password.as_deref();
     let enc_ref = payload.encryption.as_deref();
     let fmt_clean = payload.format.trim_start_matches('.').to_lowercase();
-    match fmt_clean.as_str() {
+    let compress_res = match fmt_clean.as_str() {
         "zip" => {
             compress_zip(
                 &payload.files,
@@ -997,13 +1115,13 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
                 enc_ref,
                 &app,
                 total_original,
-            )?;
+            )
         },
         "tar" => {
-            compress_tar(&payload.files, &output_path, &app, total_original)?;
+            compress_tar(&payload.files, &output_path, &app, total_original)
         },
         "7z" => {
-            compress_7z(&payload.files, &output_path, payload.slider_value, pwd_ref, &app, total_original)?;
+            compress_7z(&payload.files, &output_path, payload.slider_value, pwd_ref, &app, total_original)
         },
         "bay_gamer" => {
             compress_bay(
@@ -1014,7 +1132,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
                 pwd_ref,
                 &app,
                 total_original,
-            )?;
+            )
         },
         _ => {
             compress_bay(
@@ -1025,8 +1143,25 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
                 pwd_ref,
                 &app,
                 total_original,
-            )?;
+            )
         }
+    };
+
+    if let Err(e) = compress_res {
+        if is_compression_cancelled() || e.contains("cancelled") {
+            if output_path.exists() {
+                let _ = std::fs::remove_file(&output_path);
+            }
+            return Err("Compression cancelled by user".to_string());
+        }
+        return Err(e);
+    }
+
+    if is_compression_cancelled() {
+        if output_path.exists() {
+            let _ = std::fs::remove_file(&output_path);
+        }
+        return Err("Compression cancelled by user".to_string());
     }
 
     // Final 100% progress event

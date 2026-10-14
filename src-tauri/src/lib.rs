@@ -122,6 +122,11 @@ async fn get_archive_info(path: String, password: Option<String>) -> Result<Arch
     .map_err(|e| format!("Archive inspect error: {}", e))?
 }
 
+#[tauri::command]
+fn cancel_compression() {
+    crate::compressor::cancel_compression_flag();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -140,6 +145,7 @@ pub fn run() {
             get_cli_args, 
             register_context_menu,
             compress_files,
+            cancel_compression,
             get_selected_items_info,
             extract_archive,
             get_archive_info
