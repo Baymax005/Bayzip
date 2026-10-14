@@ -76,7 +76,80 @@ const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".tar": ["None (Store)"],
 };
 
-const ARCHIVE_EXTS = [".bay", ".bay_gamer", ".zip", ".7z", ".tar", ".gz", ".tgz", ".rar"];
+const ARCHIVE_EXTS = [
+  ".bay",
+  ".bay_gamer",
+  ".zip",
+  ".7z",
+  ".tar",
+  ".gz",
+  ".tgz",
+  ".rar",
+  ".zst",
+  ".bz2",
+  ".xz",
+];
+
+interface StartupCommand {
+  action?: "compress" | "extract" | null;
+  paths: string[];
+}
+
+function getArchiveStemName(filename: string): string {
+  if (!filename) return "extracted";
+  const lower = filename.toLowerCase();
+  const compoundExts = [
+    ".tar.gz",
+    ".tar.zst",
+    ".tar.bz2",
+    ".tar.xz",
+    ".tar.lz4",
+    ".tar.zstd",
+    ".tar.br",
+    ".bay_gamer",
+  ];
+  for (const ext of compoundExts) {
+    if (lower.endsWith(ext)) {
+      return filename.slice(0, -ext.length);
+    }
+  }
+  return filename.replace(/\.[^/.]+$/, "");
+}
+
+function hasSingleRootDir(entries?: ArchiveEntryItem[]): boolean {
+  if (!entries || entries.length === 0) return false;
+  let candidateRoot: string | null = null;
+  let nonEmptyCount = 0;
+
+  for (const entry of entries) {
+    const normalized = entry.name.replace(/\\/g, "/");
+    const clean = normalized.trim().replace(/^\/+/, "");
+    if (!clean || clean === ".") continue;
+    nonEmptyCount++;
+
+    const firstSlash = clean.indexOf("/");
+    if (firstSlash === -1) {
+      if (!entry.is_dir) {
+        return false;
+      }
+      const segment = clean;
+      if (candidateRoot === null) {
+        candidateRoot = segment;
+      } else if (candidateRoot !== segment) {
+        return false;
+      }
+    } else {
+      const segment = clean.substring(0, firstSlash);
+      if (candidateRoot === null) {
+        candidateRoot = segment;
+      } else if (candidateRoot !== segment) {
+        return false;
+      }
+    }
+  }
+
+  return nonEmptyCount > 0 && candidateRoot !== null;
+}
 
 function isArchiveFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();
@@ -113,6 +186,7 @@ function App() {
   const [compressPassword, setCompressPassword] = useState<string>("");
   const [showCompressPassword, setShowCompressPassword] = useState<boolean>(false);
   const [archiveToOriginalPath, setArchiveToOriginalPath] = useState(true);
+  const [compressDestDir, setCompressDestDir] = useState<string>("");
   const [separateArchives, setSeparateArchives] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [itemsInfo, setItemsInfo] = useState<Record<string, { size: number; is_dir: boolean }>>({});
@@ -177,7 +251,8 @@ function App() {
   useEffect(() => {
     if (selectedFiles.length > 0 && !customArchiveName) {
       const first = selectedFiles[0];
-      const stem = first.split(/[/\\]/).pop()?.replace(/\.[^/.]+$/, "") || "bayzip_archive";
+      const filename = first.split(/[/\\]/).pop() || "bayzip_archive";
+      const stem = getArchiveStemName(filename);
       setCustomArchiveName(stem);
     }
   }, [selectedFiles]);
@@ -204,20 +279,28 @@ function App() {
         password: pwd || (extractPassword.trim() ? extractPassword.trim() : undefined),
       });
       setArchiveInfo(info);
+      if (info.is_encrypted && (!pwd || !pwd.trim())) {
+        setIsPasswordPromptOpen(true);
+      }
     } catch (err) {
       console.error("Failed to inspect archive info:", err);
       const filename = filePath.split(/[/\\]/).pop() || "archive";
+      const errStr = String(err).toLowerCase();
+      const isEnc = errStr.includes("password") || errStr.includes("encrypt");
       setArchiveInfo({
         path: filePath,
         filename,
         size: 0,
         format: "Archive",
         is_archive: true,
-        is_encrypted: false,
+        is_encrypted: isEnc,
         file_count: 0,
         total_uncompressed_size: 0,
         entries: [],
       });
+      if (isEnc) {
+        setIsPasswordPromptOpen(true);
+      }
     }
   };
 
@@ -235,14 +318,23 @@ function App() {
       .catch((err) => console.error("Specs query error:", err));
 
     // 2. Fetch CLI / Context menu startup arguments
-    invoke<string[]>("get_cli_args")
-      .then((args) => {
-        if (isMounted && args && args.length > 0) {
-          if (args.length === 1 && isArchiveFile(args[0])) {
+    invoke<StartupCommand>("get_cli_args")
+      .then((cmd) => {
+        if (isMounted && cmd && cmd.paths && cmd.paths.length > 0) {
+          if (cmd.action === "compress") {
+            setActiveMode("compress");
+            setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
+          } else if (cmd.action === "extract") {
             setActiveMode("extract");
-            selectArchive(args[0]);
+            selectArchive(cmd.paths[0]);
           } else {
-            setSelectedFiles((prev) => [...new Set([...prev, ...args])]);
+            if (cmd.paths.length === 1 && isArchiveFile(cmd.paths[0])) {
+              setActiveMode("extract");
+              selectArchive(cmd.paths[0]);
+            } else {
+              setActiveMode("compress");
+              setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
+            }
           }
         }
       })
@@ -407,6 +499,22 @@ function App() {
     }
   };
 
+  const handleSelectCompressDestination = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select Output Destination Folder",
+        defaultPath: compressDestDir || undefined,
+      });
+      if (selected && typeof selected === "string") {
+        setCompressDestDir(selected);
+      }
+    } catch (err) {
+      console.error("Compress destination folder selection error:", err);
+    }
+  };
+
   const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
 
   const handleRegisterContextMenu = async () => {
@@ -459,6 +567,7 @@ function App() {
               custom_name: undefined, // Each file uses its own name
               encryption: selectedEncryption,
               password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
+              output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
             },
           });
           totalOrig += res.original_size;
@@ -485,6 +594,7 @@ function App() {
             custom_name: customArchiveName.trim() || undefined,
             encryption: selectedEncryption,
             password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
+            output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
           },
         });
         setCompressResult(res);
@@ -521,14 +631,8 @@ function App() {
     try {
       let finalDest = extractDest;
       if (extractToSubfolder) {
-        const stem = archiveInfo?.filename?.replace(/\.[^/.]+$/, "") || "extracted";
-        const entries = archiveInfo?.entries || [];
-        const hasSingleRoot = entries.length > 0 && (() => {
-          const firstSlash = entries[0].name.indexOf("/");
-          if (firstSlash === -1) return false;
-          const rootPrefix = entries[0].name.substring(0, firstSlash + 1);
-          return entries.every((e) => e.name.startsWith(rootPrefix));
-        })();
+        const stem = getArchiveStemName(archiveInfo?.filename || "extracted");
+        const hasSingleRoot = hasSingleRootDir(archiveInfo?.entries);
 
         // If the archive already contains a single root folder wrapping all contents,
         // extract directly into extractDest to avoid duplicate folder\folder nesting!
@@ -1169,6 +1273,30 @@ function App() {
                       </div>
                     </label>
 
+                    {!archiveToOriginalPath && (
+                      <div className="pl-9 space-y-1.5 animate-fadeIn">
+                        <label className="block text-xs font-medium text-[#C8C8C8]">
+                          Custom Destination Directory
+                        </label>
+                        <div className="flex space-x-2">
+                          <input
+                            type="text"
+                            value={compressDestDir}
+                            onChange={(e) => setCompressDestDir(e.target.value)}
+                            placeholder="Select output folder (leave blank for source directory)..."
+                            className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-mono text-xs"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleSelectCompressDestination}
+                            className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer shrink-0"
+                          >
+                            Browse...
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <label className="flex items-center cursor-pointer group">
                       <div className="relative">
                         <input
@@ -1571,7 +1699,7 @@ function App() {
                     <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
                       Extract into dedicated folder{" "}
                       <span className="text-[#60CDFF] font-mono text-xs">
-                        ({archiveInfo?.filename ? archiveInfo.filename.replace(/\.[^/.]+$/, "") : "folder_name"})
+                        ({archiveInfo?.filename ? getArchiveStemName(archiveInfo.filename) : "folder_name"})
                       </span>
                     </div>
                   </label>

@@ -48,13 +48,30 @@ fn get_system_specs() -> SystemSpecs {
     }
 }
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct StartupCommand {
+    pub action: Option<String>,
+    pub paths: Vec<String>,
+}
+
 #[tauri::command]
-fn get_cli_args() -> Vec<String> {
-    std::env::args()
-        .skip(1)
-        .filter(|arg| !arg.starts_with("--"))
-        .map(|arg| arg.trim_matches('\"').to_string())
-        .collect()
+fn get_cli_args() -> StartupCommand {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut action = None;
+    let mut paths = Vec::new();
+
+    for arg in args {
+        let clean = arg.trim_matches('\"').to_string();
+        if clean == "--gui-compress" {
+            action = Some("compress".to_string());
+        } else if clean == "--gui-extract" || clean == "--extract-here" || clean == "--extract-to-folder" {
+            action = Some("extract".to_string());
+        } else if !clean.starts_with("--") {
+            paths.push(clean);
+        }
+    }
+
+    StartupCommand { action, paths }
 }
 
 pub fn register_context_menu_sync() -> Result<String, String> {
@@ -120,7 +137,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 @=\"Open in Bayzip\"\r\n\
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open\\command]\r\n\
-                @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
+                @=\"\\\"{escaped_exe}\\\" --gui-extract \\\"%1\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer]\r\n\
                 @=\"Bayzip.GamerArchive\"\r\n\
                 \"Content Type\"=\"application/x-bayzip-gamer\"\r\n\
@@ -145,7 +162,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 @=\"Open in Bayzip\"\r\n\
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell\\open\\command]\r\n\
-                @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
+                @=\"\\\"{escaped_exe}\\\" --gui-extract \\\"%1\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay\\OpenWithProgids]\r\n\
                 \"Bayzip.Archive\"=hex(0):\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay_gamer\\OpenWithProgids]\r\n\
@@ -193,7 +210,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                     \"MUIVerb\"=\"Open in Bayzip\"\r\n\
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipExtract\\shell\\04_open\\command]\r\n\
-                    @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n"
+                    @=\"\\\"{escaped_exe}\\\" --gui-extract \\\"%1\\\"\"\r\n\r\n"
                 ));
             }
 
@@ -210,7 +227,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                     \"MUIVerb\"=\"Add to archive...\"\r\n\
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\00_options\\command]\r\n\
-                    @=\"\\\"{escaped_exe}\\\" \\\"%1\\\"\"\r\n\r\n\
+                    @=\"\\\"{escaped_exe}\\\" --gui-compress \\\"%1\\\"\"\r\n\r\n\
                     [HKEY_CURRENT_USER\\Software\\Classes\\{target}\\shell\\BayzipCompress\\shell\\01_bay]\r\n\
                     \"MUIVerb\"=\"Add to .bay (Ultra-Fast)\"\r\n\
                     \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
@@ -360,8 +377,11 @@ fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), Strin
         .map_err(|e| format!("Header write error: {}", e))?;
     
     // Balanced profile level 7 (50% slider equivalent)
+    let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let threads = (total_cores / 2).max(1);
     let mut encoder = zstd::stream::Encoder::new(out_file, 7)
         .map_err(|e| format!("Encoder error: {}", e))?;
+    let _ = encoder.multithread(threads as u32);
 
     let parent = p.parent().unwrap_or(p);
 
@@ -498,7 +518,7 @@ pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<()
         return Err("Target path does not exist".into());
     }
     let parent = p.parent().unwrap_or_else(|| Path::new("."));
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("archive");
+    let stem = archive_stem_name(p);
     let ext = if format.starts_with('.') {
         format.to_string()
     } else {
@@ -580,25 +600,29 @@ fn compute_path_size(p: &Path) -> (u64, bool) {
 }
 
 #[tauri::command]
-fn get_selected_items_info(paths: Vec<String>) -> Vec<SelectedItemInfo> {
-    paths
-        .into_iter()
-        .map(|path_str| {
-            let p = Path::new(&path_str);
-            let name = p
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(&path_str)
-                .to_string();
-            let (size, is_dir) = compute_path_size(p);
-            SelectedItemInfo {
-                path: path_str,
-                name,
-                size,
-                is_dir,
-            }
-        })
-        .collect()
+async fn get_selected_items_info(paths: Vec<String>) -> Result<Vec<SelectedItemInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|path_str| {
+                let p = Path::new(&path_str);
+                let name = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&path_str)
+                    .to_string();
+                let (size, is_dir) = compute_path_size(p);
+                SelectedItemInfo {
+                    path: path_str,
+                    name,
+                    size,
+                    is_dir,
+                }
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("Query error: {}", e))
 }
 
 #[derive(serde::Deserialize)]
@@ -610,6 +634,7 @@ pub struct CompressPayload {
     custom_name: Option<String>,
     encryption: Option<String>,
     password: Option<String>,
+    pub output_dir: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -796,18 +821,36 @@ fn compress_bay(
         let _ = encoder.write_all(&[0u8]); // EOF
         let _ = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
     } else {
-        // Default to Zstandard (Recommended)
+        // Default to Zstandard (Recommended) or .bay_gamer preset
         out_file.write_all(b"BAYZIP\x02\x00")
             .map_err(|e| format!("Header write error: {}", e))?;
-        let zstd_level = match slider_value {
-            0 => 1,
-            25 => 3,
-            50 => 7,
-            75 => 14,
-            _ => 19,
+        let is_gamer = algo_lower.contains("gamer");
+        let zstd_level = if is_gamer {
+            match slider_value {
+                0 => 1,
+                25 => 1,
+                50 => 2,
+                75 => 3,
+                _ => 3,
+            }
+        } else {
+            match slider_value {
+                0 => 1,
+                25 => 3,
+                50 => 7,
+                75 => 14,
+                _ => 19,
+            }
+        };
+        let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let threads = if slider_value <= 0 {
+            1
+        } else {
+            ((slider_value as f64 / 100.0) * total_cores as f64).round().max(1.0) as usize
         };
         let mut encoder = zstd::stream::Encoder::new(BufWriter::new(out_file), zstd_level)
             .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
+        let _ = encoder.multithread(threads as u32);
         for file_str in files {
             let p = Path::new(file_str);
             if p.is_file() {
@@ -1194,15 +1237,25 @@ fn compress_7z(
     Ok(())
 }
 
-#[tauri::command]
-fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressResponse, String> {
+fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<CompressResponse, String> {
     if payload.files.is_empty() {
         return Err("No files selected to compress".to_string());
     }
 
     let start_time = Instant::now();
     let first_path = Path::new(&payload.files[0]);
-    let parent_dir = first_path.parent().unwrap_or_else(|| Path::new("."));
+    let parent_dir = if let Some(ref out_dir) = payload.output_dir {
+        let trimmed = out_dir.trim();
+        if !trimmed.is_empty() {
+            let p = Path::new(trimmed);
+            let _ = std::fs::create_dir_all(p);
+            p.to_path_buf()
+        } else {
+            first_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
+        }
+    } else {
+        first_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
+    };
     
     let base_name = if let Some(ref name) = payload.custom_name {
         let trimmed = name.trim();
@@ -1265,6 +1318,17 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
         "7z" => {
             compress_7z(&payload.files, &output_path, pwd_ref, &app, total_original)?;
         },
+        "bay_gamer" => {
+            compress_bay(
+                &payload.files,
+                &output_path,
+                "gamer",
+                payload.slider_value,
+                pwd_ref,
+                &app,
+                total_original,
+            )?;
+        },
         _ => {
             compress_bay(
                 &payload.files,
@@ -1298,6 +1362,15 @@ fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressRe
         elapsed_ms: start_time.elapsed().as_millis() as u64,
         error: None,
     })
+}
+
+#[tauri::command]
+async fn compress_files(app: AppHandle, payload: CompressPayload) -> Result<CompressResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        compress_files_sync(app, payload)
+    })
+    .await
+    .map_err(|e| format!("Compression task error: {}", e))?
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1334,6 +1407,86 @@ pub struct ArchiveInfo {
     pub file_count: usize,
     pub total_uncompressed_size: u64,
     pub entries: Vec<ArchiveEntryItem>,
+}
+
+pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
+    let clean = raw.replace('\\', "/");
+    let trimmed = clean.trim_start_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let p = Path::new(trimmed);
+    for component in p.components() {
+        match component {
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => return None,
+            _ => {}
+        }
+    }
+    Some(PathBuf::from(trimmed))
+}
+
+pub fn archive_stem_name(p: &Path) -> String {
+    let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("extracted");
+    let lower = filename.to_lowercase();
+
+    let compound_exts = [
+        ".tar.gz",
+        ".tar.zst",
+        ".tar.zstd",
+        ".tar.bz2",
+        ".tar.xz",
+        ".tar.lz4",
+        ".tar.br",
+        ".bay_gamer",
+    ];
+
+    for ext in compound_exts {
+        if lower.ends_with(ext) {
+            let cut_len = filename.len() - ext.len();
+            return filename[..cut_len].to_string();
+        }
+    }
+
+    p.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename)
+        .to_string()
+}
+
+pub fn has_single_root_dir(entries: &[ArchiveEntryItem]) -> bool {
+    let mut candidate_root: Option<&str> = None;
+    let mut non_empty_count = 0;
+
+    for entry in entries {
+        let clean = entry.name.trim().trim_start_matches(|c| c == '/' || c == '\\');
+        if clean.is_empty() || clean == "." {
+            continue;
+        }
+        non_empty_count += 1;
+
+        let first_segment = match clean.split(['/', '\\']).next() {
+            Some(s) if !s.is_empty() => s,
+            _ => return false,
+        };
+
+        // If it has no slash and is a file, then it is a top-level file (not a wrapped single root)
+        if !clean.contains('/') && !clean.contains('\\') && !entry.is_dir {
+            return false;
+        }
+
+        match candidate_root {
+            None => candidate_root = Some(first_segment),
+            Some(r) => {
+                if r != first_segment {
+                    return false;
+                }
+            }
+        }
+    }
+
+    non_empty_count > 0 && candidate_root.is_some()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1556,6 +1709,36 @@ fn list_tar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
     (items, count, total_uncompressed)
 }
 
+fn list_rar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
+    let mut items = Vec::new();
+    let mut cmd = Command::new("tar.exe");
+    cmd.args(["-tf", &p.to_string_lossy()]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    if let Ok(output) = cmd.output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let clean = trimmed.replace('\\', "/");
+                let name = clean.trim_start_matches('/').to_string();
+                let is_dir = clean.ends_with('/');
+                items.push(ArchiveEntryItem {
+                    name,
+                    size: 0,
+                    is_dir,
+                });
+            }
+        }
+    }
+    let count = items.len();
+    (items, count, 0)
+}
+
 fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut items = Vec::new();
     let mut total_size = 0u64;
@@ -1725,6 +1908,7 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
         ArchiveFormat::Zip => list_zip_entries(p, pwd_ref),
         ArchiveFormat::SevenZip => list_7z_entries(p, pwd_ref),
         ArchiveFormat::Tar | ArchiveFormat::TarGz => list_tar_entries(p),
+        ArchiveFormat::Rar => list_rar_entries(p),
         ArchiveFormat::Bay => list_bay_entries(p, pwd_ref),
         _ => {
             let lower = path.to_lowercase();
@@ -1734,6 +1918,8 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
                 list_7z_entries(p, pwd_ref)
             } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
                 list_tar_entries(p)
+            } else if lower.ends_with(".rar") {
+                list_rar_entries(p)
             } else if lower.ends_with(".bay") || lower.ends_with(".bay_gamer") {
                 list_bay_entries(p, pwd_ref)
             } else {
@@ -1780,8 +1966,12 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
 }
 
 #[tauri::command]
-fn get_archive_info(path: String, password: Option<String>) -> Result<ArchiveInfo, String> {
-    inspect_archive(&path, password.as_deref())
+async fn get_archive_info(path: String, password: Option<String>) -> Result<ArchiveInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        inspect_archive(&path, password.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Archive inspect error: {}", e))?
 }
 
 fn extract_bay_stream<R: Read>(
@@ -1845,9 +2035,23 @@ fn extract_bay_stream<R: Read>(
             .map_err(|e| format!("Failed to read entry size: {}", e))?;
         let file_size = u64::from_le_bytes(size_bytes);
 
-        let sanitized = rel_path_str.replace('\\', "/");
-        let trimmed_name = sanitized.trim_start_matches('/');
-        let out_path = dest_dir.join(trimmed_name);
+        let safe_rel_path = match sanitize_archive_path(&rel_path_str) {
+            Some(p) => p,
+            None => {
+                let mut remaining = file_size;
+                let mut buf = vec![0u8; 512 * 1024];
+                while remaining > 0 {
+                    let to_read = (remaining as usize).min(buf.len());
+                    match decoder.read(&mut buf[..to_read]) {
+                        Ok(0) => break,
+                        Ok(n) => remaining -= n as u64,
+                        Err(_) => break,
+                    }
+                }
+                continue;
+            }
+        };
+        let out_path = dest_dir.join(&safe_rel_path);
 
         if let Some(parent) = out_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -1881,7 +2085,7 @@ fn extract_bay_stream<R: Read>(
                             last_emit = Instant::now();
                             let _ = app_handle.emit("extract_progress", ExtractProgress {
                                 percent: 50.0,
-                                current_file: trimmed_name.to_string(),
+                                current_file: safe_rel_path.to_string_lossy().to_string(),
                                 bytes_extracted: total_extracted,
                             });
                         }
@@ -2052,19 +2256,13 @@ fn extract_zip_archive(
         };
 
         let raw_name = file.name();
-        let clean = raw_name.replace('\\', "/");
-        let sanitized = clean.trim_start_matches('/');
-        if sanitized.is_empty() {
-            continue;
-        }
-
-        let safe_path = PathBuf::from(sanitized);
-        if safe_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-            continue;
-        }
+        let safe_path = match sanitize_archive_path(raw_name) {
+            Some(p) => p,
+            None => continue,
+        };
 
         let outpath = dest_dir.join(&safe_path);
-
+        let clean = raw_name.replace('\\', "/");
         if file.is_dir() || clean.ends_with('/') {
             let _ = std::fs::create_dir_all(&outpath);
         } else {
@@ -2081,7 +2279,7 @@ fn extract_zip_archive(
             let pct = ((i + 1) as f64 / total_entries.max(1) as f64) * 100.0;
             let _ = app_handle.emit("extract_progress", ExtractProgress {
                 percent: pct,
-                current_file: sanitized.to_string(),
+                current_file: safe_path.to_string_lossy().to_string(),
                 bytes_extracted: 0,
             });
         }
@@ -2141,19 +2339,13 @@ fn extract_7z_archive(
 
     let res = sz_reader.for_each_entries(|entry, reader| {
         let raw_name = entry.name();
-        let clean = raw_name.replace('\\', "/");
-        let trimmed = clean.trim_start_matches('/');
-        if trimmed.is_empty() {
-            return Ok(true);
-        }
-
-        let safe_path = PathBuf::from(trimmed);
-        if safe_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-            return Ok(true);
-        }
+        let safe_path = match sanitize_archive_path(raw_name) {
+            Some(p) => p,
+            None => return Ok(true),
+        };
 
         let out_path = dest_dir.join(&safe_path);
-
+        let clean = raw_name.replace('\\', "/");
         if entry.is_directory() || clean.ends_with('/') {
             let _ = std::fs::create_dir_all(&out_path);
         } else {
@@ -2178,7 +2370,7 @@ fn extract_7z_archive(
                 };
                 let _ = app_handle.emit("extract_progress", ExtractProgress {
                     percent: pct,
-                    current_file: trimmed.to_string(),
+                    current_file: safe_path.to_string_lossy().to_string(),
                     bytes_extracted: 0,
                 });
             }
@@ -2280,8 +2472,7 @@ pub fn universal_extract(
     }
 }
 
-#[tauri::command]
-fn extract_archive(
+fn extract_archive_sync(
     app: AppHandle,
     archive_path: String,
     destination: Option<String>,
@@ -2294,16 +2485,16 @@ fn extract_archive(
 
     let start_time = Instant::now();
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("extracted");
+    let stem = archive_stem_name(path);
 
     let dest_dir = if let Some(custom_dest) = destination {
         if custom_dest.trim().is_empty() {
-            parent.join(stem)
+            parent.join(&stem)
         } else {
             PathBuf::from(custom_dest)
         }
     } else {
-        parent.join(stem)
+        parent.join(&stem)
     };
 
     let pwd_ref = password.as_deref();
@@ -2324,6 +2515,20 @@ fn extract_archive(
         elapsed_ms: start_time.elapsed().as_millis() as u64,
         error: None,
     })
+}
+
+#[tauri::command]
+async fn extract_archive(
+    app: AppHandle,
+    archive_path: String,
+    destination: Option<String>,
+    password: Option<String>,
+) -> Result<ExtractResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_archive_sync(app, archive_path, destination, password)
+    })
+    .await
+    .map_err(|e| format!("Extraction task error: {}", e))?
 }
 
 pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
@@ -2350,10 +2555,30 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
         return Err("Archive file does not exist".into());
     }
     let parent = p.parent().unwrap_or_else(|| Path::new("."));
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("extracted");
-    let dest = parent.join(stem);
-    let _ = std::fs::create_dir_all(&dest);
-    universal_extract(p, &dest, None, None)?;
+
+    // Check if the archive already contains a single root directory wrapping all files
+    let has_single_root = if let Ok(info) = inspect_archive(archive_path, None) {
+        has_single_root_dir(&info.entries)
+    } else {
+        false
+    };
+
+    let dest = if has_single_root {
+        parent.to_path_buf()
+    } else {
+        let stem = archive_stem_name(p);
+        let d = parent.join(&stem);
+        let _ = std::fs::create_dir_all(&d);
+        d
+    };
+
+    if let Err(e) = universal_extract(p, &dest, None, None) {
+        // If extraction failed and we created a subfolder, clean it up if empty
+        if !has_single_root {
+            let _ = std::fs::remove_dir(&dest);
+        }
+        return Err(e);
+    }
 
     #[cfg(target_os = "windows")]
     {
@@ -2363,11 +2588,6 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
         let _ = refresh_cmd.output();
     }
     Ok(())
-}
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2384,7 +2604,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            greet, 
             get_system_specs, 
             get_cli_args, 
             register_context_menu,
