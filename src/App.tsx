@@ -350,16 +350,22 @@ function App() {
   }, [selectedFormat]);
 
   const getEstimatedRam = () => {
-    if (sliderValue === 0) return "0.0";
+    if (selectedFormat === ".tar") return "< 0.1";
+    if (selectedFormat === ".zip") return sliderValue === 0 ? "< 0.1" : "0.3";
+    if (sliderValue === 0) return "0.1";
     if (!specs) return "0.5";
     const maxSafeRam = Math.max(0.5, specs.free_ram_gb - 1.5);
     return ((sliderValue / 100) * maxSafeRam).toFixed(1);
   };
 
   const getEstimatedCores = () => {
-    if (sliderValue === 0) return 1;
+    if (selectedFormat === ".tar" || selectedFormat === ".zip") return 1;
+    if (sliderValue <= 0) return 1;
     if (!specs) return 1;
-    return Math.max(1, Math.round((sliderValue / 100) * specs.cpu_cores));
+    if (sliderValue === 25) return Math.max(1, Math.floor(specs.cpu_cores / 4));
+    if (sliderValue === 50) return Math.max(1, Math.floor(specs.cpu_cores / 2));
+    if (sliderValue === 75) return Math.max(1, Math.floor((specs.cpu_cores * 3) / 4));
+    return specs.cpu_cores;
   };
 
   const handleSelectFiles = async () => {
@@ -627,11 +633,33 @@ function App() {
   };
 
   const getSliderLabel = () => {
-    if (sliderValue === 0) return "STORE (No Compression)";
-    if (sliderValue === 25) return "FAST";
-    if (sliderValue === 50) return "BALANCED";
-    if (sliderValue === 75) return "HIGH COMPRESSION";
-    return "MAX COMPRESSION";
+    if (selectedFormat === ".tar") {
+      return "STORE (Direct Packaging - No Compression)";
+    }
+    if (selectedFormat === ".zip") {
+      if (sliderValue === 0) return "STORE (No Compression - Instant)";
+      return "DEFLATE (Standard Zip Compression)";
+    }
+    if (selectedFormat === ".7z") {
+      if (sliderValue === 0) return "LZMA2 FASTEST (Level 1)";
+      if (sliderValue === 25) return "LZMA2 FAST (Level 3)";
+      if (sliderValue === 50) return "LZMA2 BALANCED (Level 5)";
+      if (sliderValue === 75) return "LZMA2 MAXIMUM (Level 7)";
+      return "LZMA2 ULTRA (Level 9)";
+    }
+    if (selectedFormat === ".bay_gamer") {
+      if (sliderValue === 0) return "LEVEL 1 (1 Core Eco)";
+      if (sliderValue === 25) return "LEVEL 1 (Fast Mod Pack)";
+      if (sliderValue === 50) return "LEVEL 2 (Balanced Game Stream)";
+      if (sliderValue === 75) return "LEVEL 3 (Ultra Speed - Game Capped)";
+      return "LEVEL 3 (Ultra Speed - All Threads)";
+    }
+    // Default .bay (Zstandard)
+    if (sliderValue === 0) return "LEVEL 1 (Eco / 1 Core)";
+    if (sliderValue === 25) return "LEVEL 3 (Fast)";
+    if (sliderValue === 50) return "LEVEL 7 (Balanced)";
+    if (sliderValue === 75) return "LEVEL 14 (High Compression)";
+    return "LEVEL 19 (Max Compression)";
   };
 
   return (
@@ -921,36 +949,59 @@ function App() {
                       </svg>
                       <span className="text-[11px] font-medium hidden sm:inline">Refresh RAM</span>
                     </button>
-                    <span className="text-xs bg-[#3E3E3E] text-[#A8A8A8] px-2 py-1 rounded-md">
-                      HARDWARE PROFILING ACTIVE
+                    <span className="text-xs bg-[#3E3E3E] text-[#60CDFF] px-2 py-1 rounded-md font-mono text-[10px] tracking-wider uppercase font-semibold">
+                      {selectedFormat === ".bay" && "Zstandard Multi-Core"}
+                      {selectedFormat === ".bay_gamer" && "Zstd Gamer Capped"}
+                      {selectedFormat === ".7z" && "LZMA2 Multi-Thread"}
+                      {selectedFormat === ".zip" && "Zip Single-Thread"}
+                      {selectedFormat === ".tar" && "Store Direct I/O"}
                     </span>
                   </div>
                 </div>
 
-                <div className="mb-6">
-                  <div className="flex justify-between items-end mb-2">
-                    <span className="text-sm font-semibold text-[#60CDFF]">{getSliderLabel()}</span>
-                  </div>
-
-                  <div className="relative pt-2 pb-8">
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="25"
-                      value={sliderValue}
-                      onChange={(e) => setSliderValue(Number(e.target.value))}
-                      className="w-full h-1 bg-[#3E3E3E] rounded-lg appearance-none cursor-pointer accent-[#60CDFF] relative z-10"
-                    />
-                    <div className="absolute w-[calc(100%-16px)] left-[8px] mt-2">
-                      <span className="absolute left-[0%] -translate-x-1/2 text-xs text-[#A8A8A8]">0</span>
-                      <span className="absolute left-[25%] -translate-x-1/2 text-xs text-[#A8A8A8]">25</span>
-                      <span className="absolute left-[50%] -translate-x-1/2 text-xs text-[#A8A8A8]">50</span>
-                      <span className="absolute left-[75%] -translate-x-1/2 text-xs text-[#A8A8A8]">75</span>
-                      <span className="absolute left-[100%] -translate-x-1/2 text-xs text-[#A8A8A8]">100</span>
+                {selectedFormat === ".tar" ? (
+                  <div className="bg-[#202020] border border-[#3E3E3E] rounded-md p-4 flex items-center space-x-3.5 mb-6">
+                    <div className="w-10 h-10 rounded-lg bg-[#60CDFF]/10 border border-[#60CDFF]/30 flex items-center justify-center shrink-0">
+                      <svg className="w-5 h-5 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-xs font-semibold text-white">Direct Packaging Mode</h4>
+                      <p className="text-[11px] text-[#A8A8A8] mt-0.5">
+                        TAR files bundle files together without compression. Zero compression latency and minimal CPU overhead.
+                      </p>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="mb-6">
+                    <div className="flex justify-between items-end mb-2">
+                      <span className="text-sm font-semibold text-[#60CDFF]">{getSliderLabel()}</span>
+                      {selectedFormat === ".zip" && (
+                        <span className="text-[11px] text-[#A8A8A8]">0% = Store, 25-100% = Deflate</span>
+                      )}
+                    </div>
+
+                    <div className="relative pt-2 pb-8">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="25"
+                        value={sliderValue}
+                        onChange={(e) => setSliderValue(Number(e.target.value))}
+                        className="w-full h-1 bg-[#3E3E3E] rounded-lg appearance-none cursor-pointer accent-[#60CDFF] relative z-10"
+                      />
+                      <div className="absolute w-[calc(100%-16px)] left-[8px] mt-2">
+                        <span className="absolute left-[0%] -translate-x-1/2 text-xs text-[#A8A8A8]">0</span>
+                        <span className="absolute left-[25%] -translate-x-1/2 text-xs text-[#A8A8A8]">25</span>
+                        <span className="absolute left-[50%] -translate-x-1/2 text-xs text-[#A8A8A8]">50</span>
+                        <span className="absolute left-[75%] -translate-x-1/2 text-xs text-[#A8A8A8]">75</span>
+                        <span className="absolute left-[100%] -translate-x-1/2 text-xs text-[#A8A8A8]">100</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Metrics */}
                 <div className="grid grid-cols-2 gap-4">
@@ -967,7 +1018,11 @@ function App() {
                       {getEstimatedRam()} <span className="text-sm font-normal text-[#A8A8A8]">GB</span>
                     </p>
                     <p className="text-[11px] text-[#7A7A7A] mt-1">
-                      Dynamic safe cap ({specs ? specs.free_ram_gb.toFixed(1) : "?"} GB available)
+                      {selectedFormat === ".tar"
+                        ? "Direct stream buffer"
+                        : selectedFormat === ".zip"
+                        ? "Standard Deflate buffer"
+                        : `Dynamic safe cap (${specs ? specs.free_ram_gb.toFixed(1) : "?"} GB available)`}
                     </p>
                   </div>
 
@@ -985,7 +1040,15 @@ function App() {
                       <span className="text-sm font-normal text-[#A8A8A8]">/ {specs?.cpu_cores || "?"}</span>
                     </p>
                     <p className="text-[11px] text-[#7A7A7A] mt-1">
-                      {sliderValue === 100 ? "100% Full Multithreading" : `${sliderValue}% Thread Allocation`}
+                      {selectedFormat === ".tar"
+                        ? "Single-stream sequential I/O"
+                        : selectedFormat === ".zip"
+                        ? "Standard ZIP is single-threaded"
+                        : selectedFormat === ".7z"
+                        ? `${getEstimatedCores()} Threads allocated for LZMA2`
+                        : sliderValue === 100
+                        ? "100% Full Multithreading"
+                        : `${sliderValue}% Thread Allocation`}
                     </p>
                   </div>
                 </div>

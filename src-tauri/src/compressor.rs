@@ -10,7 +10,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce, Key
 };
 use rand::RngCore;
-use sevenz_rust2::{ArchiveWriter, ArchiveEntry, EncoderConfiguration, EncoderMethod};
+use sevenz_rust2::{ArchiveWriter, ArchiveEntry, EncoderConfiguration};
 
 #[cfg(target_os = "windows")]
 use std::process::Command;
@@ -520,6 +520,7 @@ pub fn compress_tar(
 pub fn compress_7z(
     files: &[String],
     output_path: &Path,
+    slider_value: i32,
     password: Option<&str>,
     app: &AppHandle,
     total_original: u64,
@@ -539,7 +540,23 @@ pub fn compress_7z(
     } else {
         sz.set_encrypt_header(false);
     }
-    methods.push(EncoderMethod::LZMA2.into());
+
+    let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let threads = calculate_target_threads(slider_value, total_cores) as u32;
+    let lzma_level = match slider_value {
+        s if s <= 0 => 1,
+        25 => 3,
+        50 => 5,
+        75 => 7,
+        _ => 9,
+    };
+
+    let lzma2_opt = if threads > 1 {
+        sevenz_rust2::encoder_options::Lzma2Options::from_level_mt(lzma_level, threads, 32 * 1024 * 1024)
+    } else {
+        sevenz_rust2::encoder_options::Lzma2Options::from_level(lzma_level)
+    };
+    methods.push(lzma2_opt.into());
     sz.set_content_methods(methods);
 
     let mut bytes_processed: u64 = 0;
@@ -793,7 +810,15 @@ pub fn headless_quick_compress_7z(p: &Path, output_path: &Path) -> Result<(), St
     let mut sz = ArchiveWriter::create(output_path)
         .map_err(|e| format!("Failed to create 7z: {}", e))?;
     sz.set_encrypt_header(false);
-    sz.set_content_methods(vec![EncoderMethod::LZMA2.into()]);
+
+    let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let threads = calculate_target_threads(50, total_cores) as u32;
+    let lzma2_opt = if threads > 1 {
+        sevenz_rust2::encoder_options::Lzma2Options::from_level_mt(5, threads, 32 * 1024 * 1024)
+    } else {
+        sevenz_rust2::encoder_options::Lzma2Options::from_level(5)
+    };
+    sz.set_content_methods(vec![lzma2_opt.into()]);
 
     let parent = p.parent().unwrap_or(p);
     if p.is_file() {
@@ -978,7 +1003,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
             compress_tar(&payload.files, &output_path, &app, total_original)?;
         },
         "7z" => {
-            compress_7z(&payload.files, &output_path, pwd_ref, &app, total_original)?;
+            compress_7z(&payload.files, &output_path, payload.slider_value, pwd_ref, &app, total_original)?;
         },
         "bay_gamer" => {
             compress_bay(
