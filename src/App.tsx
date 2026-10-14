@@ -1350,14 +1350,17 @@ function App() {
               <div className="flex justify-end pt-2">
                 <button
                   type="button"
-                  disabled={isCompressing}
-                  onClick={handleCompress}
-                  className={`px-8 py-2.5 bg-[#60CDFF] hover:bg-[#4FB8E6] text-black font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 ${
-                    isCompressing ? "opacity-75 cursor-not-allowed" : "cursor-pointer"
+                  disabled={isCancellingCompress}
+                  onClick={isCompressing ? handleCancelCompress : handleCompress}
+                  className={`px-8 py-2.5 font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isCompressing
+                      ? "bg-red-950/40 hover:bg-red-900/60 text-[#FF99A4] hover:text-[#FFB3BA] border border-red-800/60 hover:border-red-600"
+                      : "bg-[#60CDFF] hover:bg-[#4FB8E6] text-black"
                   }`}
+                  title={isCompressing ? "Click to cancel compression" : undefined}
                 >
                   {isCompressing && (
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-black" fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-[#FF99A4]" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
@@ -1366,7 +1369,7 @@ function App() {
                     {isCompressing
                       ? isCancellingCompress
                         ? "Cancelling..."
-                        : "Compressing..."
+                        : "Cancel Compression"
                       : selectedFiles.length > 0
                       ? "Compress Now"
                       : "Select Files to Compress"}
