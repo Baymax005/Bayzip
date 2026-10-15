@@ -13,7 +13,7 @@ use aes_gcm::{
 };
 use sha2::{Sha256, Digest};
 
-use crate::types::{ArchiveEntryItem, ArchiveInfo, ArchiveFormat};
+use crate::types::{ArchiveEntryItem, ArchiveInfo, ArchiveFormat, ArchiveEntryPreview};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -564,5 +564,471 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
         file_count,
         total_uncompressed_size,
         entries,
+    })
+}
+
+pub fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] } else { 0 };
+
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(b2 & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+const RESTRICTED_EXECUTABLE_EXTS: &[&str] = &[
+    "exe", "dll", "sys", "msi", "com", "scr", "pif", "cpl", "hta", "drv", "ocx"
+];
+
+const RESTRICTED_SCRIPT_EXTS: &[&str] = &[
+    "bat", "cmd", "vbs", "vbe", "wsf", "wsh", "ps1", "ps1xml", "ps2", "psc1", "reg"
+];
+
+const IMAGE_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "svg"
+];
+
+const TEXT_CODE_EXTS: &[&str] = &[
+    "txt", "md", "markdown", "json", "yaml", "yml", "toml", "xml", "html", "htm",
+    "css", "scss", "sass", "less", "js", "mjs", "cjs", "ts", "mts", "cts", "jsx",
+    "tsx", "rs", "c", "cpp", "cc", "cxx", "h", "hpp", "cs", "go", "py", "rb", "php",
+    "java", "kt", "kts", "swift", "sh", "bash", "zsh", "csv", "tsv", "log", "ini",
+    "cfg", "conf", "env", "sql", "gitignore", "gitattributes", "editorconfig",
+    "dockerfile", "r", "lua", "dart", "proto", "graphql", "properties"
+];
+
+fn read_bay_entry_from_stream<R: Read>(mut decoder: R, target_entry: &str) -> Result<(Vec<u8>, u64), String> {
+    let target = target_entry.replace('\\', "/").trim_start_matches('/').to_string();
+    let max_preview_bytes = 15 * 1024 * 1024; // 15 MB max
+
+    let mut first_byte = [0u8; 1];
+    let mut has_first = false;
+    if decoder.read_exact(&mut first_byte).is_ok() {
+        if first_byte[0] == b'B' {
+            let mut rest = [0u8; 6];
+            let _ = decoder.read_exact(&mut rest);
+        } else {
+            has_first = true;
+        }
+    }
+
+    loop {
+        let entry_type = if has_first {
+            has_first = false;
+            first_byte[0]
+        } else {
+            let mut b = [0u8; 1];
+            match decoder.read_exact(&mut b) {
+                Ok(_) => b[0],
+                Err(_) => break,
+            }
+        };
+
+        if entry_type == 0 {
+            break;
+        }
+
+        let mut len_bytes = [0u8; 4];
+        if decoder.read_exact(&mut len_bytes).is_err() { break; }
+        let name_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut name_buf = vec![0u8; name_len];
+        if decoder.read_exact(&mut name_buf).is_err() { break; }
+        let rel_path_str = String::from_utf8_lossy(&name_buf).to_string();
+
+        let mut size_bytes = [0u8; 8];
+        if decoder.read_exact(&mut size_bytes).is_err() { break; }
+        let file_size = u64::from_le_bytes(size_bytes);
+
+        let clean = rel_path_str.replace('\\', "/").trim_start_matches('/').to_string();
+        if clean == target {
+            if entry_type == 2 || clean.ends_with('/') {
+                return Err("Cannot preview a folder".into());
+            }
+            let to_read = (file_size as usize).min(max_preview_bytes);
+            let mut data = vec![0u8; to_read];
+            decoder.read_exact(&mut data).map_err(|e| format!("Failed to read entry: {}", e))?;
+            return Ok((data, file_size));
+        }
+
+        // Skip payload
+        let mut to_skip = file_size;
+        let mut sink = [0u8; 64 * 1024];
+        while to_skip > 0 {
+            let chunk = (to_skip as usize).min(sink.len());
+            match decoder.read(&mut sink[..chunk]) {
+                Ok(0) => break,
+                Ok(n) => to_skip -= n as u64,
+                Err(_) => break,
+            }
+        }
+    }
+
+    Err(format!("Entry '{}' not found in archive", target_entry))
+}
+
+fn preview_bay_entry_bytes(path: &Path, entry_name: &str, password: Option<&str>) -> Result<(Vec<u8>, u64), String> {
+    let mut file = File::open(path).map_err(|e| format!("Failed to open .bay archive: {}", e))?;
+
+    let mut magic = [0u8; 8];
+    let n = file.read(&mut magic).unwrap_or(0);
+
+    if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
+        let pwd = match password {
+            Some(p) if !p.trim().is_empty() => p.trim(),
+            _ => return Err("Password required for encrypted .bay archive".into()),
+        };
+
+        let header_len = if magic.starts_with(b"BAYENC\x02") { 8 } else { 7 };
+        let _ = file.seek(std::io::SeekFrom::Start(header_len));
+        let mut salt = [0u8; 16];
+        if file.read_exact(&mut salt).is_err() { return Err("Corrupted encrypted archive salt".into()); }
+        let mut nonce_bytes = [0u8; 12];
+        if file.read_exact(&mut nonce_bytes).is_err() { return Err("Corrupted encrypted archive nonce".into()); }
+
+        let mut ciphertext = Vec::new();
+        if file.read_to_end(&mut ciphertext).is_err() { return Err("Failed to read encrypted archive".into()); }
+
+        let key_bytes = derive_bay_key(pwd, &salt);
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let plaintext = match cipher.decrypt(nonce, ciphertext.as_ref()) {
+            Ok(pt) => pt,
+            Err(_) => return Err("Incorrect password for .bay archive".into()),
+        };
+
+        if plaintext.starts_with(b"BAYBRO\x02") {
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
+            return read_bay_entry_from_stream(decoder, entry_name);
+        } else if plaintext.starts_with(b"BAYLZ4\x02") {
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
+            return read_bay_entry_from_stream(decoder, entry_name);
+        } else if plaintext.starts_with(b"BAYZIP\x02") {
+            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
+            let decoder = zstd::stream::Decoder::new(&plaintext[offset..]).map_err(|e| e.to_string())?;
+            return read_bay_entry_from_stream(decoder, entry_name);
+        } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
+            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
+            return read_bay_entry_from_stream(decoder, entry_name);
+        } else {
+            let decoder = zstd::stream::Decoder::new(&plaintext[..]).map_err(|e| e.to_string())?;
+            return read_bay_entry_from_stream(decoder, entry_name);
+        }
+    }
+
+    let _ = file.seek(std::io::SeekFrom::Start(0));
+    let mut magic_header = [0u8; 8];
+    let n = file.read(&mut magic_header).unwrap_or(0);
+    if n >= 7 && magic_header.starts_with(b"BAYBRO\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        let _ = file.seek(std::io::SeekFrom::Start(offset));
+        let decoder = brotli::Decompressor::new(file, 64 * 1024);
+        read_bay_entry_from_stream(decoder, entry_name)
+    } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        let _ = file.seek(std::io::SeekFrom::Start(offset));
+        let decoder = lz4_flex::frame::FrameDecoder::new(file);
+        read_bay_entry_from_stream(decoder, entry_name)
+    } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
+        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        let _ = file.seek(std::io::SeekFrom::Start(offset));
+        let decoder = zstd::stream::Decoder::new(file).map_err(|e| e.to_string())?;
+        read_bay_entry_from_stream(decoder, entry_name)
+    } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
+        let _ = file.seek(std::io::SeekFrom::Start(0));
+        let decoder = lz4_flex::frame::FrameDecoder::new(file);
+        read_bay_entry_from_stream(decoder, entry_name)
+    } else {
+        let _ = file.seek(std::io::SeekFrom::Start(0));
+        let decoder = zstd::stream::Decoder::new(file).map_err(|e| e.to_string())?;
+        read_bay_entry_from_stream(decoder, entry_name)
+    }
+}
+
+fn preview_zip_entry_bytes(path: &Path, entry_name: &str, password: Option<&str>) -> Result<(Vec<u8>, u64), String> {
+    let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
+    let target = entry_name.replace('\\', "/").trim_start_matches('/').to_string();
+    let max_preview = 15 * 1024 * 1024;
+
+    for i in 0..zip.len() {
+        let name_match = {
+            if let Ok(entry) = zip.by_index_raw(i) {
+                let clean = entry.name().replace('\\', "/").trim_start_matches('/').to_string();
+                clean == target
+            } else {
+                false
+            }
+        };
+
+        if name_match {
+            let mut entry = match password {
+                Some(pwd) if !pwd.trim().is_empty() => {
+                    zip.by_index_decrypt(i, pwd.trim().as_bytes())
+                        .map_err(|e| format!("Password decryption failed: {}", e))?
+                }
+                _ => {
+                    zip.by_index(i).map_err(|e| {
+                        if e.to_string().contains("password") || e.to_string().contains("Password") {
+                            "Password required for encrypted ZIP archive".to_string()
+                        } else {
+                            format!("Failed to open zip entry: {}", e)
+                        }
+                    })?
+                }
+            };
+
+            if entry.is_dir() {
+                return Err("Cannot preview a folder".into());
+            }
+
+            let file_size = entry.size();
+            let to_read = (file_size as usize).min(max_preview);
+            let mut buf = vec![0u8; to_read];
+            entry.read_exact(&mut buf).map_err(|e| format!("Failed to read zip entry data: {}", e))?;
+            return Ok((buf, file_size));
+        }
+    }
+
+    Err(format!("Entry '{}' not found in zip archive", entry_name))
+}
+
+fn preview_7z_entry_bytes(path: &Path, entry_name: &str, password: Option<&str>) -> Result<(Vec<u8>, u64), String> {
+    let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let pwd = password.map(|s| Password::from(s.trim())).unwrap_or_else(Password::empty);
+    let mut sz = sevenz_rust2::ArchiveReader::new(file, pwd)
+        .map_err(|e| format!("Failed to open 7z archive: {}", e))?;
+    let target = entry_name.replace('\\', "/").trim_start_matches('/').to_string();
+    let max_preview = 15 * 1024 * 1024;
+
+    let mut result: Option<(Vec<u8>, u64)> = None;
+
+    sz.for_each_entries(|entry, reader| {
+        let clean = entry.name().replace('\\', "/").trim_start_matches('/').to_string();
+        if clean == target {
+            if entry.is_directory() {
+                return Ok(false);
+            }
+            let size = entry.size();
+            let to_read = (size as usize).min(max_preview);
+            let mut buf = vec![0u8; to_read];
+            if let Err(e) = reader.read_exact(&mut buf) {
+                return Err(sevenz_rust2::Error::from(e));
+            }
+            result = Some((buf, size));
+            return Ok(false); // Stop iterating
+        }
+        Ok(true)
+    }).map_err(|e| format!("7z reading error: {}", e))?;
+
+    match result {
+        Some(res) => Ok(res),
+        None => Err(format!("Entry '{}' not found in 7z archive", entry_name)),
+    }
+}
+
+fn preview_tar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>, u64), String> {
+    let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let target = entry_name.replace('\\', "/").trim_start_matches('/').to_string();
+    let max_preview = 15 * 1024 * 1024;
+    let is_gz = path.to_string_lossy().to_lowercase().ends_with(".gz") || path.to_string_lossy().to_lowercase().ends_with(".tgz");
+
+    if is_gz {
+        let gz = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(gz);
+        let entries = archive.entries().map_err(|e| format!("Failed to read tar.gz entries: {}", e))?;
+        for entry in entries.flatten() {
+            if let Ok(p) = entry.path() {
+                let clean = p.to_string_lossy().replace('\\', "/").trim_start_matches('/').to_string();
+                if clean == target {
+                    if entry.header().entry_type().is_dir() {
+                        return Err("Cannot preview a folder".into());
+                    }
+                    let size = entry.size();
+                    let to_read = (size as usize).min(max_preview);
+                    let mut buf = vec![0u8; to_read];
+                    let mut reader = entry;
+                    reader.read_exact(&mut buf).map_err(|e| format!("Failed to read tar entry: {}", e))?;
+                    return Ok((buf, size));
+                }
+            }
+        }
+    } else {
+        let mut archive = tar::Archive::new(file);
+        let entries = archive.entries().map_err(|e| format!("Failed to read tar entries: {}", e))?;
+        for entry in entries.flatten() {
+            if let Ok(p) = entry.path() {
+                let clean = p.to_string_lossy().replace('\\', "/").trim_start_matches('/').to_string();
+                if clean == target {
+                    if entry.header().entry_type().is_dir() {
+                        return Err("Cannot preview a folder".into());
+                    }
+                    let size = entry.size();
+                    let to_read = (size as usize).min(max_preview);
+                    let mut buf = vec![0u8; to_read];
+                    let mut reader = entry;
+                    reader.read_exact(&mut buf).map_err(|e| format!("Failed to read tar entry: {}", e))?;
+                    return Ok((buf, size));
+                }
+            }
+        }
+    }
+
+    Err(format!("Entry '{}' not found in tar archive", entry_name))
+}
+
+fn preview_rar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>, u64), String> {
+    let mut cmd = Command::new("tar.exe");
+    cmd.args(["-xf", &path.to_string_lossy(), entry_name, "-O"]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output().map_err(|e| format!("Failed to run tar command: {}", e))?;
+    if !output.status.success() {
+        return Err(format!("Extraction command failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    let data = output.stdout;
+    let size = data.len() as u64;
+    Ok((data, size))
+}
+
+pub fn preview_archive_entry_sync(
+    archive_path: &str,
+    entry_name: &str,
+    password: Option<&str>,
+) -> Result<ArchiveEntryPreview, String> {
+    let p = Path::new(archive_path);
+    if !p.exists() {
+        return Err("Archive file not found".into());
+    }
+
+    let ext = entry_name.rsplit('.').next().unwrap_or("").to_lowercase();
+
+    // Check restricted executables first
+    if RESTRICTED_EXECUTABLE_EXTS.contains(&ext.as_str()) {
+        return Ok(ArchiveEntryPreview {
+            name: entry_name.to_string(),
+            size: 0,
+            preview_type: "restricted".to_string(),
+            content: None,
+            mime_type: None,
+            is_restricted: true,
+            warning: Some("Restricted Executable: Binaries (.exe, .dll, .sys, etc.) cannot be executed inside the preview viewer for system security.".to_string()),
+        });
+    }
+
+    let detected = detect_archive_type(p);
+    let (bytes, total_size) = match detected {
+        ArchiveFormat::Bay => preview_bay_entry_bytes(p, entry_name, password)?,
+        ArchiveFormat::Zip => preview_zip_entry_bytes(p, entry_name, password)?,
+        ArchiveFormat::SevenZip => preview_7z_entry_bytes(p, entry_name, password)?,
+        ArchiveFormat::Tar | ArchiveFormat::TarGz => preview_tar_entry_bytes(p, entry_name)?,
+        ArchiveFormat::Rar => preview_rar_entry_bytes(p, entry_name)?,
+        ArchiveFormat::Unknown => {
+            let lower = archive_path.to_lowercase();
+            if lower.ends_with(".bay") || lower.ends_with(".bay_gamer") {
+                preview_bay_entry_bytes(p, entry_name, password)?
+            } else if lower.ends_with(".zip") {
+                preview_zip_entry_bytes(p, entry_name, password)?
+            } else if lower.ends_with(".7z") {
+                preview_7z_entry_bytes(p, entry_name, password)?
+            } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+                preview_tar_entry_bytes(p, entry_name)?
+            } else if lower.ends_with(".rar") {
+                preview_rar_entry_bytes(p, entry_name)?
+            } else {
+                return Err("Unsupported archive format for preview".into());
+            }
+        }
+    };
+
+    // If restricted script (.bat, .cmd, .ps1, .vbs)
+    if RESTRICTED_SCRIPT_EXTS.contains(&ext.as_str()) {
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        return Ok(ArchiveEntryPreview {
+            name: entry_name.to_string(),
+            size: total_size,
+            preview_type: "restricted".to_string(),
+            content: Some(text),
+            mime_type: Some("text/plain".to_string()),
+            is_restricted: true,
+            warning: Some("Execution Blocked: Shell scripts (.bat, .cmd, .ps1, .vbs) are displayed in safe read-only preview mode. Accidental execution is completely blocked.".to_string()),
+        });
+    }
+
+    // Check image types
+    if IMAGE_EXTS.contains(&ext.as_str()) {
+        let mime = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            "ico" => "image/x-icon",
+            "svg" => "image/svg+xml",
+            _ => "image/png",
+        };
+        let data_url = format!("data:{};base64,{}", mime, base64_encode(&bytes));
+        return Ok(ArchiveEntryPreview {
+            name: entry_name.to_string(),
+            size: total_size,
+            preview_type: "image".to_string(),
+            content: Some(data_url),
+            mime_type: Some(mime.to_string()),
+            is_restricted: false,
+            warning: None,
+        });
+    }
+
+    // Check text/code or UTF-8
+    let is_text_ext = TEXT_CODE_EXTS.contains(&ext.as_str());
+    let is_valid_utf8 = !bytes.is_empty() && !bytes[..bytes.len().min(512)].contains(&0) && std::str::from_utf8(&bytes).is_ok();
+
+    if is_text_ext || is_valid_utf8 {
+        let (content_str, warning) = if bytes.len() > 1_000_000 {
+            let truncated = String::from_utf8_lossy(&bytes[..1_000_000]).to_string();
+            (truncated, Some("Preview truncated to 1 MB for high performance.".to_string()))
+        } else {
+            (String::from_utf8_lossy(&bytes).to_string(), None)
+        };
+
+        return Ok(ArchiveEntryPreview {
+            name: entry_name.to_string(),
+            size: total_size,
+            preview_type: "text".to_string(),
+            content: Some(content_str),
+            mime_type: Some("text/plain".to_string()),
+            is_restricted: false,
+            warning,
+        });
+    }
+
+    // Other binary
+    Ok(ArchiveEntryPreview {
+        name: entry_name.to_string(),
+        size: total_size,
+        preview_type: "binary".to_string(),
+        content: None,
+        mime_type: None,
+        is_restricted: false,
+        warning: Some("Preview unavailable: Binary files require full extraction to view.".to_string()),
     })
 }

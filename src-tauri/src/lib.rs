@@ -123,8 +123,26 @@ async fn get_archive_info(path: String, password: Option<String>) -> Result<Arch
 }
 
 #[tauri::command]
+async fn preview_archive_entry(
+    archive_path: String,
+    entry_name: String,
+    password: Option<String>,
+) -> Result<ArchiveEntryPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        inspector::preview_archive_entry_sync(&archive_path, &entry_name, password.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Preview task error: {}", e))?
+}
+
+#[tauri::command]
 fn cancel_compression() {
     crate::compressor::cancel_compression_flag();
+}
+
+#[tauri::command]
+fn cancel_extraction() {
+    crate::extractor::cancel_extraction_flag();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -146,9 +164,11 @@ pub fn run() {
             register_context_menu,
             compress_files,
             cancel_compression,
+            cancel_extraction,
             get_selected_items_info,
             extract_archive,
-            get_archive_info
+            get_archive_info,
+            preview_archive_entry
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

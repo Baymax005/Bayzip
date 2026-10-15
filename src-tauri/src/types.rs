@@ -40,6 +40,17 @@ pub struct ArchiveEntryItem {
 }
 
 #[derive(Serialize, Clone, Debug)]
+pub struct ArchiveEntryPreview {
+    pub name: String,
+    pub size: u64,
+    pub preview_type: String,
+    pub content: Option<String>,
+    pub mime_type: Option<String>,
+    pub is_restricted: bool,
+    pub warning: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug)]
 pub struct ArchiveInfo {
     pub path: String,
     pub filename: String,

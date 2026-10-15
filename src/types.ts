@@ -47,6 +47,16 @@ export interface ArchiveEntryItem {
   is_dir: boolean;
 }
 
+export interface ArchiveEntryPreview {
+  name: string;
+  size: number;
+  preview_type: "text" | "image" | "binary" | "restricted" | "unsupported" | "error";
+  content?: string;
+  mime_type?: string;
+  is_restricted: boolean;
+  warning?: string;
+}
+
 export interface ArchiveInfo {
   path: string;
   filename: string;

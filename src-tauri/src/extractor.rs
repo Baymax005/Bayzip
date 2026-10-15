@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, Write, Seek, BufWriter};
+use std::io::{Read, Write, Seek, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
@@ -16,6 +16,22 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub static CANCEL_EXTRACTION: AtomicBool = AtomicBool::new(false);
+
+pub fn cancel_extraction_flag() {
+    CANCEL_EXTRACTION.store(true, Ordering::SeqCst);
+}
+
+pub fn is_extraction_cancelled() -> bool {
+    CANCEL_EXTRACTION.load(Ordering::Relaxed)
+}
+
+pub fn reset_extraction_cancel_flag() {
+    CANCEL_EXTRACTION.store(false, Ordering::SeqCst);
+}
 
 use crate::types::{ArchiveFormat, ExtractResponse, ExtractProgress};
 use crate::priority::ScopedPriorityGuard;
@@ -58,7 +74,14 @@ pub fn extract_bay_stream<R: Read>(
         Err(e) => return Err(format!("Error reading archive header: {}", e)),
     }
 
+    // Allocate single 2 MB reusable I/O buffer outside the entry loop
+    let mut io_buf = vec![0u8; 2 * 1024 * 1024];
+
     loop {
+        if is_extraction_cancelled() {
+            return Err("Extraction cancelled by user".to_string());
+        }
+
         let entry_type = if has_first {
             has_first = false;
             first_byte[0]
@@ -93,10 +116,9 @@ pub fn extract_bay_stream<R: Read>(
             Some(p) => p,
             None => {
                 let mut remaining = file_size;
-                let mut buf = vec![0u8; 512 * 1024];
                 while remaining > 0 {
-                    let to_read = (remaining as usize).min(buf.len());
-                    match decoder.read(&mut buf[..to_read]) {
+                    let to_read = (remaining as usize).min(io_buf.len());
+                    match decoder.read(&mut io_buf[..to_read]) {
                         Ok(0) => break,
                         Ok(n) => remaining -= n as u64,
                         Err(_) => break,
@@ -111,54 +133,93 @@ pub fn extract_bay_stream<R: Read>(
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let out_file = File::create(&out_path)
+        let mut out_file = File::create(&out_path)
             .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
-        let mut writer = BufWriter::with_capacity(512 * 1024, out_file);
 
-        let mut remaining = file_size;
-        let mut buf = vec![0u8; 512 * 1024];
-        let mut write_err: Option<String> = None;
+        if file_size <= 64 * 1024 {
+            // Tiny files (<= 64 KB): Direct write to disk without BufWriter allocation overhead
+            let sz = file_size as usize;
+            if sz > 0 {
+                decoder.read_exact(&mut io_buf[..sz])
+                    .map_err(|e| format!("Error reading decompressed entry: {}", e))?;
+                out_file.write_all(&io_buf[..sz])
+                    .map_err(|e| format!("Error writing extracted file: {}", e))?;
+                total_extracted += file_size;
+            }
 
-        while remaining > 0 {
-            let to_read = (remaining as usize).min(buf.len());
-            match decoder.read(&mut buf[..to_read]) {
-                Ok(0) => {
-                    write_err = Some("Premature EOF inside archive entry".into());
-                    break;
-                }
-                Ok(n) => {
-                    if let Err(e) = writer.write_all(&buf[..n]) {
-                        write_err = Some(format!("Error writing extracted file: {}", e));
-                        break;
-                    }
-                    remaining -= n as u64;
-                    total_extracted += n as u64;
-
-                    if let Some(app_handle) = app {
-                        if last_emit.elapsed().as_millis() >= 50 {
-                            last_emit = Instant::now();
-                            let _ = app_handle.emit("extract_progress", ExtractProgress {
-                                percent: 50.0,
-                                current_file: safe_rel_path.to_string_lossy().to_string(),
-                                bytes_extracted: total_extracted,
-                            });
-                        }
-                    }
-                }
-                Err(e) => {
-                    write_err = Some(format!("Error reading decompressed stream: {}", e));
-                    break;
+            if let Some(app_handle) = app {
+                if last_emit.elapsed().as_millis() >= 50 {
+                    last_emit = Instant::now();
+                    let _ = app_handle.emit("extract_progress", ExtractProgress {
+                        percent: 50.0,
+                        current_file: safe_rel_path.to_string_lossy().to_string(),
+                        bytes_extracted: total_extracted,
+                    });
                 }
             }
+        } else {
+            // Pre-allocate space for large files (> 16 MB) to prevent NTFS/disk fragmentation
+            if file_size > 16 * 1024 * 1024 {
+                let _ = out_file.set_len(file_size);
+            }
+
+            // Adaptive buffer capacity: 1 MB for medium files, 8 MB for large files (eliminates HDD thrashing)
+            let cap = if file_size <= 16 * 1024 * 1024 {
+                1024 * 1024
+            } else {
+                8 * 1024 * 1024
+            };
+            let mut writer = BufWriter::with_capacity(cap, out_file);
+
+            let mut remaining = file_size;
+            let mut write_err: Option<String> = None;
+
+            while remaining > 0 {
+                if is_extraction_cancelled() {
+                    write_err = Some("Extraction cancelled by user".into());
+                    break;
+                }
+                let to_read = (remaining as usize).min(io_buf.len());
+                match decoder.read(&mut io_buf[..to_read]) {
+                    Ok(0) => {
+                        write_err = Some("Premature EOF inside archive entry".into());
+                        break;
+                    }
+                    Ok(n) => {
+                        if let Err(e) = writer.write_all(&io_buf[..n]) {
+                            write_err = Some(format!("Error writing extracted file: {}", e));
+                            break;
+                        }
+                        remaining -= n as u64;
+                        total_extracted += n as u64;
+
+                        if let Some(app_handle) = app {
+                            if last_emit.elapsed().as_millis() >= 50 {
+                                last_emit = Instant::now();
+                                let _ = app_handle.emit("extract_progress", ExtractProgress {
+                                    percent: 50.0,
+                                    current_file: safe_rel_path.to_string_lossy().to_string(),
+                                    bytes_extracted: total_extracted,
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        write_err = Some(format!("Error reading decompressed stream: {}", e));
+                        break;
+                    }
+                }
+            }
+
+            if let Some(err) = write_err {
+                drop(writer);
+                let _ = std::fs::remove_file(&out_path);
+                return Err(err);
+            }
+
+            writer.flush().map_err(|e| format!("Flush error: {}", e))?;
         }
 
-        if let Some(err) = write_err {
-            drop(writer);
-            let _ = std::fs::remove_file(&out_path);
-            return Err(err);
-        }
-
-        writer.flush().map_err(|e| format!("Flush error: {}", e))?;
         extracted_files.push(out_path.to_string_lossy().to_string());
     }
 
@@ -171,8 +232,9 @@ pub fn extract_bay_archive(
     password: Option<&str>,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
-    let mut file = File::open(archive_path)
+    let raw_file = File::open(archive_path)
         .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
+    let mut file = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
 
     let mut magic = [0u8; 8];
     let n = file.read(&mut magic)
@@ -277,14 +339,21 @@ pub fn extract_zip_archive(
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
 
-    let file = File::open(archive_path).map_err(|e| format!("Failed to open zip: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
+    let raw_file = File::open(archive_path).map_err(|e| format!("Failed to open zip: {}", e))?;
+    let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("Invalid zip archive: {}", e))?;
     let mut extracted = Vec::new();
     let total_entries = archive.len();
 
     let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
 
+    // Single 2 MB reusable buffer outside the zip loop
+    let mut io_buf = vec![0u8; 2 * 1024 * 1024];
+
     for i in 0..total_entries {
+        if is_extraction_cancelled() {
+            return Err("Extraction cancelled by user".to_string());
+        }
         let mut file = match pwd_opt {
             Some(pwd) => {
                 match archive.by_index_decrypt(i, pwd.as_bytes()) {
@@ -323,9 +392,45 @@ pub fn extract_zip_archive(
             if let Some(p) = outpath.parent() {
                 let _ = std::fs::create_dir_all(p);
             }
-            let outfile = File::create(&outpath).map_err(|e| format!("Create file error: {}", e))?;
-            let mut writer = BufWriter::with_capacity(256 * 1024, outfile);
-            std::io::copy(&mut file, &mut writer).map_err(|e| format!("Extract write error: {}", e))?;
+            let file_size = file.size();
+            let mut out_file = File::create(&outpath).map_err(|e| format!("Create file error: {}", e))?;
+
+            if file_size <= 64 * 1024 {
+                let sz = file_size as usize;
+                if sz > 0 {
+                    file.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Zip read error: {}", e))?;
+                    out_file.write_all(&io_buf[..sz]).map_err(|e| format!("Zip write error: {}", e))?;
+                }
+            } else {
+                if file_size > 16 * 1024 * 1024 {
+                    let _ = out_file.set_len(file_size);
+                }
+                let cap = if file_size <= 16 * 1024 * 1024 {
+                    1024 * 1024
+                } else {
+                    8 * 1024 * 1024
+                };
+                let mut writer = BufWriter::with_capacity(cap, out_file);
+                let mut remaining = file_size;
+                while remaining > 0 {
+                    if is_extraction_cancelled() {
+                        drop(writer);
+                        let _ = std::fs::remove_file(&outpath);
+                        return Err("Extraction cancelled by user".to_string());
+                    }
+                    let to_read = (remaining as usize).min(io_buf.len());
+                    match file.read(&mut io_buf[..to_read]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            writer.write_all(&io_buf[..n]).map_err(|e| format!("Zip write error: {}", e))?;
+                            remaining -= n as u64;
+                        }
+                        Err(e) => return Err(format!("Zip read error: {}", e)),
+                    }
+                }
+                writer.flush().map_err(|e| format!("Zip flush error: {}", e))?;
+            }
+
             extracted.push(outpath.to_string_lossy().to_string());
         }
 
@@ -345,18 +450,19 @@ pub fn extract_tar_archive(
     archive_path: &Path,
     dest_dir: &Path,
 ) -> Result<Vec<String>, String> {
-    let file = File::open(archive_path).map_err(|e| format!("Failed to open tar: {}", e))?;
+    let raw_file = File::open(archive_path).map_err(|e| format!("Failed to open tar: {}", e))?;
+    let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
     let is_gz = archive_path.to_string_lossy().to_lowercase().ends_with(".gz") 
              || archive_path.to_string_lossy().to_lowercase().ends_with(".tgz");
     
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
     
     if is_gz {
-        let tar = flate2::read::GzDecoder::new(file);
+        let tar = flate2::read::GzDecoder::new(reader);
         let mut archive = tar::Archive::new(tar);
         archive.unpack(dest_dir).map_err(|e| format!("Tar unpack error: {}", e))?;
     } else {
-        let mut archive = tar::Archive::new(file);
+        let mut archive = tar::Archive::new(reader);
         archive.unpack(dest_dir).map_err(|e| format!("Tar unpack error: {}", e))?;
     }
     Ok(vec![dest_dir.to_string_lossy().to_string()])
@@ -371,11 +477,12 @@ pub fn extract_7z_archive(
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
 
     let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
-    let file = File::open(archive_path).map_err(|e| format!("Failed to open 7z: {}", e))?;
+    let raw_file = File::open(archive_path).map_err(|e| format!("Failed to open 7z: {}", e))?;
+    let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
 
     let pwd = pwd_opt.map(|s| Password::from(s)).unwrap_or_else(Password::empty);
 
-    let mut sz_reader = match sevenz_rust2::ArchiveReader::new(file, pwd) {
+    let mut sz_reader = match sevenz_rust2::ArchiveReader::new(reader, pwd) {
         Ok(r) => r,
         Err(sevenz_rust2::Error::PasswordRequired) => {
             return Err("Password required: This 7z archive is encrypted with AES-256.".into());
@@ -391,7 +498,13 @@ pub fn extract_7z_archive(
     let mut processed_count = 0;
     let mut last_emit = Instant::now();
 
+    // Single 2 MB reusable buffer outside the 7z entry loop
+    let mut io_buf = vec![0u8; 2 * 1024 * 1024];
+
     let res = sz_reader.for_each_entries(|entry, reader| {
+        if is_extraction_cancelled() {
+            return Err(sevenz_rust2::Error::from(std::io::Error::new(std::io::ErrorKind::Interrupted, "Extraction cancelled by user")));
+        }
         let raw_name = entry.name();
         let safe_path = match sanitize_archive_path(raw_name) {
             Some(p) => p,
@@ -406,10 +519,46 @@ pub fn extract_7z_archive(
             if let Some(p) = out_path.parent() {
                 let _ = std::fs::create_dir_all(p);
             }
-            let out_file = File::create(&out_path)
+            let file_size = entry.size();
+            let mut out_file = File::create(&out_path)
                 .map_err(sevenz_rust2::Error::from)?;
-            let mut writer = BufWriter::with_capacity(256 * 1024, out_file);
-            std::io::copy(reader, &mut writer).map_err(sevenz_rust2::Error::from)?;
+
+            if file_size <= 64 * 1024 {
+                let sz = file_size as usize;
+                if sz > 0 {
+                    reader.read_exact(&mut io_buf[..sz]).map_err(sevenz_rust2::Error::from)?;
+                    out_file.write_all(&io_buf[..sz]).map_err(sevenz_rust2::Error::from)?;
+                }
+            } else {
+                if file_size > 16 * 1024 * 1024 {
+                    let _ = out_file.set_len(file_size);
+                }
+                let cap = if file_size <= 16 * 1024 * 1024 {
+                    1024 * 1024
+                } else {
+                    8 * 1024 * 1024
+                };
+                let mut writer = BufWriter::with_capacity(cap, out_file);
+                let mut remaining = file_size;
+                while remaining > 0 {
+                    if is_extraction_cancelled() {
+                        drop(writer);
+                        let _ = std::fs::remove_file(&out_path);
+                        return Err(sevenz_rust2::Error::from(std::io::Error::new(std::io::ErrorKind::Interrupted, "Extraction cancelled by user")));
+                    }
+                    let to_read = (remaining as usize).min(io_buf.len());
+                    match reader.read(&mut io_buf[..to_read]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            writer.write_all(&io_buf[..n]).map_err(sevenz_rust2::Error::from)?;
+                            remaining -= n as u64;
+                        }
+                        Err(e) => return Err(sevenz_rust2::Error::from(e)),
+                    }
+                }
+                writer.flush().map_err(sevenz_rust2::Error::from)?;
+            }
+
             extracted.push(out_path.to_string_lossy().to_string());
         }
 
@@ -532,6 +681,7 @@ pub fn extract_archive_sync(
     destination: Option<String>,
     password: Option<String>,
 ) -> Result<ExtractResponse, String> {
+    reset_extraction_cancel_flag();
     let _priority_guard = ScopedPriorityGuard::new();
 
     let path = Path::new(&archive_path);

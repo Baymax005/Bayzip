@@ -47,7 +47,7 @@ export function AboutModal({
             <div className="flex items-center space-x-2">
               <h2 className="text-xl font-bold tracking-tight text-white">Bayzip</h2>
               <span className="text-[11px] bg-[#2A2A2A] text-[#60CDFF] px-2 py-0.5 rounded-full border border-[#3E3E3E] font-mono">
-                v0.1.0
+                v1.0.0
               </span>
             </div>
             <p className="text-xs text-[#A8A8A8] mt-0.5">High-Performance Hardware-Accelerated Archiver</p>
