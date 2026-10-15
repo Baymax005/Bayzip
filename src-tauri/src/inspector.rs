@@ -306,12 +306,15 @@ pub fn list_tar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
 
 pub fn list_rar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut items = Vec::new();
-    let mut cmd = Command::new("tar.exe");
-    cmd.args(["-tf", &p.to_string_lossy()]);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut total_uncompressed = 0u64;
 
-    if let Ok(output) = cmd.output() {
+    // Try verbose list first (-tvf) to extract accurate entry sizes and total uncompressed bytes
+    let mut cmd_verbose = Command::new("tar.exe");
+    cmd_verbose.args(["-tvf", &p.to_string_lossy()]);
+    #[cfg(target_os = "windows")]
+    cmd_verbose.creation_flags(CREATE_NO_WINDOW);
+
+    if let Ok(output) = cmd_verbose.output() {
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout);
             for line in text.lines() {
@@ -319,19 +322,78 @@ pub fn list_rar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
                 if trimmed.is_empty() {
                     continue;
                 }
-                let clean = trimmed.replace('\\', "/");
-                let name = clean.trim_start_matches('/').to_string();
-                let is_dir = clean.ends_with('/');
-                items.push(ArchiveEntryItem {
-                    name,
-                    size: 0,
-                    is_dir,
-                });
+                let is_dir_perm = trimmed.starts_with('d');
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 6 {
+                    // Standard bsdtar: mode, nlinks, uid, gid, size, month, day, time/year, filename...
+                    let mut parsed_size = 0u64;
+                    let mut name_start_idx = 8;
+                    if let Ok(sz) = parts[4].parse::<u64>() {
+                        parsed_size = sz;
+                    } else if parts.len() >= 7 {
+                        // Fallback column checks
+                        if let Ok(sz) = parts[3].parse::<u64>() {
+                            parsed_size = sz;
+                            name_start_idx = 7;
+                        } else if let Ok(sz) = parts[5].parse::<u64>() {
+                            parsed_size = sz;
+                            name_start_idx = 9;
+                        }
+                    }
+
+                    let raw_name = if parts.len() > name_start_idx {
+                        parts[name_start_idx..].join(" ")
+                    } else {
+                        parts.last().unwrap_or(&"").to_string()
+                    };
+
+                    let clean = raw_name.replace('\\', "/");
+                    let name = clean.trim_start_matches('/').to_string();
+                    if !name.is_empty() {
+                        let is_dir = is_dir_perm || clean.ends_with('/');
+                        let size = if is_dir { 0 } else { parsed_size };
+                        total_uncompressed += size;
+                        items.push(ArchiveEntryItem {
+                            name,
+                            size,
+                            is_dir,
+                        });
+                    }
+                }
             }
         }
     }
+
+    // Fallback to standard -tf if verbose parsing produced no entries
+    if items.is_empty() {
+        let mut cmd = Command::new("tar.exe");
+        cmd.args(["-tf", &p.to_string_lossy()]);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        if let Ok(output) = cmd.output() {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let clean = trimmed.replace('\\', "/");
+                    let name = clean.trim_start_matches('/').to_string();
+                    let is_dir = clean.ends_with('/');
+                    items.push(ArchiveEntryItem {
+                        name,
+                        size: 0,
+                        is_dir,
+                    });
+                }
+            }
+        }
+    }
+
     let count = items.len();
-    (items, count, 0)
+    (items, count, total_uncompressed)
 }
 
 pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem>, usize, u64) {

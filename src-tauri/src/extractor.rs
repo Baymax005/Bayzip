@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, Write, Seek, BufReader, BufWriter};
+use std::io::{Read, Write, Seek, BufReader, BufWriter, BufRead};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
@@ -9,8 +9,7 @@ use aes_gcm::{
 };
 use sevenz_rust2::Password;
 
-#[cfg(target_os = "windows")]
-use std::process::Command;
+use std::process::{Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
@@ -344,6 +343,7 @@ pub fn extract_zip_archive(
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("Invalid zip archive: {}", e))?;
     let mut extracted = Vec::new();
     let total_entries = archive.len();
+    let mut total_extracted: u64 = 0;
 
     let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
 
@@ -400,6 +400,7 @@ pub fn extract_zip_archive(
                 if sz > 0 {
                     file.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Zip read error: {}", e))?;
                     out_file.write_all(&io_buf[..sz]).map_err(|e| format!("Zip write error: {}", e))?;
+                    total_extracted += file_size;
                 }
             } else {
                 if file_size > 16 * 1024 * 1024 {
@@ -424,6 +425,7 @@ pub fn extract_zip_archive(
                         Ok(n) => {
                             writer.write_all(&io_buf[..n]).map_err(|e| format!("Zip write error: {}", e))?;
                             remaining -= n as u64;
+                            total_extracted += n as u64;
                         }
                         Err(e) => return Err(format!("Zip read error: {}", e)),
                     }
@@ -439,7 +441,7 @@ pub fn extract_zip_archive(
             let _ = app_handle.emit("extract_progress", ExtractProgress {
                 percent: pct,
                 current_file: safe_path.to_string_lossy().to_string(),
-                bytes_extracted: 0,
+                bytes_extracted: total_extracted,
             });
         }
     }
@@ -488,7 +490,7 @@ pub fn extract_7z_archive(
             return Err("Password required: This 7z archive is encrypted with AES-256.".into());
         }
         Err(e) => {
-            return extract_with_system_tar(archive_path, dest_dir)
+            return extract_with_system_tar(archive_path, dest_dir, app)
                 .map_err(|_| format!("7z open error: {}", e));
         }
     };
@@ -497,6 +499,7 @@ pub fn extract_7z_archive(
     let mut extracted = Vec::new();
     let mut processed_count = 0;
     let mut last_emit = Instant::now();
+    let mut total_extracted: u64 = 0;
 
     // Single 2 MB reusable buffer outside the 7z entry loop
     let mut io_buf = vec![0u8; 2 * 1024 * 1024];
@@ -528,6 +531,7 @@ pub fn extract_7z_archive(
                 if sz > 0 {
                     reader.read_exact(&mut io_buf[..sz]).map_err(sevenz_rust2::Error::from)?;
                     out_file.write_all(&io_buf[..sz]).map_err(sevenz_rust2::Error::from)?;
+                    total_extracted += file_size;
                 }
             } else {
                 if file_size > 16 * 1024 * 1024 {
@@ -552,6 +556,7 @@ pub fn extract_7z_archive(
                         Ok(n) => {
                             writer.write_all(&io_buf[..n]).map_err(sevenz_rust2::Error::from)?;
                             remaining -= n as u64;
+                            total_extracted += n as u64;
                         }
                         Err(e) => return Err(sevenz_rust2::Error::from(e)),
                     }
@@ -574,7 +579,7 @@ pub fn extract_7z_archive(
                 let _ = app_handle.emit("extract_progress", ExtractProgress {
                     percent: pct,
                     current_file: safe_path.to_string_lossy().to_string(),
-                    bytes_extracted: 0,
+                    bytes_extracted: total_extracted,
                 });
             }
         }
@@ -591,7 +596,7 @@ pub fn extract_7z_archive(
             if e.to_string().to_lowercase().contains("password") {
                 Err("Incorrect password: Could not decrypt 7z archive.".into())
             } else {
-                extract_with_system_tar(archive_path, dest_dir)
+                extract_with_system_tar(archive_path, dest_dir, app)
                     .map_err(|_| format!("7z extraction error: {}", e))
             }
         }
@@ -601,31 +606,157 @@ pub fn extract_7z_archive(
 pub fn extract_with_system_tar(
     archive_path: &Path,
     dest_dir: &Path,
+    app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
 
+    // Determine estimated uncompressed size or archive file size on disk
+    let archive_size = std::fs::metadata(archive_path).map(|m| m.len()).unwrap_or(0);
+    let mut total_expected_bytes = archive_size.max(1);
+
+    // If we can get total uncompressed size from inspector, use it
+    let (_rar_items, _total_count, uncompressed_size) = crate::inspector::list_rar_entries(archive_path);
+    if uncompressed_size > 0 {
+        total_expected_bytes = uncompressed_size;
+    }
+
     let mut cmd = Command::new("tar.exe");
-    cmd.args(["-xf", &archive_path.to_string_lossy(), "-C", &dest_dir.to_string_lossy()]);
+    cmd.args(["-xvf", &archive_path.to_string_lossy(), "-C", &dest_dir.to_string_lossy()]);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
 
-    let output = cmd.output().map_err(|e| format!("System extraction error: {}", e))?;
-    if !output.status.success() {
-        let err_msg = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Extraction error: {}", err_msg.trim()));
-    }
+    let mut child = cmd.spawn().map_err(|e| format!("System extraction error: {}", e))?;
+    let stderr = child.stderr.take().ok_or_else(|| "Failed to capture tar.exe stderr".to_string())?;
 
-    let mut files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dest_dir) {
-        for entry in entries.flatten() {
-            files.push(entry.path().to_string_lossy().to_string());
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let reader_handle = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().flatten() {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut extracted_files = Vec::new();
+    let mut current_file_name = String::new();
+    let mut current_file_path: Option<PathBuf> = None;
+    let mut completed_bytes: u64 = 0;
+    let mut last_emit = Instant::now();
+    let mut error_lines = Vec::new();
+
+    loop {
+        if is_extraction_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader_handle.join();
+            return Err("Extraction cancelled by user".into());
+        }
+
+        while let Ok(line) = rx.try_recv() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if let Some(rel_path) = trimmed.strip_prefix("x ") {
+                let clean_rel = rel_path.trim().replace('\\', "/");
+                let safe = sanitize_archive_path(&clean_rel);
+
+                if let Some(prev_path) = current_file_path.take() {
+                    if let Ok(m) = std::fs::metadata(&prev_path) {
+                        completed_bytes += m.len();
+                    }
+                }
+
+                if let Some(safe_path) = safe {
+                    let out_path = dest_dir.join(&safe_path);
+                    current_file_name = safe_path.to_string_lossy().to_string();
+                    current_file_path = Some(out_path.clone());
+                    extracted_files.push(out_path.to_string_lossy().to_string());
+                } else {
+                    current_file_name = clean_rel;
+                }
+            } else if trimmed.to_lowercase().contains("error") || trimmed.to_lowercase().contains("fatal") {
+                error_lines.push(trimmed.to_string());
+            }
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let _ = reader_handle.join();
+
+                while let Ok(line) = rx.try_recv() {
+                    let trimmed = line.trim();
+                    if let Some(rel_path) = trimmed.strip_prefix("x ") {
+                        let clean_rel = rel_path.trim().replace('\\', "/");
+                        if let Some(safe_path) = sanitize_archive_path(&clean_rel) {
+                            let out_path = dest_dir.join(&safe_path);
+                            extracted_files.push(out_path.to_string_lossy().to_string());
+                        }
+                    } else if trimmed.to_lowercase().contains("error") || trimmed.to_lowercase().contains("fatal") {
+                        error_lines.push(trimmed.to_string());
+                    }
+                }
+
+                if !status.success() {
+                    let err_msg = if !error_lines.is_empty() {
+                        error_lines.join("; ")
+                    } else {
+                        format!("tar.exe exited with error code: {:?}", status.code())
+                    };
+                    return Err(format!("Extraction error: {}", err_msg));
+                }
+                break;
+            }
+            Ok(None) => {
+                let active_file_size = current_file_path.as_ref()
+                    .and_then(|p| std::fs::metadata(p).ok())
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+
+                let current_total = completed_bytes + active_file_size;
+
+                if let Some(app_handle) = app {
+                    if last_emit.elapsed().as_millis() >= 80 {
+                        last_emit = Instant::now();
+                        let pct = if total_expected_bytes > 0 {
+                            ((current_total as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
+                        } else {
+                            50.0
+                        };
+
+                        let _ = app_handle.emit("extract_progress", ExtractProgress {
+                            percent: pct,
+                            current_file: current_file_name.clone(),
+                            bytes_extracted: current_total,
+                        });
+                    }
+                }
+
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(format!("Error monitoring tar.exe process: {}", e));
+            }
         }
     }
-    if files.is_empty() {
-        files.push(dest_dir.to_string_lossy().to_string());
+
+    if extracted_files.is_empty() {
+        if let Ok(entries) = std::fs::read_dir(dest_dir) {
+            for entry in entries.flatten() {
+                extracted_files.push(entry.path().to_string_lossy().to_string());
+            }
+        }
     }
-    Ok(files)
+    if extracted_files.is_empty() {
+        extracted_files.push(dest_dir.to_string_lossy().to_string());
+    }
+
+    Ok(extracted_files)
 }
 
 pub fn universal_extract(
@@ -646,7 +777,7 @@ pub fn universal_extract(
                         return Err(e);
                     }
                     extract_bay_archive(archive_path, dest_dir, password, app)
-                        .or_else(|_| extract_with_system_tar(archive_path, dest_dir))
+                        .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
                 })
         },
         ArchiveFormat::SevenZip => {
@@ -655,22 +786,22 @@ pub fn universal_extract(
                     if e.contains("Password") || e.contains("password") {
                         return Err(e);
                     }
-                    extract_with_system_tar(archive_path, dest_dir)
+                    extract_with_system_tar(archive_path, dest_dir, app)
                 })
         },
         ArchiveFormat::Tar | ArchiveFormat::TarGz => {
             extract_tar_archive(archive_path, dest_dir)
-                .or_else(|_| extract_with_system_tar(archive_path, dest_dir))
+                .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
         },
         ArchiveFormat::Rar => {
-            extract_with_system_tar(archive_path, dest_dir)
+            extract_with_system_tar(archive_path, dest_dir, app)
         },
         ArchiveFormat::Unknown => {
             extract_zip_archive(archive_path, dest_dir, password, app)
                 .or_else(|_| extract_7z_archive(archive_path, dest_dir, password, app))
                 .or_else(|_| extract_bay_archive(archive_path, dest_dir, password, app))
                 .or_else(|_| extract_tar_archive(archive_path, dest_dir))
-                .or_else(|_| extract_with_system_tar(archive_path, dest_dir))
+                .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
         }
     }
 }
@@ -706,10 +837,16 @@ pub fn extract_archive_sync(
     let pwd_ref = password.as_deref();
     let extracted_files = universal_extract(path, &dest_dir, pwd_ref, Some(&app))?;
 
+    let total_final_bytes: u64 = extracted_files.iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum();
+
     let _ = app.emit("extract_progress", ExtractProgress {
         percent: 100.0,
         current_file: "Completed".into(),
-        bytes_extracted: 0,
+        bytes_extracted: total_final_bytes,
     });
 
     Ok(ExtractResponse {

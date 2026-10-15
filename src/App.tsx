@@ -157,6 +157,12 @@ function App() {
   const [progress, setProgress] = useState<CompressProgress | null>(null);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
   const [compressError, setCompressError] = useState<string | null>(null);
+  const [activeCompressConfig, setActiveCompressConfig] = useState<{
+    format: string;
+    algorithm: string;
+    sliderValue: number;
+    archiveName: string;
+  } | null>(null);
 
   // Extraction State
   const [selectedArchive, setSelectedArchive] = useState<string | null>(null);
@@ -372,21 +378,25 @@ function App() {
   }, [selectedFormat]);
 
   const getEstimatedRam = () => {
-    if (selectedFormat === ".tar") return "< 0.1";
-    if (selectedFormat === ".zip") return sliderValue === 0 ? "< 0.1" : "0.3";
-    if (sliderValue === 0) return "0.1";
+    const fmt = isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat;
+    const val = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
+    if (fmt === ".tar") return "< 0.1";
+    if (fmt === ".zip") return val === 0 ? "< 0.1" : "0.3";
+    if (val === 0) return "0.1";
     if (!specs) return "0.5";
     const maxSafeRam = Math.max(0.5, specs.free_ram_gb - 1.5);
-    return ((sliderValue / 100) * maxSafeRam).toFixed(1);
+    return ((val / 100) * maxSafeRam).toFixed(1);
   };
 
   const getEstimatedCores = () => {
-    if (selectedFormat === ".tar" || selectedFormat === ".zip") return 1;
-    if (sliderValue <= 0) return 1;
+    const fmt = isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat;
+    const val = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
+    if (fmt === ".tar" || fmt === ".zip") return 1;
+    if (val <= 0) return 1;
     if (!specs) return 1;
-    if (sliderValue === 25) return Math.max(1, Math.floor(specs.cpu_cores / 4));
-    if (sliderValue === 50) return Math.max(1, Math.floor(specs.cpu_cores / 2));
-    if (sliderValue === 75) return Math.max(1, Math.floor((specs.cpu_cores * 3) / 4));
+    if (val === 25) return Math.max(1, Math.floor(specs.cpu_cores / 4));
+    if (val === 50) return Math.max(1, Math.floor(specs.cpu_cores / 2));
+    if (val === 75) return Math.max(1, Math.floor((specs.cpu_cores * 3) / 4));
     return specs.cpu_cores;
   };
 
@@ -527,6 +537,15 @@ function App() {
       return;
     }
 
+    const targetArchiveName = customArchiveName.trim() ||
+      (selectedFiles.length === 1 ? selectedFiles[0].split(/[/\\]/).pop() || "archive" : "archive");
+
+    setActiveCompressConfig({
+      format: selectedFormat,
+      algorithm: selectedAlgorithm,
+      sliderValue,
+      archiveName: targetArchiveName,
+    });
     setIsCompressing(true);
     setIsCancellingCompress(false);
     setCompressError(null);
@@ -599,6 +618,7 @@ function App() {
     } finally {
       setIsCompressing(false);
       setIsCancellingCompress(false);
+      setActiveCompressConfig(null);
       setProgress(null);
     }
   };
@@ -662,10 +682,15 @@ function App() {
       }
     } catch (err) {
       const errMsg = String(err);
-      console.error("Extraction execution error:", err);
-      setExtractError(errMsg);
-      if (errMsg.toLowerCase().includes("password")) {
-        setIsPasswordPromptOpen(true);
+      if (errMsg.toLowerCase().includes("cancel")) {
+        console.log("Extraction cancelled by user.");
+        setExtractError(null);
+      } else {
+        console.error("Extraction execution error:", err);
+        setExtractError(errMsg);
+        if (errMsg.toLowerCase().includes("password")) {
+          setIsPasswordPromptOpen(true);
+        }
       }
     } finally {
       setIsExtracting(false);
@@ -683,32 +708,35 @@ function App() {
   };
 
   const getSliderLabel = () => {
-    if (selectedFormat === ".tar") {
+    const fmt = isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat;
+    const val = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
+
+    if (fmt === ".tar") {
       return "Direct Packaging (Store)";
     }
-    if (selectedFormat === ".zip") {
-      if (sliderValue === 0) return "Store (Instant)";
+    if (fmt === ".zip") {
+      if (val === 0) return "Store (Instant)";
       return "Deflate (Standard)";
     }
-    if (selectedFormat === ".7z") {
-      if (sliderValue === 0) return "Fastest (Level 1)";
-      if (sliderValue === 25) return "Fast (Level 3)";
-      if (sliderValue === 50) return "Balanced (Level 5)";
-      if (sliderValue === 75) return "High (Level 7)";
+    if (fmt === ".7z") {
+      if (val === 0) return "Fastest (Level 1)";
+      if (val === 25) return "Fast (Level 3)";
+      if (val === 50) return "Balanced (Level 5)";
+      if (val === 75) return "High (Level 7)";
       return "Maximum (Level 9)";
     }
-    if (selectedFormat === ".bay_gamer") {
-      if (sliderValue === 0) return "Eco (1 Core)";
-      if (sliderValue === 25) return "Fast";
-      if (sliderValue === 50) return "Balanced";
-      if (sliderValue === 75) return "High Performance";
+    if (fmt === ".bay_gamer") {
+      if (val === 0) return "Eco (1 Core)";
+      if (val === 25) return "Fast";
+      if (val === 50) return "Balanced";
+      if (val === 75) return "High Performance";
       return "Maximum Power";
     }
     // Default .bay (Zstandard)
-    if (sliderValue === 0) return "Eco (1 Core)";
-    if (sliderValue === 25) return "Fast";
-    if (sliderValue === 50) return "Balanced";
-    if (sliderValue === 75) return "High Performance";
+    if (val === 0) return "Eco (1 Core)";
+    if (val === 25) return "Fast";
+    if (val === 50) return "Balanced";
+    if (val === 75) return "High Performance";
     return "Maximum Power";
   };
 
@@ -736,11 +764,18 @@ function App() {
                       ? "bg-[#2D2D2D] text-white shadow-sm border border-[#3E3E3E]"
                       : "text-[#888888] hover:text-white"
                   }`}
+                  title={isCompressing ? "Compression in progress" : undefined}
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5 text-[#60CDFF]">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                   </svg>
                   <span>Compress</span>
+                  {isCompressing && activeMode !== "compress" && (
+                    <span className="inline-flex items-center space-x-1 ml-1 px-1.5 py-0.5 rounded-full bg-[#60CDFF]/15 text-[#60CDFF] text-[10px] font-mono border border-[#60CDFF]/30">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#60CDFF] animate-pulse"></span>
+                      <span>{progress ? `${Math.round(progress.percent)}%` : "..."}</span>
+                    </span>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -750,11 +785,18 @@ function App() {
                       ? "bg-[#2D2D2D] text-white shadow-sm border border-[#3E3E3E]"
                       : "text-[#888888] hover:text-white"
                   }`}
+                  title={isExtracting ? "Extraction in progress" : undefined}
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5 text-[#60CDFF]">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                   </svg>
                   <span>Extract</span>
+                  {isExtracting && activeMode !== "extract" && (
+                    <span className="inline-flex items-center space-x-1 ml-1 px-1.5 py-0.5 rounded-full bg-[#60CDFF]/15 text-[#60CDFF] text-[10px] font-mono border border-[#60CDFF]/30">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#60CDFF] animate-pulse"></span>
+                      <span>{extractProgress ? `${Math.round(extractProgress.percent)}%` : "..."}</span>
+                    </span>
+                  )}
                 </button>
               </div>
 
@@ -804,12 +846,19 @@ function App() {
                           </span>
                         </>
                       )}
+                      {isCompressing && (
+                        <span className="text-[10px] text-[#60CDFF] bg-[#60CDFF]/10 border border-[#60CDFF]/30 px-2 py-0.5 rounded font-medium">
+                          Staging for Next Archive
+                        </span>
+                      )}
                     </div>
                     <button
                       type="button"
                       onClick={() => {
                         setSelectedFiles([]);
-                        setCustomArchiveName("");
+                        if (!isCompressing) {
+                          setCustomArchiveName("");
+                        }
                       }}
                       className="text-red-400 hover:text-red-300 transition-colors cursor-pointer"
                     >
@@ -886,7 +935,7 @@ function App() {
                     })}
                   </div>
 
-                  <div className="flex space-x-3 pt-1">
+                  <div className="flex items-center space-x-3 pt-1">
                     <button
                       type="button"
                       onClick={handleSelectFiles}
@@ -901,6 +950,11 @@ function App() {
                     >
                       + Add folder
                     </button>
+                    {isCompressing && (
+                      <span className="text-[11px] text-[#A8A8A8] italic">
+                        (Staged for next archive — active compression won't be interrupted)
+                      </span>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -957,13 +1011,14 @@ function App() {
                   </div>
                   <input
                     type="text"
+                    disabled={isCompressing}
                     value={customArchiveName}
                     onChange={(e) => setCustomArchiveName(e.target.value)}
                     placeholder={selectedFiles.length > 0 ? "Archive name..." : "Enter archive name..."}
-                    className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-medium placeholder-[#666]"
+                    className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-medium placeholder-[#666] disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   <span className="bg-[#202020] px-3 py-2 rounded-md border border-[#3E3E3E] text-xs font-mono text-[#60CDFF] shrink-0 font-semibold">
-                    {selectedFormat}
+                    {isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat}
                   </span>
                 </div>
               </div>
@@ -979,7 +1034,7 @@ function App() {
                           ? "Cancelling compression..."
                           : progress?.current_file
                           ? `Compressing: ${progress.current_file}`
-                          : "Initializing compression..."}
+                          : `Compressing into ${activeCompressConfig?.archiveName || "archive"}${activeCompressConfig?.format || selectedFormat}...`}
                       </span>
                     </div>
                     <div className="flex items-center space-x-2.5 shrink-0">
@@ -1022,7 +1077,7 @@ function App() {
                         : "Hardware Acceleration Active"}
                     </span>
                     <span className="text-[#60CDFF] font-medium">
-                      {selectedAlgorithm} • {selectedFormat}
+                      {(activeCompressConfig?.algorithm || selectedAlgorithm)} • {(activeCompressConfig?.format || selectedFormat)}
                     </span>
                   </div>
                 </div>
@@ -1038,9 +1093,9 @@ function App() {
                     <button
                       type="button"
                       onClick={handleRefreshSpecs}
-                      disabled={isRefreshingSpecs}
+                      disabled={isRefreshingSpecs || isCompressing}
                       title="Refresh available RAM & system hardware specs"
-                      className="flex items-center space-x-1.5 text-xs bg-[#202020] hover:bg-[#2A2A2A] border border-[#3E3E3E] hover:border-[#60CDFF] text-[#60CDFF] px-2.5 py-1 rounded-md transition-all duration-200 hover:shadow-[0_0_10px_rgba(96,205,255,0.3)] cursor-pointer group disabled:opacity-50"
+                      className="flex items-center space-x-1.5 text-xs bg-[#202020] hover:bg-[#2A2A2A] border border-[#3E3E3E] hover:border-[#60CDFF] text-[#60CDFF] px-2.5 py-1 rounded-md transition-all duration-200 hover:shadow-[0_0_10px_rgba(96,205,255,0.3)] cursor-pointer group disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <svg
                         viewBox="0 0 24 24"
@@ -1060,16 +1115,16 @@ function App() {
                       <span className="text-[11px] font-medium hidden sm:inline">Refresh RAM</span>
                     </button>
                     <span className="text-xs bg-[#3E3E3E] text-[#60CDFF] px-2 py-1 rounded-md font-mono text-[10px] tracking-wider uppercase font-semibold">
-                      {selectedFormat === ".bay" && "Zstandard Multi-Core"}
-                      {selectedFormat === ".bay_gamer" && "Zstd Gamer Capped"}
-                      {selectedFormat === ".7z" && "LZMA2 Multi-Thread"}
-                      {selectedFormat === ".zip" && "Zip Single-Thread"}
-                      {selectedFormat === ".tar" && "Store Direct I/O"}
+                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay" && "Zstandard Multi-Core"}
+                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay_gamer" && "Zstd Gamer Capped"}
+                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".7z" && "LZMA2 Multi-Thread"}
+                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".zip" && "Zip Single-Thread"}
+                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".tar" && "Store Direct I/O"}
                     </span>
                   </div>
                 </div>
 
-                {selectedFormat === ".tar" ? (
+                {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".tar" ? (
                   <div className="bg-[#202020] border border-[#3E3E3E] rounded-md p-4 flex items-center space-x-3.5 mb-6">
                     <div className="w-10 h-10 rounded-lg bg-[#60CDFF]/10 border border-[#60CDFF]/30 flex items-center justify-center shrink-0">
                       <svg className="w-5 h-5 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1095,9 +1150,12 @@ function App() {
                         min="0"
                         max="100"
                         step="25"
-                        value={sliderValue}
+                        disabled={isCompressing}
+                        value={isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue}
                         onChange={(e) => setSliderValue(Number(e.target.value))}
-                        className="w-full h-1 bg-[#3E3E3E] rounded-lg appearance-none cursor-pointer accent-[#60CDFF] relative z-10"
+                        className={`w-full h-1 bg-[#3E3E3E] rounded-lg appearance-none accent-[#60CDFF] relative z-10 ${
+                          isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                        }`}
                       />
                       <div className="absolute w-[calc(100%-16px)] left-[8px] mt-2">
                         <span className="absolute left-[0%] -translate-x-1/2 text-xs text-[#A8A8A8]">0</span>
@@ -1125,9 +1183,9 @@ function App() {
                       {getEstimatedRam()} <span className="text-sm font-normal text-[#A8A8A8]">GB</span>
                     </p>
                     <p className="text-[11px] text-[#7A7A7A] mt-1">
-                      {selectedFormat === ".tar"
+                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".tar"
                         ? "Direct stream buffer"
-                        : selectedFormat === ".zip"
+                        : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".zip"
                         ? "Standard Deflate buffer"
                         : `Dynamic safe cap (${specs ? specs.free_ram_gb.toFixed(1) : "?"} GB available)`}
                     </p>
@@ -1138,24 +1196,24 @@ function App() {
                       <p className="text-xs text-[#A8A8A8]">Target CPU Threads</p>
                       {specs && (
                         <span className="text-[10px] text-[#60CDFF] bg-[#1a3847] px-1.5 py-0.5 rounded font-mono">
-                          {specs.cpu_cores} Cores
+                          {specs.cpu_cores} Threads
                         </span>
                       )}
                     </div>
                     <p className="text-lg font-medium">
                       {getEstimatedCores()}{" "}
-                      <span className="text-sm font-normal text-[#A8A8A8]">/ {specs?.cpu_cores || "?"}</span>
+                      <span className="text-sm font-normal text-[#A8A8A8]">/ {specs?.cpu_cores || "?"} Threads</span>
                     </p>
                     <p className="text-[11px] text-[#7A7A7A] mt-1">
-                      {selectedFormat === ".tar"
+                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".tar"
                         ? "Single-stream sequential I/O"
-                        : selectedFormat === ".zip"
+                        : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".zip"
                         ? "Standard ZIP is single-threaded"
-                        : selectedFormat === ".7z"
+                        : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".7z"
                         ? `${getEstimatedCores()} Threads allocated for LZMA2`
-                        : sliderValue === 100
+                        : (isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue) === 100
                         ? "100% Full Multithreading"
-                        : `${sliderValue}% Thread Allocation`}
+                        : `${isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue}% Thread Allocation`}
                     </p>
                   </div>
                 </div>
@@ -1165,19 +1223,23 @@ function App() {
               {isAdvanced && (
                 <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6 space-y-5">
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5">
-                    <div className={selectedFormat === ".bay_gamer" ? "sm:col-span-6" : "sm:col-span-3"}>
+                    <div className={(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay_gamer" ? "sm:col-span-6" : "sm:col-span-3"}>
                       <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Format</label>
                       <div className="relative group">
                         <select
-                          value={selectedFormat}
+                          disabled={isCompressing}
+                          value={isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat}
                           onChange={(e) => {
+                            if (isCompressing) return;
                             const newFormat = e.target.value;
                             setSelectedFormat(newFormat);
                             if (FORMAT_ALGORITHMS[newFormat]) {
                               setSelectedAlgorithm(FORMAT_ALGORITHMS[newFormat][0]);
                             }
                           }}
-                          className="w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none cursor-pointer text-white truncate transition-colors"
+                          className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${
+                            isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                          }`}
                         >
                           <option value=".bay">.bay</option>
                           <option value=".bay_gamer">.bay (Gamer Mod Pack)</option>
@@ -1194,16 +1256,22 @@ function App() {
                     </div>
 
                     {/* Hide algorithm dropdown if Gamer Mod Pack is selected */}
-                    {selectedFormat !== ".bay_gamer" && (
+                    {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) !== ".bay_gamer" && (
                       <div className="sm:col-span-5">
                         <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Algorithm</label>
                         <div className="relative group">
                           <select
-                            value={selectedAlgorithm}
-                            onChange={(e) => setSelectedAlgorithm(e.target.value)}
-                            className="w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none cursor-pointer text-white truncate transition-colors"
+                            disabled={isCompressing}
+                            value={isCompressing && activeCompressConfig ? activeCompressConfig.algorithm : selectedAlgorithm}
+                            onChange={(e) => {
+                              if (isCompressing) return;
+                              setSelectedAlgorithm(e.target.value);
+                            }}
+                            className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${
+                              isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                            }`}
                           >
-                            {FORMAT_ALGORITHMS[selectedFormat].map((algo) => (
+                            {FORMAT_ALGORITHMS[isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat]?.map((algo) => (
                               <option key={algo} value={algo}>
                                 {algo}
                               </option>
@@ -1218,13 +1286,19 @@ function App() {
                       </div>
                     )}
 
-                    <div className={selectedFormat === ".bay_gamer" ? "sm:col-span-6" : "sm:col-span-4"}>
+                    <div className={(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay_gamer" ? "sm:col-span-6" : "sm:col-span-4"}>
                       <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Encryption</label>
                       <div className="relative group">
                         <select
+                          disabled={isCompressing}
                           value={selectedEncryption}
-                          onChange={(e) => setSelectedEncryption(e.target.value)}
-                          className="w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none cursor-pointer text-white truncate transition-colors"
+                          onChange={(e) => {
+                            if (isCompressing) return;
+                            setSelectedEncryption(e.target.value);
+                          }}
+                          className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${
+                            isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                          }`}
                         >
                           <option value="none">None (Unencrypted)</option>
                           <option value="aes-256">AES-256 (Military-Grade)</option>
@@ -1267,15 +1341,17 @@ function App() {
                       <div className="relative">
                         <input
                           type={showCompressPassword ? "text" : "password"}
+                          disabled={isCompressing}
                           value={compressPassword}
                           onChange={(e) => setCompressPassword(e.target.value)}
                           placeholder="Enter secure password to protect archive..."
-                          className="w-full bg-[#202020] rounded-md pl-3 pr-10 py-2 text-sm border border-[#3E3E3E] focus:border-[#60CDFF] outline-none placeholder-[#777] text-white"
+                          className="w-full bg-[#202020] rounded-md pl-3 pr-10 py-2 text-sm border border-[#3E3E3E] focus:border-[#60CDFF] outline-none placeholder-[#777] text-white disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                         <button
                           type="button"
+                          disabled={isCompressing}
                           onClick={() => setShowCompressPassword(!showCompressPassword)}
-                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#888] hover:text-white cursor-pointer"
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#888] hover:text-white cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           title={showCompressPassword ? "Hide password" : "Show password"}
                         >
                           {showCompressPassword ? (
@@ -1299,6 +1375,7 @@ function App() {
                       <div className="relative">
                         <input
                           type="checkbox"
+                          disabled={isCompressing}
                           className="sr-only"
                           checked={archiveToOriginalPath}
                           onChange={() => setArchiveToOriginalPath(!archiveToOriginalPath)}
@@ -1327,15 +1404,17 @@ function App() {
                         <div className="flex space-x-2">
                           <input
                             type="text"
+                            disabled={isCompressing}
                             value={compressDestDir}
                             onChange={(e) => setCompressDestDir(e.target.value)}
                             placeholder="Select output folder (leave blank for source directory)..."
-                            className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-mono text-xs"
+                            className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-mono text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                           />
                           <button
                             type="button"
+                            disabled={isCompressing}
                             onClick={handleSelectCompressDestination}
-                            className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer shrink-0"
+                            className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Browse...
                           </button>
@@ -1347,6 +1426,7 @@ function App() {
                       <div className="relative">
                         <input
                           type="checkbox"
+                          disabled={isCompressing}
                           className="sr-only"
                           checked={separateArchives}
                           onChange={() => setSeparateArchives(!separateArchives)}
@@ -1425,12 +1505,15 @@ function App() {
                     </span>
                     <button
                       type="button"
+                      disabled={isExtracting}
                       onClick={() => {
+                        if (isExtracting) return;
                         setSelectedArchive(null);
                         setArchiveInfo(null);
                         setExtractResult(null);
                       }}
-                      className="text-red-400 hover:text-red-300 transition-colors cursor-pointer text-xs"
+                      className="text-red-400 hover:text-red-300 transition-colors cursor-pointer text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={isExtracting ? "Extraction in progress" : undefined}
                     >
                       Clear
                     </button>
@@ -1472,8 +1555,10 @@ function App() {
                     </div>
                     <button
                       type="button"
+                      disabled={isExtracting}
                       onClick={handleSelectArchive}
-                      className="text-xs px-3 py-1.5 bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] text-white rounded-md transition-colors cursor-pointer shrink-0"
+                      className="text-xs px-3 py-1.5 bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={isExtracting ? "Extraction in progress" : undefined}
                     >
                       Change
                     </button>
@@ -1533,15 +1618,17 @@ function App() {
                   <div className="flex space-x-2">
                     <input
                       type="text"
+                      disabled={isExtracting}
                       value={extractDest}
                       onChange={(e) => setExtractDest(e.target.value)}
                       placeholder="Destination folder path..."
-                      className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-mono text-xs"
+                      className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-mono text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                     />
                     <button
                       type="button"
+                      disabled={isExtracting}
                       onClick={handleSelectDestFolder}
-                      className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer shrink-0"
+                      className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Browse...
                     </button>
@@ -1569,6 +1656,7 @@ function App() {
                   <div className="relative">
                     <input
                       type={showExtractPassword ? "text" : "password"}
+                      disabled={isExtracting}
                       value={extractPassword}
                       onChange={(e) => setExtractPassword(e.target.value)}
                       placeholder={
@@ -1576,7 +1664,7 @@ function App() {
                           ? "Enter password to decrypt..."
                           : "Leave blank (unencrypted)"
                       }
-                      className={`w-full bg-[#202020] text-sm text-white pl-3 pr-10 py-2 rounded-md border outline-none font-mono text-xs placeholder-[#666] transition-colors ${
+                      className={`w-full bg-[#202020] text-sm text-white pl-3 pr-10 py-2 rounded-md border outline-none font-mono text-xs placeholder-[#666] transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                         archiveInfo?.is_encrypted
                           ? "border-amber-500/60 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/30"
                           : "border-[#3E3E3E] focus:border-[#60CDFF]"
@@ -1584,8 +1672,9 @@ function App() {
                     />
                     <button
                       type="button"
+                      disabled={isExtracting}
                       onClick={() => setShowExtractPassword(!showExtractPassword)}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#888] hover:text-white cursor-pointer"
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#888] hover:text-white cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       title={showExtractPassword ? "Hide password" : "Show password"}
                     >
                       {showExtractPassword ? (
@@ -1607,6 +1696,7 @@ function App() {
                     <div className="relative">
                       <input
                         type="checkbox"
+                        disabled={isExtracting}
                         className="sr-only"
                         checked={extractToSubfolder}
                         onChange={() => setExtractToSubfolder(!extractToSubfolder)}
@@ -1634,6 +1724,7 @@ function App() {
                     <div className="relative">
                       <input
                         type="checkbox"
+                        disabled={isExtracting}
                         className="sr-only"
                         checked={openFolderOnExtract}
                         onChange={() => setOpenFolderOnExtract(!openFolderOnExtract)}
@@ -1723,21 +1814,26 @@ function App() {
               <div className="flex justify-end pt-2">
                 <button
                   type="button"
-                  disabled={isExtracting}
-                  onClick={handleExtract}
-                  className={`px-8 py-2.5 bg-[#60CDFF] hover:bg-[#4FB8E6] text-black font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 ${
-                    isExtracting ? "opacity-75 cursor-not-allowed" : "cursor-pointer"
+                  disabled={isExtracting && isCancellingExtract}
+                  onClick={isExtracting ? handleCancelExtract : handleExtract}
+                  className={`px-8 py-2.5 font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isExtracting
+                      ? "bg-red-950/40 hover:bg-red-900/60 text-[#FF99A4] hover:text-[#FFB3BA] border border-red-800/60 hover:border-red-600"
+                      : "bg-[#60CDFF] hover:bg-[#4FB8E6] text-black"
                   }`}
+                  title={isExtracting ? "Click to cancel extraction" : undefined}
                 >
                   {isExtracting && (
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-black" fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-[#FF99A4]" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
                   )}
                   <span>
                     {isExtracting
-                      ? "Extracting..."
+                      ? isCancellingExtract
+                        ? "Cancelling..."
+                        : "Cancel Extraction"
                       : selectedArchive
                       ? "Extract Now"
                       : "Select Archive to Extract"}
