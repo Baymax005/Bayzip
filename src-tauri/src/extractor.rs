@@ -46,6 +46,7 @@ use crate::inspector::{
 pub fn extract_bay_stream<R: Read>(
     mut decoder: R,
     dest_dir: &Path,
+    total_expected_bytes: u64,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     let mut extracted_files = Vec::new();
@@ -149,8 +150,13 @@ pub fn extract_bay_stream<R: Read>(
             if let Some(app_handle) = app {
                 if last_emit.elapsed().as_millis() >= 50 {
                     last_emit = Instant::now();
+                    let pct = if total_expected_bytes > 0 {
+                        ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
+                    } else {
+                        50.0
+                    };
                     let _ = app_handle.emit("extract_progress", ExtractProgress {
-                        percent: 50.0,
+                        percent: pct,
                         current_file: safe_rel_path.to_string_lossy().to_string(),
                         bytes_extracted: total_extracted,
                     });
@@ -195,8 +201,13 @@ pub fn extract_bay_stream<R: Read>(
                         if let Some(app_handle) = app {
                             if last_emit.elapsed().as_millis() >= 50 {
                                 last_emit = Instant::now();
+                                let pct = if total_expected_bytes > 0 {
+                                    ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
+                                } else {
+                                    50.0
+                                };
                                 let _ = app_handle.emit("extract_progress", ExtractProgress {
-                                    percent: 50.0,
+                                    percent: pct,
                                     current_file: safe_rel_path.to_string_lossy().to_string(),
                                     bytes_extracted: total_extracted,
                                 });
@@ -229,8 +240,15 @@ pub fn extract_bay_archive(
     archive_path: &Path,
     dest_dir: &Path,
     password: Option<&str>,
+    expected_size: Option<u64>,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
+    let total_expected_bytes: u64 = if let Some(sz) = expected_size.filter(|&s| s > 0) {
+        sz
+    } else {
+        std::fs::metadata(archive_path).map(|m| m.len() * 2).unwrap_or(1)
+    };
+
     let raw_file = File::open(archive_path)
         .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
     let mut file = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
@@ -272,25 +290,25 @@ pub fn extract_bay_archive(
         if plaintext.starts_with(b"BAYBRO\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
-            return extract_bay_stream(decoder, dest_dir, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
         } else if plaintext.starts_with(b"BAYLZ4\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
-            return extract_bay_stream(decoder, dest_dir, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
         } else if plaintext.starts_with(b"BAYZIP\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = zstd::stream::Decoder::new(&plaintext[offset..])
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
         } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
             // Raw LZ4 frame
             let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
-            return extract_bay_stream(decoder, dest_dir, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
         } else {
             // Raw Zstandard fallback
             let decoder = zstd::stream::Decoder::new(&plaintext[..])
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
         }
     }
 
@@ -303,29 +321,29 @@ pub fn extract_bay_archive(
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = brotli::Decompressor::new(file, 64 * 1024);
-        extract_bay_stream(decoder, dest_dir, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
     } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        extract_bay_stream(decoder, dest_dir, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
     } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = zstd::stream::Decoder::new(file)
             .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
-        extract_bay_stream(decoder, dest_dir, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
     } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
         // Raw LZ4 frame
         file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        extract_bay_stream(decoder, dest_dir, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
     } else {
         // Standard Zstd
         file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let decoder = zstd::stream::Decoder::new(file)
             .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
-        extract_bay_stream(decoder, dest_dir, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
     }
 }
 
@@ -333,6 +351,7 @@ pub fn extract_zip_archive(
     archive_path: &Path,
     dest_dir: &Path,
     password: Option<&str>,
+    expected_size: Option<u64>,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir)
@@ -344,6 +363,13 @@ pub fn extract_zip_archive(
     let mut extracted = Vec::new();
     let total_entries = archive.len();
     let mut total_extracted: u64 = 0;
+    let mut last_emit = Instant::now();
+
+    let total_expected_bytes: u64 = if let Some(sz) = expected_size.filter(|&s| s > 0) {
+        sz
+    } else {
+        std::fs::metadata(archive_path).map(|m| m.len() * 2).unwrap_or(1)
+    };
 
     let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
 
@@ -426,6 +452,22 @@ pub fn extract_zip_archive(
                             writer.write_all(&io_buf[..n]).map_err(|e| format!("Zip write error: {}", e))?;
                             remaining -= n as u64;
                             total_extracted += n as u64;
+
+                            if let Some(app_handle) = app {
+                                if last_emit.elapsed().as_millis() >= 50 {
+                                    last_emit = Instant::now();
+                                    let pct = if total_expected_bytes > 0 {
+                                        ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
+                                    } else {
+                                        ((i as f64 / total_entries.max(1) as f64) * 100.0).min(99.0)
+                                    };
+                                    let _ = app_handle.emit("extract_progress", ExtractProgress {
+                                        percent: pct,
+                                        current_file: safe_path.to_string_lossy().to_string(),
+                                        bytes_extracted: total_extracted,
+                                    });
+                                }
+                            }
                         }
                         Err(e) => return Err(format!("Zip read error: {}", e)),
                     }
@@ -437,12 +479,19 @@ pub fn extract_zip_archive(
         }
 
         if let Some(app_handle) = app {
-            let pct = ((i + 1) as f64 / total_entries.max(1) as f64) * 100.0;
-            let _ = app_handle.emit("extract_progress", ExtractProgress {
-                percent: pct,
-                current_file: safe_path.to_string_lossy().to_string(),
-                bytes_extracted: total_extracted,
-            });
+            if last_emit.elapsed().as_millis() >= 50 || i + 1 == total_entries {
+                last_emit = Instant::now();
+                let pct = if total_expected_bytes > 0 {
+                    ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
+                } else {
+                    (((i + 1) as f64 / total_entries.max(1) as f64) * 100.0).min(99.0)
+                };
+                let _ = app_handle.emit("extract_progress", ExtractProgress {
+                    percent: pct,
+                    current_file: safe_path.to_string_lossy().to_string(),
+                    bytes_extracted: total_extracted,
+                });
+            }
         }
     }
     Ok(extracted)
@@ -474,6 +523,7 @@ pub fn extract_7z_archive(
     archive_path: &Path,
     dest_dir: &Path,
     password: Option<&str>,
+    expected_size: Option<u64>,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
@@ -496,6 +546,13 @@ pub fn extract_7z_archive(
     };
 
     let total_files = sz_reader.archive().files.len();
+    let total_expected_bytes: u64 = if let Some(sz) = expected_size.filter(|&s| s > 0) {
+        sz
+    } else {
+        let sum: u64 = sz_reader.archive().files.iter().map(|f| f.size()).sum();
+        if sum > 0 { sum } else { std::fs::metadata(archive_path).map(|m| m.len() * 2).unwrap_or(1) }
+    };
+
     let mut extracted = Vec::new();
     let mut processed_count = 0;
     let mut last_emit = Instant::now();
@@ -557,6 +614,24 @@ pub fn extract_7z_archive(
                             writer.write_all(&io_buf[..n]).map_err(sevenz_rust2::Error::from)?;
                             remaining -= n as u64;
                             total_extracted += n as u64;
+
+                            if let Some(app_handle) = app {
+                                if last_emit.elapsed().as_millis() >= 50 {
+                                    last_emit = Instant::now();
+                                    let pct = if total_expected_bytes > 0 {
+                                        ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
+                                    } else if total_files > 0 {
+                                        ((processed_count as f64 / total_files as f64) * 100.0).min(99.0)
+                                    } else {
+                                        50.0
+                                    };
+                                    let _ = app_handle.emit("extract_progress", ExtractProgress {
+                                        percent: pct,
+                                        current_file: safe_path.to_string_lossy().to_string(),
+                                        bytes_extracted: total_extracted,
+                                    });
+                                }
+                            }
                         }
                         Err(e) => return Err(sevenz_rust2::Error::from(e)),
                     }
@@ -571,7 +646,9 @@ pub fn extract_7z_archive(
         if let Some(app_handle) = app {
             if last_emit.elapsed().as_millis() >= 50 || processed_count == total_files {
                 last_emit = Instant::now();
-                let pct = if total_files > 0 {
+                let pct = if total_expected_bytes > 0 {
+                    ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
+                } else if total_files > 0 {
                     ((processed_count as f64 / total_files as f64) * 100.0).min(99.0)
                 } else {
                     50.0
@@ -763,25 +840,26 @@ pub fn universal_extract(
     archive_path: &Path,
     dest_dir: &Path,
     password: Option<&str>,
+    expected_size: Option<u64>,
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     let format = detect_archive_type(archive_path);
     match format {
         ArchiveFormat::Bay => {
-            extract_bay_archive(archive_path, dest_dir, password, app)
+            extract_bay_archive(archive_path, dest_dir, password, expected_size, app)
         },
         ArchiveFormat::Zip => {
-            extract_zip_archive(archive_path, dest_dir, password, app)
+            extract_zip_archive(archive_path, dest_dir, password, expected_size, app)
                 .or_else(|e| {
                     if e.contains("Password") || e.contains("password") {
                         return Err(e);
                     }
-                    extract_bay_archive(archive_path, dest_dir, password, app)
+                    extract_bay_archive(archive_path, dest_dir, password, expected_size, app)
                         .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
                 })
         },
         ArchiveFormat::SevenZip => {
-            extract_7z_archive(archive_path, dest_dir, password, app)
+            extract_7z_archive(archive_path, dest_dir, password, expected_size, app)
                 .or_else(|e| {
                     if e.contains("Password") || e.contains("password") {
                         return Err(e);
@@ -790,18 +868,18 @@ pub fn universal_extract(
                 })
         },
         ArchiveFormat::Tar | ArchiveFormat::TarGz => {
-            extract_tar_archive(archive_path, dest_dir)
-                .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
+            extract_with_system_tar(archive_path, dest_dir, app)
+                .or_else(|_| extract_tar_archive(archive_path, dest_dir))
         },
         ArchiveFormat::Rar => {
             extract_with_system_tar(archive_path, dest_dir, app)
         },
         ArchiveFormat::Unknown => {
-            extract_zip_archive(archive_path, dest_dir, password, app)
-                .or_else(|_| extract_7z_archive(archive_path, dest_dir, password, app))
-                .or_else(|_| extract_bay_archive(archive_path, dest_dir, password, app))
-                .or_else(|_| extract_tar_archive(archive_path, dest_dir))
+            extract_zip_archive(archive_path, dest_dir, password, expected_size, app)
+                .or_else(|_| extract_7z_archive(archive_path, dest_dir, password, expected_size, app))
+                .or_else(|_| extract_bay_archive(archive_path, dest_dir, password, expected_size, app))
                 .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
+                .or_else(|_| extract_tar_archive(archive_path, dest_dir))
         }
     }
 }
@@ -811,6 +889,7 @@ pub fn extract_archive_sync(
     archive_path: String,
     destination: Option<String>,
     password: Option<String>,
+    expected_size: Option<u64>,
 ) -> Result<ExtractResponse, String> {
     reset_extraction_cancel_flag();
     let _priority_guard = ScopedPriorityGuard::new();
@@ -835,7 +914,7 @@ pub fn extract_archive_sync(
     };
 
     let pwd_ref = password.as_deref();
-    let extracted_files = universal_extract(path, &dest_dir, pwd_ref, Some(&app))?;
+    let extracted_files = universal_extract(path, &dest_dir, pwd_ref, expected_size, Some(&app))?;
 
     let total_final_bytes: u64 = extracted_files.iter()
         .filter_map(|p| std::fs::metadata(p).ok())
@@ -866,7 +945,7 @@ pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
         return Err("Archive file does not exist".into());
     }
     let parent = p.parent().unwrap_or_else(|| Path::new("."));
-    universal_extract(p, parent, None, None)?;
+    universal_extract(p, parent, None, None, None)?;
 
     #[cfg(target_os = "windows")]
     {
@@ -903,7 +982,7 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
         d
     };
 
-    if let Err(e) = universal_extract(p, &dest, None, None) {
+    if let Err(e) = universal_extract(p, &dest, None, None, None) {
         // If extraction failed and we created a subfolder, clean it up if empty
         if !has_single_root {
             let _ = std::fs::remove_dir(&dest);

@@ -432,6 +432,7 @@ function App() {
   };
 
   const handleSelectArchive = async () => {
+    if (isExtracting) return;
     try {
       const selected = await open({
         multiple: false,
@@ -439,11 +440,11 @@ function App() {
         filters: [
           {
             name: "Supported Archives",
-            extensions: ["bay", "zip", "7z", "tar", "gz", "tgz", "rar"],
+            extensions: ["bay", "bay_gamer", "zip", "7z", "tar", "gz", "tgz", "rar"],
           },
           {
-            name: "Bayzip Archives (*.bay)",
-            extensions: ["bay"],
+            name: "Bayzip Archives (*.bay, *.bay_gamer)",
+            extensions: ["bay", "bay_gamer"],
           },
           {
             name: "ZIP Archives (*.zip)",
@@ -452,6 +453,10 @@ function App() {
           {
             name: "7-Zip Archives (*.7z)",
             extensions: ["7z"],
+          },
+          {
+            name: "RAR Archives (*.rar)",
+            extensions: ["rar"],
           },
           {
             name: "TAR Archives (*.tar, *.tar.gz)",
@@ -672,6 +677,7 @@ function App() {
         archivePath: selectedArchive,
         destination: finalDest,
         password: extractPassword.trim() ? extractPassword.trim() : undefined,
+        expectedSize: archiveInfo?.total_uncompressed_size || archiveInfo?.size || undefined,
       });
 
       setExtractResult(res);
@@ -1591,7 +1597,7 @@ function App() {
                   <div>
                     <p className="text-sm font-medium text-white mb-1">Drag & drop archive to uncompress</p>
                     <p className="text-xs text-[#A8A8A8]">
-                      Supports <span className="text-[#60CDFF]">.bay</span>, <span className="text-[#60CDFF]">.zip</span>, <span className="text-[#60CDFF]">.7z</span>, <span className="text-[#60CDFF]">.tar</span>, and <span className="text-[#60CDFF]">.tar.gz</span>
+                      Supports <span className="text-[#60CDFF]">.bay</span>, <span className="text-[#60CDFF]">.bay_gamer</span>, <span className="text-[#60CDFF]">.zip</span>, <span className="text-[#60CDFF]">.7z</span>, <span className="text-[#60CDFF]">.rar</span>, and <span className="text-[#60CDFF]">.tar</span>
                     </p>
                   </div>
                   <button
@@ -1791,9 +1797,15 @@ function App() {
 
                   <div className="flex justify-between items-center text-[11px] text-[#8A8A8A]">
                     <span>
-                      {extractProgress && extractProgress.bytes_extracted > 0
-                        ? `${formatBytes(extractProgress.bytes_extracted)} uncompressed`
-                        : "High-speed decompression active"}
+                      {extractProgress && extractProgress.bytes_extracted > 0 ? (
+                        archiveInfo && (archiveInfo.total_uncompressed_size ?? 0) > 0 ? (
+                          `${formatBytes(extractProgress.bytes_extracted)} / ${formatBytes(archiveInfo.total_uncompressed_size!)}`
+                        ) : (
+                          `${formatBytes(extractProgress.bytes_extracted)} uncompressed`
+                        )
+                      ) : (
+                        "High-speed decompression active"
+                      )}
                     </span>
                     <span className="text-[#60CDFF] font-medium">
                       {archiveInfo?.format || "Archive"}

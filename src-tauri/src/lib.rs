@@ -105,9 +105,10 @@ async fn extract_archive(
     archive_path: String,
     destination: Option<String>,
     password: Option<String>,
+    expected_size: Option<u64>,
 ) -> Result<ExtractResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        extract_archive_sync(app, archive_path, destination, password)
+        extract_archive_sync(app, archive_path, destination, password, expected_size)
     })
     .await
     .map_err(|e| format!("Extraction task error: {}", e))?

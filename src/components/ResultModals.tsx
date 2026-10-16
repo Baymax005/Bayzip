@@ -10,6 +10,20 @@ interface ResultModalsProps {
   formatBytes: (bytes: number) => string;
 }
 
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = Math.round(totalSeconds % 60);
+  if (minutes < 60) {
+    return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes}m`;
+}
+
 export function ResultModals({
   compressResult,
   onCloseCompressResult,
@@ -18,6 +32,10 @@ export function ResultModals({
   onCloseExtractResult,
   formatBytes,
 }: ResultModalsProps) {
+  const compressSpeed = compressResult && compressResult.elapsed_ms > 0
+    ? `${formatBytes(compressResult.original_size / (compressResult.elapsed_ms / 1000))}/s`
+    : null;
+
   return (
     <>
       {/* Compression Result Modal */}
@@ -32,7 +50,10 @@ export function ResultModals({
               </div>
               <div>
                 <h3 className="text-lg font-semibold text-white">Archive Created Successfully!</h3>
-                <p className="text-xs text-[#A8A8A8]">Completed in {compressResult.elapsed_ms}ms</p>
+                <p className="text-xs text-[#A8A8A8]">
+                  Completed in {formatElapsed(compressResult.elapsed_ms)}
+                  {compressSpeed ? ` • ${compressSpeed}` : ""}
+                </p>
               </div>
             </div>
 
@@ -130,7 +151,15 @@ export function ResultModals({
               </div>
               <div>
                 <h3 className="text-lg font-semibold text-white">Extraction Complete!</h3>
-                <p className="text-xs text-[#A8A8A8]">Completed in {extractResult.elapsed_ms}ms</p>
+                <p className="text-xs text-[#A8A8A8]">
+                  Completed in {formatElapsed(extractResult.elapsed_ms)}
+                  {extractResult.elapsed_ms > 0 && ((archiveInfo?.total_uncompressed_size ?? 0) > 0 || (archiveInfo?.size ?? 0) > 0)
+                    ? ` • ${(
+                        ((archiveInfo?.total_uncompressed_size || archiveInfo?.size || 0) / (1024 * 1024)) /
+                        (extractResult.elapsed_ms / 1000)
+                      ).toFixed(1)} MB/s`
+                    : ""}
+                </p>
               </div>
             </div>
 
