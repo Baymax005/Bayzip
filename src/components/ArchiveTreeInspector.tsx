@@ -5,6 +5,7 @@ interface ArchiveTreeInspectorProps {
   archiveInfo: ArchiveInfo;
   selectedArchive: string;
   extractPassword?: string;
+  isLoading?: boolean;
   onUnlockPreview?: () => void;
   onPreviewEntry: (entryName: string) => void;
 }
@@ -57,6 +58,7 @@ export function ArchiveTreeInspector({
   archiveInfo,
   selectedArchive,
   extractPassword = "",
+  isLoading = false,
   onUnlockPreview,
   onPreviewEntry,
 }: ArchiveTreeInspectorProps) {
@@ -562,6 +564,15 @@ export function ArchiveTreeInspector({
 
   // Right pane / Content table for Current Folder
   const renderCurrentFolderContents = () => {
+    if (isLoading) {
+      return (
+        <div className="p-8 text-center space-y-3">
+          <div className="w-5 h-5 border-2 border-[#60CDFF] border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-xs text-[#A8A8A8]">Indexing archive directory tree...</p>
+        </div>
+      );
+    }
+
     const hasItems = currentFolderNode.subfolders.length > 0 || filteredCurrentFiles.length > 0;
 
     if (!hasItems) {
@@ -655,6 +666,15 @@ export function ArchiveTreeInspector({
 
   // Flat Table Component
   const renderFlatTable = () => {
+    if (isLoading) {
+      return (
+        <div className="p-8 text-center space-y-3">
+          <div className="w-5 h-5 border-2 border-[#60CDFF] border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-xs text-[#A8A8A8]">Indexing archive directory tree...</p>
+        </div>
+      );
+    }
+
     if (filteredFlatEntries.length === 0) {
       return (
         <div className="p-8 text-center text-xs text-[#888888]">
@@ -760,7 +780,7 @@ export function ArchiveTreeInspector({
             {selectedArchive.split(/[/\\]/).pop()}
           </span>
           <span className="text-white">
-            Uncompressed: {formatBytes(archiveInfo.total_uncompressed_size || 0)}
+            {isLoading ? "Indexing tree..." : `Uncompressed: ${formatBytes(archiveInfo.total_uncompressed_size || 0)}`}
           </span>
         </div>
       </div>

@@ -193,7 +193,15 @@ pub fn write_file_to_bay_archive<W: Write>(
     app: &AppHandle,
     last_emit: &mut Instant,
 ) -> Result<(), String> {
-    let file_meta = std::fs::metadata(filepath).ok();
+    // Open file first and check access BEFORE writing header to prevent framing corruption
+    let mut f = match File::open(filepath) {
+        Ok(file) => file,
+        Err(_) => {
+            // File is locked or inaccessible: skip without writing corrupted 0-byte header
+            return Ok(());
+        }
+    };
+    let file_meta = f.metadata().ok();
     let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
 
     encoder.write_all(&[1u8]).map_err(|e| e.to_string())?; // 1 = File entry
@@ -202,38 +210,52 @@ pub fn write_file_to_bay_archive<W: Write>(
     encoder.write_all(filename_bytes).map_err(|e| e.to_string())?;
     encoder.write_all(&file_size.to_le_bytes()).map_err(|e| e.to_string())?;
 
-    if let Ok(mut f) = File::open(filepath) {
-        loop {
-            if is_compression_cancelled() {
-                return Err("Compression cancelled by user".to_string());
-            }
-            match f.read(read_buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if is_compression_cancelled() {
-                        return Err("Compression cancelled by user".to_string());
-                    }
-                    encoder.write_all(&read_buf[..n]).map_err(|e| e.to_string())?;
-                    *bytes_processed += n as u64;
-                    if last_emit.elapsed().as_millis() >= 50 {
-                        *last_emit = Instant::now();
-                        let pct = if total_original > 0 {
-                            ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
-                        } else {
-                            50.0
-                        };
-                        let _ = app.emit("compress_progress", CompressProgress {
-                            percent: pct,
-                            current_file: rel_name.to_string(),
-                            bytes_processed: *bytes_processed,
-                            total_bytes: total_original,
-                        });
-                    }
+    let mut written_bytes: u64 = 0;
+    loop {
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
+        match f.read(read_buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if is_compression_cancelled() {
+                    return Err("Compression cancelled by user".to_string());
                 }
-                Err(_) => break,
+                encoder.write_all(&read_buf[..n]).map_err(|e| e.to_string())?;
+                written_bytes += n as u64;
+                *bytes_processed += n as u64;
+                if last_emit.elapsed().as_millis() >= 50 {
+                    *last_emit = Instant::now();
+                    let pct = if total_original > 0 {
+                        ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                    } else {
+                        50.0
+                    };
+                    let _ = app.emit("compress_progress", CompressProgress {
+                        percent: pct,
+                        current_file: rel_name.to_string(),
+                        bytes_processed: *bytes_processed,
+                        total_bytes: total_original,
+                    });
+                }
             }
+            Err(_) => break,
         }
     }
+
+    // Framing safeguard: If the file was truncated during reading, pad with zero bytes
+    // to strictly preserve container stream framing alignment for extraction!
+    if written_bytes < file_size {
+        let padding_needed = file_size - written_bytes;
+        let zeros = [0u8; 8192];
+        let mut rem = padding_needed;
+        while rem > 0 {
+            let to_write = (rem as usize).min(zeros.len());
+            encoder.write_all(&zeros[..to_write]).map_err(|e| e.to_string())?;
+            rem -= to_write as u64;
+        }
+    }
+
     Ok(())
 }
 
@@ -292,13 +314,9 @@ pub fn compress_bay(
     ));
 
     let target_dest = if is_encrypted {
-        std::env::temp_dir().join(format!(
-            "bayzip_raw_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
+        output_path.with_file_name(format!(
+            "{}.bayrawtmp",
+            output_path.file_name().map(|n| n.to_string_lossy()).unwrap_or_else(|| "archive.bay".into())
         ))
     } else {
         temp_final.clone()
@@ -319,6 +337,50 @@ pub fn compress_bay(
 
         // Allocate single 1 MB read buffer outside the file loop
         let mut read_buf = vec![0u8; 1024 * 1024];
+
+        let mut toc_entries: Vec<crate::types::ArchiveEntryItem> = Vec::new();
+        for file_str in files {
+            let p = Path::new(file_str);
+            if p.is_file() {
+                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                let sz = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                toc_entries.push(crate::types::ArchiveEntryItem {
+                    name: filename.to_string(),
+                    size: sz,
+                    is_dir: false,
+                });
+            } else if p.is_dir() {
+                fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<crate::types::ArchiveEntryItem>, depth: usize) {
+                    if depth > 32 { return; }
+                    if let Ok(m) = std::fs::symlink_metadata(dir) {
+                        let rel = dir.strip_prefix(base).unwrap_or(dir);
+                        let rel_str = rel.to_string_lossy().replace('\\', "/");
+                        let clean = rel_str.trim_start_matches('/').to_string();
+                        if !clean.is_empty() {
+                            if m.is_dir() && !m.file_type().is_symlink() {
+                                list.push(crate::types::ArchiveEntryItem {
+                                    name: format!("{}/", clean.trim_end_matches('/')),
+                                    size: 0,
+                                    is_dir: true,
+                                });
+                                if let Ok(entries) = std::fs::read_dir(dir) {
+                                    for entry in entries.flatten() {
+                                        collect_bay_toc(&entry.path(), base, list, depth + 1);
+                                    }
+                                }
+                            } else if m.is_file() {
+                                list.push(crate::types::ArchiveEntryItem {
+                                    name: clean,
+                                    size: m.len(),
+                                    is_dir: false,
+                                });
+                            }
+                        }
+                    }
+                }
+                collect_bay_toc(p, parent_dir, &mut toc_entries, 0);
+            }
+        }
 
         if algo_lower.contains("brotli") {
             let mut out_writer = buf_out;
@@ -370,7 +432,15 @@ pub fn compress_bay(
                 return Err("Compression cancelled by user".to_string());
             }
             let _ = encoder.write_all(&[0u8]); // EOF
-            let _ = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
+            let mut finished_writer = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
+            let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
+            let toc_len = toc_json.len() as u64;
+            if toc_len > 0 {
+                let _ = finished_writer.write_all(&toc_json);
+                let _ = finished_writer.write_all(&toc_len.to_le_bytes());
+                let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
+                let _ = finished_writer.flush();
+            }
         } else {
             // Default to Zstandard or .bay_gamer preset
             let mut out_writer = buf_out;
@@ -400,7 +470,15 @@ pub fn compress_bay(
                 return Err("Compression cancelled by user".to_string());
             }
             let _ = encoder.write_all(&[0u8]); // EOF
-            encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
+            let mut finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
+            let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
+            let toc_len = toc_json.len() as u64;
+            if toc_len > 0 {
+                let _ = finished_writer.write_all(&toc_json);
+                let _ = finished_writer.write_all(&toc_len.to_le_bytes());
+                let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
+                let _ = finished_writer.flush();
+            }
         }
 
         if let Some(pwd) = pwd_trimmed {
@@ -1000,24 +1078,35 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
     let parent = p.parent().unwrap_or(p);
 
     if p.is_file() {
-        let file_meta = std::fs::metadata(p).ok();
-        let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
-        let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-        let filename_bytes = filename.as_bytes();
-        
-        let _ = encoder.write_all(&[1u8]); // 1 = file entry
-        let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
-        let _ = encoder.write_all(filename_bytes);
-        let _ = encoder.write_all(&file_size.to_le_bytes());
-
         if let Ok(mut f) = File::open(p) {
+            let file_meta = f.metadata().ok();
+            let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
+            let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            let filename_bytes = filename.as_bytes();
+            
+            let _ = encoder.write_all(&[1u8]); // 1 = file entry
+            let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
+            let _ = encoder.write_all(filename_bytes);
+            let _ = encoder.write_all(&file_size.to_le_bytes());
+
+            let mut written: u64 = 0;
             loop {
                 match f.read(&mut read_buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         let _ = encoder.write_all(&read_buf[..n]);
+                        written += n as u64;
                     }
                     Err(_) => break,
+                }
+            }
+            if written < file_size {
+                let zeros = [0u8; 4096];
+                let mut rem = file_size - written;
+                while rem > 0 {
+                    let to_write = (rem as usize).min(zeros.len());
+                    let _ = encoder.write_all(&zeros[..to_write]);
+                    rem -= to_write as u64;
                 }
             }
         }
@@ -1031,20 +1120,34 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
                     let entry_path = entry.path();
                     if let Ok(m) = std::fs::symlink_metadata(&entry_path) {
                         if m.is_file() {
-                            let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
-                            let rel_str = rel_name.to_string_lossy().replace('\\', "/");
-                            let bytes = rel_str.as_bytes();
-                            let file_size = m.len();
-                            let _ = encoder.write_all(&[1u8]);
-                            let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
-                            let _ = encoder.write_all(bytes);
-                            let _ = encoder.write_all(&file_size.to_le_bytes());
                             if let Ok(mut f) = File::open(&entry_path) {
+                                let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
+                                let rel_str = rel_name.to_string_lossy().replace('\\', "/");
+                                let bytes = rel_str.as_bytes();
+                                let file_size = f.metadata().map(|m| m.len()).unwrap_or(m.len());
+                                let _ = encoder.write_all(&[1u8]);
+                                let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
+                                let _ = encoder.write_all(bytes);
+                                let _ = encoder.write_all(&file_size.to_le_bytes());
+
+                                let mut written: u64 = 0;
                                 loop {
                                     match f.read(read_buf) {
                                         Ok(0) => break,
-                                        Ok(n) => { let _ = encoder.write_all(&read_buf[..n]); },
+                                        Ok(n) => { 
+                                            let _ = encoder.write_all(&read_buf[..n]); 
+                                            written += n as u64;
+                                        },
                                         Err(_) => break,
+                                    }
+                                }
+                                if written < file_size {
+                                    let zeros = [0u8; 4096];
+                                    let mut rem = file_size - written;
+                                    while rem > 0 {
+                                        let to_write = (rem as usize).min(zeros.len());
+                                        let _ = encoder.write_all(&zeros[..to_write]);
+                                        rem -= to_write as u64;
                                     }
                                 }
                             }

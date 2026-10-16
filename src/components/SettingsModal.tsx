@@ -247,7 +247,7 @@ export function SettingsModal({
               </div>
               <div>
                 <p className="text-xs font-semibold text-white">Application Updates</p>
-                <p className="text-[11px] text-[#888888]">Current version v1.0.3 • Up to date</p>
+                <p className="text-[11px] text-[#888888]">Current version v1.0.4 • Up to date</p>
               </div>
             </div>
             <button
@@ -262,7 +262,7 @@ export function SettingsModal({
 
         {/* Footer */}
         <div className="bg-[#181818] px-6 py-3 border-t border-[#2A2A2A] flex items-center justify-between text-[11px] text-[#7A7A7A]">
-          <span>Bayzip v1.0.3 • Preferences</span>
+          <span>Bayzip v1.0.4 • Preferences</span>
           <span className="font-mono text-[#888888]">Esc to close</span>
         </div>
       </div>

@@ -21,7 +21,6 @@ import {
   SelectedItemInfo,
   ExtractProgress,
   ExtractResult,
-  ArchiveEntryItem,
   ArchiveInfo,
   ArchiveEntryPreview,
   StartupCommand,
@@ -68,41 +67,6 @@ function getArchiveStemName(filename: string): string {
     }
   }
   return filename.replace(/\.[^/.]+$/, "");
-}
-
-function hasSingleRootDir(entries?: ArchiveEntryItem[]): boolean {
-  if (!entries || entries.length === 0) return false;
-  let candidateRoot: string | null = null;
-  let nonEmptyCount = 0;
-
-  for (const entry of entries) {
-    const normalized = entry.name.replace(/\\/g, "/");
-    const clean = normalized.trim().replace(/^\/+/, "");
-    if (!clean || clean === ".") continue;
-    nonEmptyCount++;
-
-    const firstSlash = clean.indexOf("/");
-    if (firstSlash === -1) {
-      if (!entry.is_dir) {
-        return false;
-      }
-      const segment = clean;
-      if (candidateRoot === null) {
-        candidateRoot = segment;
-      } else if (candidateRoot !== segment) {
-        return false;
-      }
-    } else {
-      const segment = clean.substring(0, firstSlash);
-      if (candidateRoot === null) {
-        candidateRoot = segment;
-      } else if (candidateRoot !== segment) {
-        return false;
-      }
-    }
-  }
-
-  return nonEmptyCount > 0 && candidateRoot !== null;
 }
 
 function isArchiveFile(filePath: string): boolean {
@@ -169,6 +133,7 @@ function App() {
   // Extraction State
   const [selectedArchive, setSelectedArchive] = useState<string | null>(null);
   const [archiveInfo, setArchiveInfo] = useState<ArchiveInfo | null>(null);
+  const [isInspectingArchive, setIsInspectingArchive] = useState<boolean>(false);
   const [extractDest, setExtractDest] = useState<string>("");
   const [extractToSubfolder, setExtractToSubfolder] = useState<boolean>(true);
   const [openFolderOnExtract, setOpenFolderOnExtract] = useState<boolean>(true);
@@ -253,6 +218,30 @@ function App() {
     const parentDir = filePath.replace(/[/\\][^/\\]+$/, "");
     setExtractDest(parentDir || ".");
 
+    const filename = filePath.split(/[/\\]/).pop() || "archive";
+    const lower = filename.toLowerCase();
+    let format = "Archive";
+    if (lower.endsWith(".bay_gamer")) format = "Bayzip Gamer Archive (.bay_gamer)";
+    else if (lower.endsWith(".bay")) format = "Bayzip Archive (.bay)";
+    else if (lower.endsWith(".zip")) format = "ZIP Archive (.zip)";
+    else if (lower.endsWith(".7z")) format = "7-Zip Archive (.7z)";
+    else if (lower.endsWith(".rar")) format = "RAR Archive (.rar)";
+    else if (lower.endsWith(".tar") || lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) format = "TAR Archive";
+
+    // Immediate synchronous skeleton info so UI renders archive card & dedicated folder name immediately
+    setArchiveInfo({
+      path: filePath,
+      filename,
+      size: 0,
+      format,
+      is_archive: true,
+      is_encrypted: false,
+      file_count: 0,
+      total_uncompressed_size: 0,
+      entries: [],
+    });
+    setIsInspectingArchive(true);
+
     try {
       const info = await invoke<ArchiveInfo>("get_archive_info", {
         path: filePath,
@@ -264,14 +253,13 @@ function App() {
       }
     } catch (err) {
       console.error("Failed to inspect archive info:", err);
-      const filename = filePath.split(/[/\\]/).pop() || "archive";
       const errStr = String(err).toLowerCase();
       const isEnc = errStr.includes("password") || errStr.includes("encrypt");
       setArchiveInfo({
         path: filePath,
         filename,
         size: 0,
-        format: "Archive",
+        format,
         is_archive: true,
         is_encrypted: isEnc,
         file_count: 0,
@@ -281,6 +269,8 @@ function App() {
       if (isEnc) {
         setIsPasswordPromptOpen(true);
       }
+    } finally {
+      setIsInspectingArchive(false);
     }
   };
 
@@ -663,16 +653,9 @@ function App() {
     try {
       let finalDest = extractDest;
       if (extractToSubfolder) {
-        const stem = getArchiveStemName(archiveInfo?.filename || "extracted");
-        const hasSingleRoot = hasSingleRootDir(archiveInfo?.entries);
-
-        // If the archive already contains a single root folder wrapping all contents,
-        // extract directly into extractDest to avoid duplicate folder\folder nesting!
-        if (hasSingleRoot) {
-          finalDest = extractDest;
-        } else {
-          finalDest = `${extractDest}\\${stem}`;
-        }
+        const fallbackName = selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "archive";
+        const stem = getArchiveStemName(archiveInfo?.filename || fallbackName);
+        finalDest = `${extractDest}\\${stem}`;
       }
 
       const res = await invoke<ExtractResult>("extract_archive", {
@@ -1594,6 +1577,7 @@ function App() {
                     archiveInfo={archiveInfo}
                     selectedArchive={selectedArchive}
                     extractPassword={extractPassword}
+                    isLoading={isInspectingArchive}
                     onUnlockPreview={() => selectArchive(selectedArchive, extractPassword.trim())}
                     onPreviewEntry={handlePreviewEntry}
                   />
@@ -1740,7 +1724,11 @@ function App() {
                     <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
                       Extract into dedicated folder{" "}
                       <span className="text-[#60CDFF] font-mono text-xs">
-                        ({archiveInfo?.filename ? getArchiveStemName(archiveInfo.filename) : "folder_name"})
+                        ({archiveInfo?.filename
+                          ? getArchiveStemName(archiveInfo.filename)
+                          : selectedArchive
+                          ? getArchiveStemName(selectedArchive.split(/[/\\]/).pop() || "")
+                          : "folder_name"})
                       </span>
                     </div>
                   </label>

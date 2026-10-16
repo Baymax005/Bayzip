@@ -429,6 +429,9 @@ pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem
         }
     }
 
+    // Allocate 2 MB fast skipping buffer
+    let mut sink = vec![0u8; 2 * 1024 * 1024];
+
     loop {
         let entry_type = if has_first {
             has_first = false;
@@ -465,9 +468,8 @@ pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem
             is_dir,
         });
 
-        // Skip file payload in metadata-only listing
+        // Fast skip file payload in metadata-only listing
         let mut to_skip = file_size;
-        let mut sink = [0u8; 128 * 1024];
         while to_skip > 0 {
             let chunk = (to_skip as usize).min(sink.len());
             match decoder.read(&mut sink[..chunk]) {
@@ -487,6 +489,37 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
         Ok(f) => f,
         Err(_) => return (Vec::new(), 0, 0),
     };
+
+    // Instant TOC (Table of Contents) check at EOF:
+    // If BAYTOC trailer exists, we read metadata in < 1ms without decompressing gigabytes!
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if file_len >= 24 {
+        if file.seek(std::io::SeekFrom::End(-8)).is_ok() {
+            let mut trailer_magic = [0u8; 8];
+            if file.read_exact(&mut trailer_magic).is_ok() && &trailer_magic == b"BAYTOC\x02\x00" {
+                if file.seek(std::io::SeekFrom::End(-16)).is_ok() {
+                    let mut len_bytes = [0u8; 8];
+                    if file.read_exact(&mut len_bytes).is_ok() {
+                        let toc_len = u64::from_le_bytes(len_bytes);
+                        if toc_len > 0 && toc_len < file_len - 16 {
+                            if file.seek(std::io::SeekFrom::End(-16 - toc_len as i64)).is_ok() {
+                                let mut toc_bytes = vec![0u8; toc_len as usize];
+                                if file.read_exact(&mut toc_bytes).is_ok() {
+                                    if let Ok(entries) = serde_json::from_slice::<Vec<ArchiveEntryItem>>(&toc_bytes) {
+                                        let count = entries.len();
+                                        let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
+                                        return (entries, count, total_uncompressed);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = file.seek(std::io::SeekFrom::Start(0));
 
     let mut magic = [0u8; 8];
     let n = file.read(&mut magic).unwrap_or(0);

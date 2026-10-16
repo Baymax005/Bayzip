@@ -43,6 +43,44 @@ use crate::inspector::{
     derive_bay_key,
 };
 
+pub fn base_folder_stem(name: &str) -> &str {
+    if let Some(pos) = name.rfind(" (") {
+        if name.ends_with(')') {
+            return &name[..pos];
+        }
+    }
+    name
+}
+
+pub fn strip_root_component<'a>(path: &'a Path, root_name: &str) -> Option<&'a Path> {
+    let mut components = path.components();
+    if let Some(std::path::Component::Normal(first)) = components.next() {
+        if first.to_string_lossy().eq_ignore_ascii_case(root_name) {
+            return Some(components.as_path());
+        }
+    }
+    None
+}
+
+pub fn resolve_unique_folder_name(target_dir: &Path) -> PathBuf {
+    let Some(name) = target_dir.file_name().and_then(|s| s.to_str()) else {
+        return target_dir.to_path_buf();
+    };
+    if !target_dir.exists() {
+        return target_dir.to_path_buf();
+    }
+    let parent = target_dir.parent().unwrap_or_else(|| Path::new("."));
+    let stem = base_folder_stem(name);
+    let mut counter = 1;
+    loop {
+        let candidate = parent.join(format!("{} ({})", stem, counter));
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
 pub fn extract_bay_stream<R: Read>(
     mut decoder: R,
     dest_dir: &Path,
@@ -50,6 +88,7 @@ pub fn extract_bay_stream<R: Read>(
     app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     let mut extracted_files = Vec::new();
+    let root_strip = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
 
@@ -127,7 +166,33 @@ pub fn extract_bay_stream<R: Read>(
                 continue;
             }
         };
-        let out_path = dest_dir.join(&safe_rel_path);
+
+        let effective_path = match root_strip {
+            Some(prefix) => {
+                match strip_root_component(&safe_rel_path, prefix) {
+                    Some(stripped) => {
+                        if stripped.as_os_str().is_empty() {
+                            let _ = std::fs::create_dir_all(dest_dir);
+                            let mut remaining = file_size;
+                            while remaining > 0 {
+                                let to_read = (remaining as usize).min(io_buf.len());
+                                match decoder.read(&mut io_buf[..to_read]) {
+                                    Ok(0) => break,
+                                    Ok(n) => remaining -= n as u64,
+                                    Err(_) => break,
+                                }
+                            }
+                            continue;
+                        }
+                        stripped.to_path_buf()
+                    }
+                    None => safe_rel_path.clone(),
+                }
+            }
+            None => safe_rel_path.clone(),
+        };
+
+        let out_path = dest_dir.join(&effective_path);
 
         if let Some(parent) = out_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -361,6 +426,7 @@ pub fn extract_zip_archive(
     let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("Invalid zip archive: {}", e))?;
     let mut extracted = Vec::new();
+    let root_strip = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
     let total_entries = archive.len();
     let mut total_extracted: u64 = 0;
     let mut last_emit = Instant::now();
@@ -410,7 +476,23 @@ pub fn extract_zip_archive(
             None => continue,
         };
 
-        let outpath = dest_dir.join(&safe_path);
+        let effective_path = match root_strip {
+            Some(prefix) => {
+                match strip_root_component(&safe_path, prefix) {
+                    Some(stripped) => {
+                        if stripped.as_os_str().is_empty() {
+                            let _ = std::fs::create_dir_all(dest_dir);
+                            continue;
+                        }
+                        stripped.to_path_buf()
+                    }
+                    None => safe_path.clone(),
+                }
+            }
+            None => safe_path.clone(),
+        };
+
+        let outpath = dest_dir.join(&effective_path);
         let clean = raw_name.replace('\\', "/");
         if file.is_dir() || clean.ends_with('/') {
             let _ = std::fs::create_dir_all(&outpath);
@@ -507,6 +589,7 @@ fn extract_tar_entries<R: Read>(
 
     let total_expected_bytes = expected_size.unwrap_or(1).max(1);
     let mut extracted_files = Vec::new();
+    let root_strip = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
     let mut total_extracted: u64 = 0;
     let mut last_emit = Instant::now();
     let mut io_buf = vec![0u8; 2 * 1024 * 1024];
@@ -529,7 +612,23 @@ fn extract_tar_entries<R: Read>(
             }
         };
 
-        let out_path = dest_dir.join(&safe_path);
+        let effective_path = match root_strip {
+            Some(prefix) => {
+                match strip_root_component(&safe_path, prefix) {
+                    Some(stripped) => {
+                        if stripped.as_os_str().is_empty() {
+                            let _ = std::fs::create_dir_all(dest_dir);
+                            continue;
+                        }
+                        stripped.to_path_buf()
+                    }
+                    None => safe_path.clone(),
+                }
+            }
+            None => safe_path.clone(),
+        };
+
+        let out_path = dest_dir.join(&effective_path);
         let clean = path_str.replace('\\', "/");
         let header = entry.header();
         let is_dir = header.entry_type().is_dir() || clean.ends_with('/');
@@ -660,6 +759,7 @@ pub fn extract_7z_archive(
     };
 
     let mut extracted = Vec::new();
+    let root_strip = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
     let mut processed_count = 0;
     let mut last_emit = Instant::now();
     let mut total_extracted: u64 = 0;
@@ -677,7 +777,23 @@ pub fn extract_7z_archive(
             None => return Ok(true),
         };
 
-        let out_path = dest_dir.join(&safe_path);
+        let effective_path = match root_strip {
+            Some(prefix) => {
+                match strip_root_component(&safe_path, prefix) {
+                    Some(stripped) => {
+                        if stripped.as_os_str().is_empty() {
+                            let _ = std::fs::create_dir_all(dest_dir);
+                            return Ok(true);
+                        }
+                        stripped.to_path_buf()
+                    }
+                    None => safe_path.clone(),
+                }
+            }
+            None => safe_path.clone(),
+        };
+
+        let out_path = dest_dir.join(&effective_path);
         let clean = raw_name.replace('\\', "/");
         if entry.is_directory() || clean.ends_with('/') {
             let _ = std::fs::create_dir_all(&out_path);
@@ -1011,16 +1127,39 @@ pub fn extract_archive_sync(
 
     let dest_dir = if let Some(custom_dest) = destination {
         if custom_dest.trim().is_empty() {
-            parent.join(&stem)
+            resolve_unique_folder_name(&parent.join(&stem))
         } else {
-            PathBuf::from(custom_dest)
+            resolve_unique_folder_name(&PathBuf::from(custom_dest))
         }
     } else {
-        parent.join(&stem)
+        resolve_unique_folder_name(&parent.join(&stem))
     };
 
+    let dest_dir_existed_before = dest_dir.exists();
     let pwd_ref = password.as_deref();
-    let extracted_files = universal_extract(path, &dest_dir, pwd_ref, expected_size, Some(&app))?;
+    let res = universal_extract(path, &dest_dir, pwd_ref, expected_size, Some(&app));
+
+    let extracted_files = match res {
+        Ok(files) => files,
+        Err(e) => {
+            // User requested cancellation or fatal error occurred:
+            // Clean up the half-extracted folder if it was newly created for this extraction!
+            if !dest_dir_existed_before && dest_dir.exists() {
+                for _ in 0..5 {
+                    if std::fs::remove_dir_all(&dest_dir).is_ok() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                }
+            }
+
+            if is_extraction_cancelled() || e.to_lowercase().contains("cancel") {
+                return Err("Extraction cancelled by user".to_string());
+            } else {
+                return Err(e);
+            }
+        }
+    };
 
     let total_final_bytes: u64 = extracted_files.iter()
         .filter_map(|p| std::fs::metadata(p).ok())
@@ -1089,9 +1228,9 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
     };
 
     if let Err(e) = universal_extract(p, &dest, None, None, None) {
-        // If extraction failed and we created a subfolder, clean it up if empty
+        // If extraction failed and we created a subfolder, clean it up completely
         if !has_single_root {
-            let _ = std::fs::remove_dir(&dest);
+            let _ = std::fs::remove_dir_all(&dest);
         }
         return Err(e);
     }
