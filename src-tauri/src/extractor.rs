@@ -497,9 +497,116 @@ pub fn extract_zip_archive(
     Ok(extracted)
 }
 
+fn extract_tar_entries<R: Read>(
+    mut archive: tar::Archive<R>,
+    dest_dir: &Path,
+    expected_size: Option<u64>,
+    app: Option<&AppHandle>,
+) -> Result<Vec<String>, String> {
+    std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
+
+    let total_expected_bytes = expected_size.unwrap_or(1).max(1);
+    let mut extracted_files = Vec::new();
+    let mut total_extracted: u64 = 0;
+    let mut last_emit = Instant::now();
+    let mut io_buf = vec![0u8; 2 * 1024 * 1024];
+
+    let entries = archive.entries().map_err(|e| format!("Tar read entries error: {}", e))?;
+    for entry_res in entries {
+        if is_extraction_cancelled() {
+            return Err("Extraction cancelled by user".to_string());
+        }
+
+        let mut entry = entry_res.map_err(|e| format!("Tar entry error: {}", e))?;
+        let entry_path = entry.path().map_err(|e| format!("Tar path error: {}", e))?;
+        let path_str = entry_path.to_string_lossy().to_string();
+
+        let safe_path = match sanitize_archive_path(&path_str) {
+            Some(p) => p,
+            None => {
+                // Safely skip any path traversal / Zip-Slip / invalid entry
+                continue;
+            }
+        };
+
+        let out_path = dest_dir.join(&safe_path);
+        let clean = path_str.replace('\\', "/");
+        let header = entry.header();
+        let is_dir = header.entry_type().is_dir() || clean.ends_with('/');
+
+        if is_dir {
+            let _ = std::fs::create_dir_all(&out_path);
+        } else {
+            if let Some(p) = out_path.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+
+            let file_size = entry.size();
+            let mut out_file = File::create(&out_path).map_err(|e| format!("Create file error: {}", e))?;
+
+            if file_size <= 64 * 1024 {
+                let sz = file_size as usize;
+                if sz > 0 {
+                    entry.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Tar read error: {}", e))?;
+                    out_file.write_all(&io_buf[..sz]).map_err(|e| format!("Tar write error: {}", e))?;
+                    total_extracted += file_size;
+                }
+            } else {
+                if file_size > 16 * 1024 * 1024 {
+                    let _ = out_file.set_len(file_size);
+                }
+                let cap = if file_size <= 16 * 1024 * 1024 {
+                    1024 * 1024
+                } else {
+                    8 * 1024 * 1024
+                };
+                let mut writer = BufWriter::with_capacity(cap, out_file);
+                let mut remaining = file_size;
+
+                while remaining > 0 {
+                    if is_extraction_cancelled() {
+                        drop(writer);
+                        let _ = std::fs::remove_file(&out_path);
+                        return Err("Extraction cancelled by user".to_string());
+                    }
+                    let to_read = (remaining as usize).min(io_buf.len());
+                    match entry.read(&mut io_buf[..to_read]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            writer.write_all(&io_buf[..n]).map_err(|e| format!("Tar write error: {}", e))?;
+                            remaining = remaining.saturating_sub(n as u64);
+                            total_extracted += n as u64;
+
+                            if let Some(app_handle) = app {
+                                if last_emit.elapsed().as_millis() >= 80 {
+                                    last_emit = Instant::now();
+                                    let pct = ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0);
+                                    let _ = app_handle.emit("extract_progress", ExtractProgress {
+                                        percent: pct,
+                                        current_file: safe_path.to_string_lossy().to_string(),
+                                        bytes_extracted: total_extracted,
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => return Err(format!("Tar read error: {}", e)),
+                    }
+                }
+                writer.flush().map_err(|e| format!("Flush error: {}", e))?;
+            }
+
+            extracted_files.push(out_path.to_string_lossy().to_string());
+        }
+    }
+
+    Ok(extracted_files)
+}
+
 pub fn extract_tar_archive(
     archive_path: &Path,
     dest_dir: &Path,
+    expected_size: Option<u64>,
+    app: Option<&AppHandle>,
 ) -> Result<Vec<String>, String> {
     let raw_file = File::open(archive_path).map_err(|e| format!("Failed to open tar: {}", e))?;
     let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
@@ -510,13 +617,12 @@ pub fn extract_tar_archive(
     
     if is_gz {
         let tar = flate2::read::GzDecoder::new(reader);
-        let mut archive = tar::Archive::new(tar);
-        archive.unpack(dest_dir).map_err(|e| format!("Tar unpack error: {}", e))?;
+        let archive = tar::Archive::new(tar);
+        extract_tar_entries(archive, dest_dir, expected_size, app)
     } else {
-        let mut archive = tar::Archive::new(reader);
-        archive.unpack(dest_dir).map_err(|e| format!("Tar unpack error: {}", e))?;
+        let archive = tar::Archive::new(reader);
+        extract_tar_entries(archive, dest_dir, expected_size, app)
     }
-    Ok(vec![dest_dir.to_string_lossy().to_string()])
 }
 
 pub fn extract_7z_archive(
@@ -869,7 +975,7 @@ pub fn universal_extract(
         },
         ArchiveFormat::Tar | ArchiveFormat::TarGz => {
             extract_with_system_tar(archive_path, dest_dir, app)
-                .or_else(|_| extract_tar_archive(archive_path, dest_dir))
+                .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app))
         },
         ArchiveFormat::Rar => {
             extract_with_system_tar(archive_path, dest_dir, app)
@@ -879,7 +985,7 @@ pub fn universal_extract(
                 .or_else(|_| extract_7z_archive(archive_path, dest_dir, password, expected_size, app))
                 .or_else(|_| extract_bay_archive(archive_path, dest_dir, password, expected_size, app))
                 .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
-                .or_else(|_| extract_tar_archive(archive_path, dest_dir))
+                .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app))
         }
     }
 }

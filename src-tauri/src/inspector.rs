@@ -36,6 +36,12 @@ pub fn derive_bay_key(password: &str, salt: &[u8]) -> [u8; 32] {
     key
 }
 
+const DOS_RESERVED_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
 pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
     let clean = raw.replace('\\', "/");
     let trimmed = clean.trim_start_matches('/');
@@ -48,6 +54,18 @@ pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
             std::path::Component::ParentDir
             | std::path::Component::RootDir
             | std::path::Component::Prefix(_) => return None,
+            std::path::Component::Normal(os_str) => {
+                let s = os_str.to_string_lossy();
+                // Block NTFS Alternate Data Streams (ADS), null bytes, and colons
+                if s.contains(':') || s.contains('\0') {
+                    return None;
+                }
+                // Check DOS reserved device names (e.g. CON, AUX, NUL, COM1, regardless of extension)
+                let stem = s.split('.').next().unwrap_or("").trim();
+                if DOS_RESERVED_NAMES.iter().any(|&r| stem.eq_ignore_ascii_case(r)) {
+                    return None;
+                }
+            }
             _ => {}
         }
     }
@@ -958,18 +976,40 @@ fn preview_tar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>, u6
 }
 
 fn preview_rar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>, u64), String> {
+    let clean_name = entry_name.trim();
+    if clean_name.is_empty() || clean_name.starts_with('-') {
+        return Err("Invalid entry name for archive preview".into());
+    }
+
     let mut cmd = Command::new("tar.exe");
-    cmd.args(["-xf", &path.to_string_lossy(), entry_name, "-O"]);
+    // Use -- delimiter before entry_name to strictly prevent CLI flag injection
+    cmd.args(["-xf", &path.to_string_lossy(), "-O", "--", clean_name]);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
 
-    let output = cmd.output().map_err(|e| format!("Failed to run tar command: {}", e))?;
-    if !output.status.success() {
-        return Err(format!("Extraction command failed: {}", String::from_utf8_lossy(&output.stderr)));
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to run tar command: {}", e))?;
+    let mut stdout = child.stdout.take().ok_or_else(|| "Failed to capture stdout".to_string())?;
+
+    let max_preview = 15 * 1024 * 1024; // Strict 15 MB limit matching other preview formats
+    let mut buf = Vec::new();
+    let mut chunk = vec![0u8; 64 * 1024];
+
+    while buf.len() < max_preview {
+        let to_read = (max_preview - buf.len()).min(chunk.len());
+        match stdout.read(&mut chunk[..to_read]) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) => break,
+        }
     }
-    let data = output.stdout;
-    let size = data.len() as u64;
-    Ok((data, size))
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let size = buf.len() as u64;
+    Ok((buf, size))
 }
 
 pub fn preview_archive_entry_sync(

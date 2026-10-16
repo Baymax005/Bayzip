@@ -8,6 +8,7 @@ import "./App.css";
 
 import { Titlebar } from "./components/Titlebar";
 import { AboutModal } from "./components/AboutModal";
+import { SettingsModal } from "./components/SettingsModal";
 import { PasswordModal } from "./components/PasswordModal";
 import { ResultModals } from "./components/ResultModals";
 import { ArchiveTreeInspector } from "./components/ArchiveTreeInspector";
@@ -144,6 +145,7 @@ function App() {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [itemsInfo, setItemsInfo] = useState<Record<string, { size: number; is_dir: boolean }>>({});
   const [isAboutOpen, setIsAboutOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
 
   // Extraction State & Password
@@ -811,23 +813,40 @@ function App() {
               </span>
             </div>
 
-            <div className="flex space-x-3">
-              <button
-                type="button"
-                onClick={() => setIsAboutOpen(true)}
-                className="text-sm font-medium px-4 py-1.5 rounded text-[#A8A8A8] hover:bg-[#333333] hover:text-white transition-colors cursor-pointer"
-              >
-                About
-              </button>
+            <div className="flex items-center space-x-2">
               {activeMode === "compress" && (
                 <button
                   type="button"
                   onClick={() => setIsAdvanced(!isAdvanced)}
-                  className="text-sm font-medium px-4 py-1.5 rounded bg-[#333333] hover:bg-[#3E3E3E] border border-[#3E3E3E] transition-colors cursor-pointer"
+                  className="text-xs font-medium px-3 py-1.5 rounded-md bg-[#252525] hover:bg-[#303030] border border-[#3E3E3E] hover:border-[#555] transition-colors cursor-pointer text-[#C8C8C8] hover:text-white"
                 >
-                  {isAdvanced ? "Simple Mode" : "Advanced Options"}
+                  {isAdvanced ? "Simple Mode" : "Advanced"}
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => setIsAboutOpen(true)}
+                className="text-xs font-medium px-2.5 py-1.5 rounded-md text-[#A8A8A8] hover:text-white hover:bg-[#252525] transition-colors cursor-pointer"
+              >
+                About
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(true)}
+                className="p-1.5 text-[#A8A8A8] hover:text-[#60CDFF] transition-colors cursor-pointer group"
+                title="Settings"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  className="w-4 h-4 transition-transform duration-500 ease-out group-hover:rotate-90"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
             </div>
           </div>
 
@@ -1879,6 +1898,12 @@ function App() {
       <AboutModal
         isOpen={isAboutOpen}
         onClose={() => setIsAboutOpen(false)}
+      />
+
+      {/* Settings Modal (Draggable Floating Window) */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
         isSyncingRegistry={isSyncingRegistry}
         contextMenuStatus={contextMenuStatus}
         onRegisterContextMenu={handleRegisterContextMenu}
