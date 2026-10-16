@@ -308,7 +308,7 @@ function App() {
           }
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     // 3. Listen to native Tauri file drop events
     getCurrentWebview()
@@ -669,7 +669,7 @@ function App() {
       setIsPasswordPromptOpen(false);
 
       if (openFolderOnExtract && res.output_directory) {
-        revealItemInDir(res.output_directory).catch(() => {});
+        revealItemInDir(res.output_directory).catch(() => { });
       }
     } catch (err) {
       const errMsg = String(err);
@@ -750,11 +750,10 @@ function App() {
                     setActiveMode("compress");
                     setExtractResult(null);
                   }}
-                  className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                    activeMode === "compress"
+                  className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${activeMode === "compress"
                       ? "bg-[#2D2D2D] text-white shadow-sm border border-[#3E3E3E]"
                       : "text-[#888888] hover:text-white"
-                  }`}
+                    }`}
                   title={isCompressing ? "Compression in progress" : undefined}
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5 text-[#60CDFF]">
@@ -771,11 +770,10 @@ function App() {
                 <button
                   type="button"
                   onClick={() => setActiveMode("extract")}
-                  className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                    activeMode === "extract"
+                  className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${activeMode === "extract"
                       ? "bg-[#2D2D2D] text-white shadow-sm border border-[#3E3E3E]"
                       : "text-[#888888] hover:text-white"
-                  }`}
+                    }`}
                   title={isExtracting ? "Extraction in progress" : undefined}
                 >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5 text-[#60CDFF]">
@@ -1041,8 +1039,8 @@ function App() {
                         {isCancellingCompress
                           ? "Cancelling compression..."
                           : progress?.current_file
-                          ? `Compressing: ${progress.current_file}`
-                          : `Compressing into ${activeCompressConfig?.archiveName || "archive"}${activeCompressConfig?.format || selectedFormat}...`}
+                            ? `Compressing: ${progress.current_file}`
+                            : `Compressing into ${activeCompressConfig?.archiveName || "archive"}${activeCompressConfig?.format || selectedFormat}...`}
                       </span>
                     </div>
                     <div className="flex items-center space-x-2.5 shrink-0">
@@ -1109,9 +1107,8 @@ function App() {
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
-                        className={`w-3.5 h-3.5 text-[#60CDFF] transition-transform ${
-                          isRefreshingSpecs ? "animate-spin" : "group-hover:rotate-180 duration-500"
-                        }`}
+                        className={`w-3.5 h-3.5 text-[#60CDFF] transition-transform ${isRefreshingSpecs ? "animate-spin" : "group-hover:rotate-180 duration-500"
+                          }`}
                       >
                         <path
                           strokeLinecap="round"
@@ -1161,9 +1158,8 @@ function App() {
                         disabled={isCompressing}
                         value={isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue}
                         onChange={(e) => setSliderValue(Number(e.target.value))}
-                        className={`w-full h-1 bg-[#3E3E3E] rounded-lg appearance-none accent-[#60CDFF] relative z-10 ${
-                          isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                        }`}
+                        className={`w-full h-1 bg-[#3E3E3E] rounded-lg appearance-none accent-[#60CDFF] relative z-10 ${isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                          }`}
                       />
                       <div className="absolute w-[calc(100%-16px)] left-[8px] mt-2">
                         <span className="absolute left-[0%] -translate-x-1/2 text-xs text-[#A8A8A8]">0</span>
@@ -1194,8 +1190,8 @@ function App() {
                       {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".tar"
                         ? "Direct stream buffer"
                         : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".zip"
-                        ? "Standard Deflate buffer"
-                        : `Dynamic safe cap (${specs ? specs.free_ram_gb.toFixed(1) : "?"} GB available)`}
+                          ? "Standard Deflate buffer"
+                          : `Dynamic safe cap (${specs ? specs.free_ram_gb.toFixed(1) : "?"} GB available)`}
                     </p>
                   </div>
 
@@ -1216,12 +1212,12 @@ function App() {
                       {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".tar"
                         ? "Single-stream sequential I/O"
                         : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".zip"
-                        ? "Standard ZIP is single-threaded"
-                        : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".7z"
-                        ? `${getEstimatedCores()} Threads allocated for LZMA2`
-                        : (isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue) === 100
-                        ? "100% Full Multithreading"
-                        : `${isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue}% Thread Allocation`}
+                          ? "Standard ZIP is single-threaded"
+                          : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".7z"
+                            ? `${getEstimatedCores()} Threads allocated for LZMA2`
+                            : (isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue) === 100
+                              ? "100% Full Multithreading"
+                              : `${isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue}% Thread Allocation`}
                     </p>
                   </div>
                 </div>
@@ -1245,9 +1241,8 @@ function App() {
                               setSelectedAlgorithm(FORMAT_ALGORITHMS[newFormat][0]);
                             }
                           }}
-                          className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${
-                            isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                          }`}
+                          className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                            }`}
                         >
                           <option value=".bay">.bay</option>
                           <option value=".bay_gamer">.bay (Gamer Mod Pack)</option>
@@ -1275,9 +1270,8 @@ function App() {
                               if (isCompressing) return;
                               setSelectedAlgorithm(e.target.value);
                             }}
-                            className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${
-                              isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                            }`}
+                            className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                              }`}
                           >
                             {FORMAT_ALGORITHMS[isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat]?.map((algo) => (
                               <option key={algo} value={algo}>
@@ -1304,9 +1298,8 @@ function App() {
                             if (isCompressing) return;
                             setSelectedEncryption(e.target.value);
                           }}
-                          className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${
-                            isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                          }`}
+                          className={`w-full appearance-none bg-[#202020] hover:bg-[#252525] rounded-md pl-3 pr-8 py-2 text-sm border border-[#3E3E3E] hover:border-[#555] focus:border-[#60CDFF] outline-none text-white truncate transition-colors ${isCompressing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                            }`}
                         >
                           <option value="none">None (Unencrypted)</option>
                           <option value="aes-256">AES-256 (Military-Grade)</option>
@@ -1389,14 +1382,12 @@ function App() {
                           onChange={() => setArchiveToOriginalPath(!archiveToOriginalPath)}
                         />
                         <div
-                          className={`block w-10 h-6 rounded-full transition-colors ${
-                            archiveToOriginalPath ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
-                          }`}
+                          className={`block w-10 h-6 rounded-full transition-colors ${archiveToOriginalPath ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                            }`}
                         ></div>
                         <div
-                          className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${
-                            archiveToOriginalPath ? "transform translate-x-4" : ""
-                          }`}
+                          className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${archiveToOriginalPath ? "transform translate-x-4" : ""
+                            }`}
                         ></div>
                       </div>
                       <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
@@ -1440,14 +1431,12 @@ function App() {
                           onChange={() => setSeparateArchives(!separateArchives)}
                         />
                         <div
-                          className={`block w-10 h-6 rounded-full transition-colors ${
-                            separateArchives ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
-                          }`}
+                          className={`block w-10 h-6 rounded-full transition-colors ${separateArchives ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                            }`}
                         ></div>
                         <div
-                          className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${
-                            separateArchives ? "transform translate-x-4" : ""
-                          }`}
+                          className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${separateArchives ? "transform translate-x-4" : ""
+                            }`}
                         ></div>
                       </div>
                       <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
@@ -1472,11 +1461,10 @@ function App() {
                   type="button"
                   disabled={isCancellingCompress}
                   onClick={isCompressing ? handleCancelCompress : handleCompress}
-                  className={`px-8 py-2.5 font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                    isCompressing
+                  className={`px-8 py-2.5 font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${isCompressing
                       ? "bg-red-950/40 hover:bg-red-900/60 text-[#FF99A4] hover:text-[#FFB3BA] border border-red-800/60 hover:border-red-600"
                       : "bg-[#60CDFF] hover:bg-[#4FB8E6] text-black"
-                  }`}
+                    }`}
                   title={isCompressing ? "Click to cancel compression" : undefined}
                 >
                   {isCompressing && (
@@ -1491,8 +1479,8 @@ function App() {
                         ? "Cancelling..."
                         : "Cancel Compression"
                       : selectedFiles.length > 0
-                      ? "Compress Now"
-                      : "Select Files to Compress"}
+                        ? "Compress Now"
+                        : "Select Files to Compress"}
                   </span>
                 </button>
               </div>
@@ -1673,11 +1661,10 @@ function App() {
                           ? "Enter password to decrypt..."
                           : "Leave blank (unencrypted)"
                       }
-                      className={`w-full bg-[#202020] text-sm text-white pl-3 pr-10 py-2 rounded-md border outline-none font-mono text-xs placeholder-[#666] transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                        archiveInfo?.is_encrypted
+                      className={`w-full bg-[#202020] text-sm text-white pl-3 pr-10 py-2 rounded-md border outline-none font-mono text-xs placeholder-[#666] transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${archiveInfo?.is_encrypted
                           ? "border-amber-500/60 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/30"
                           : "border-[#3E3E3E] focus:border-[#60CDFF]"
-                      }`}
+                        }`}
                     />
                     <button
                       type="button"
@@ -1711,14 +1698,12 @@ function App() {
                         onChange={() => setExtractToSubfolder(!extractToSubfolder)}
                       />
                       <div
-                        className={`block w-10 h-6 rounded-full transition-colors ${
-                          extractToSubfolder ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
-                        }`}
+                        className={`block w-10 h-6 rounded-full transition-colors ${extractToSubfolder ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                          }`}
                       ></div>
                       <div
-                        className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${
-                          extractToSubfolder ? "transform translate-x-4" : ""
-                        }`}
+                        className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${extractToSubfolder ? "transform translate-x-4" : ""
+                          }`}
                       ></div>
                     </div>
                     <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
@@ -1727,8 +1712,8 @@ function App() {
                         ({archiveInfo?.filename
                           ? getArchiveStemName(archiveInfo.filename)
                           : selectedArchive
-                          ? getArchiveStemName(selectedArchive.split(/[/\\]/).pop() || "")
-                          : "folder_name"})
+                            ? getArchiveStemName(selectedArchive.split(/[/\\]/).pop() || "")
+                            : "folder_name"})
                       </span>
                     </div>
                   </label>
@@ -1743,14 +1728,12 @@ function App() {
                         onChange={() => setOpenFolderOnExtract(!openFolderOnExtract)}
                       />
                       <div
-                        className={`block w-10 h-6 rounded-full transition-colors ${
-                          openFolderOnExtract ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
-                        }`}
+                        className={`block w-10 h-6 rounded-full transition-colors ${openFolderOnExtract ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                          }`}
                       ></div>
                       <div
-                        className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${
-                          openFolderOnExtract ? "transform translate-x-4" : ""
-                        }`}
+                        className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${openFolderOnExtract ? "transform translate-x-4" : ""
+                          }`}
                       ></div>
                     </div>
                     <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
@@ -1835,11 +1818,10 @@ function App() {
                   type="button"
                   disabled={isExtracting && isCancellingExtract}
                   onClick={isExtracting ? handleCancelExtract : handleExtract}
-                  className={`px-8 py-2.5 font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                    isExtracting
+                  className={`px-8 py-2.5 font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${isExtracting
                       ? "bg-red-950/40 hover:bg-red-900/60 text-[#FF99A4] hover:text-[#FFB3BA] border border-red-800/60 hover:border-red-600"
                       : "bg-[#60CDFF] hover:bg-[#4FB8E6] text-black"
-                  }`}
+                    }`}
                   title={isExtracting ? "Click to cancel extraction" : undefined}
                 >
                   {isExtracting && (
@@ -1854,8 +1836,8 @@ function App() {
                         ? "Cancelling..."
                         : "Cancel Extraction"
                       : selectedArchive
-                      ? "Extract Now"
-                      : "Select Archive to Extract"}
+                        ? "Extract Now"
+                        : "Select Archive to Extract"}
                   </span>
                 </button>
               </div>

@@ -7,6 +7,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce, Key
 };
+use crate::crypto::ChunkedAesReader;
 use sevenz_rust2::Password;
 
 use std::process::{Command, Stdio};
@@ -322,6 +323,40 @@ pub fn extract_bay_archive(
     let n = file.read(&mut magic)
         .map_err(|e| format!("Invalid or corrupted .bay header: {}", e))?;
 
+    // Encrypted .bay v3 (Streaming chunked AEAD - Constant ~1 MB RAM)
+    if n >= 7 && magic.starts_with(b"BAYENC\x03") {
+        let pwd = match password {
+            Some(p) if !p.trim().is_empty() => p.trim(),
+            _ => return Err("Password required: This .bay archive is encrypted with AES-256-GCM.".into()),
+        };
+
+        file.seek(std::io::SeekFrom::Start(8)).map_err(|e| e.to_string())?;
+        let mut enc_reader = ChunkedAesReader::new(file, pwd)
+            .map_err(|e| format!("Failed to initialize decryption: {}", e))?;
+
+        let mut inner_sig = [0u8; 8];
+        enc_reader.read_exact(&mut inner_sig)
+            .map_err(|_| "Incorrect password: Failed to decrypt AES-256-GCM archive.".to_string())?;
+
+        if inner_sig.starts_with(b"BAYBRO\x02") {
+            let decoder = brotli::Decompressor::new(enc_reader, 64 * 1024);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+        } else if inner_sig.starts_with(b"BAYLZ4\x02") {
+            let decoder = lz4_flex::frame::FrameDecoder::new(enc_reader);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+        } else if inner_sig.starts_with(b"BAYZIP\x02") {
+            let decoder = zstd::stream::Decoder::new(enc_reader)
+                .map_err(|e| format!("Zstd decoder error: {}", e))?;
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+        } else {
+            let combined = std::io::Cursor::new(inner_sig).chain(enc_reader);
+            let decoder = zstd::stream::Decoder::new(combined)
+                .map_err(|e| format!("Zstd decoder error: {}", e))?;
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+        }
+    }
+
+    // Legacy encrypted .bay v1 & v2 (single buffer fallback)
     if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),

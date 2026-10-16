@@ -1,4 +1,5 @@
 pub mod types;
+pub mod crypto;
 pub mod priority;
 pub mod registry;
 pub mod inspector;

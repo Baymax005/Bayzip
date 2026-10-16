@@ -11,30 +11,13 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce, Key,
 };
-use sha2::{Sha256, Digest};
 
+pub use crate::crypto::derive_bay_key;
+use crate::crypto::ChunkedAesReader;
 use crate::types::{ArchiveEntryItem, ArchiveInfo, ArchiveFormat, ArchiveEntryPreview};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-pub fn derive_bay_key(password: &str, salt: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(password.as_bytes());
-    hasher.update(salt);
-    let mut current = hasher.finalize();
-
-    for _ in 1..10_000 {
-        let mut h = Sha256::new();
-        h.update(&current);
-        h.update(salt);
-        current = h.finalize();
-    }
-
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&current);
-    key
-}
 
 const DOS_RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL",
@@ -142,7 +125,7 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
 
     let mut magic = [0u8; 8];
     let bytes_read = file.read(&mut magic).unwrap_or(0);
-    if bytes_read >= 7 && (magic.starts_with(b"BAYZIP\x02") || magic.starts_with(b"BAYBRO\x02") || magic.starts_with(b"BAYLZ4\x02") || magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
+    if bytes_read >= 6 && (magic.starts_with(b"BAYZIP") || magic.starts_with(b"BAYBRO") || magic.starts_with(b"BAYLZ4") || magic.starts_with(b"BAYENC")) {
         return ArchiveFormat::Bay;
     }
     if bytes_read >= 4 && magic[0] == 0x04 && magic[1] == 0x22 && magic[2] == 0x4D && magic[3] == 0x18 {
@@ -184,7 +167,7 @@ pub fn is_archive_encrypted(path: &Path) -> bool {
     let Ok(mut file) = File::open(path) else { return false; };
     let mut header = [0u8; 16];
     let n = file.read(&mut header).unwrap_or(0);
-    if n >= 7 && (header.starts_with(b"BAYENC\x01") || header.starts_with(b"BAYENC\x02")) {
+    if n >= 6 && header.starts_with(b"BAYENC") {
         return true;
     }
     // Check ZIP encryption
@@ -524,7 +507,43 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
     let mut magic = [0u8; 8];
     let n = file.read(&mut magic).unwrap_or(0);
 
-    // Encrypted .bay
+    // Encrypted .bay v3 (Streaming chunked AEAD - Constant ~1 MB RAM)
+    if n >= 7 && magic.starts_with(b"BAYENC\x03") {
+        let pwd = match password {
+            Some(p) if !p.trim().is_empty() => p.trim(),
+            _ => return (Vec::new(), 0, 0),
+        };
+
+        let _ = file.seek(std::io::SeekFrom::Start(8));
+        let Ok(mut enc_reader) = ChunkedAesReader::new(file, pwd) else {
+            return (Vec::new(), 0, 0);
+        };
+
+        let mut inner_sig = [0u8; 8];
+        if enc_reader.read_exact(&mut inner_sig).is_err() {
+            return (Vec::new(), 0, 0);
+        }
+
+        if inner_sig.starts_with(b"BAYBRO\x02") {
+            let decoder = brotli::Decompressor::new(enc_reader, 64 * 1024);
+            return list_bay_stream_entries(decoder);
+        } else if inner_sig.starts_with(b"BAYLZ4\x02") {
+            let decoder = lz4_flex::frame::FrameDecoder::new(enc_reader);
+            return list_bay_stream_entries(decoder);
+        } else if inner_sig.starts_with(b"BAYZIP\x02") {
+            if let Ok(decoder) = zstd::stream::Decoder::new(enc_reader) {
+                return list_bay_stream_entries(decoder);
+            }
+        } else {
+            let combined = std::io::Cursor::new(inner_sig).chain(enc_reader);
+            if let Ok(decoder) = zstd::stream::Decoder::new(combined) {
+                return list_bay_stream_entries(decoder);
+            }
+        }
+        return (Vec::new(), 0, 0);
+    }
+
+    // Legacy encrypted .bay v1 & v2 (single buffer fallback)
     if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),
@@ -800,6 +819,38 @@ fn preview_bay_entry_bytes(path: &Path, entry_name: &str, password: Option<&str>
     let mut magic = [0u8; 8];
     let n = file.read(&mut magic).unwrap_or(0);
 
+    // Encrypted .bay v3 (Streaming chunked AEAD - Constant ~1 MB RAM)
+    if n >= 7 && magic.starts_with(b"BAYENC\x03") {
+        let pwd = match password {
+            Some(p) if !p.trim().is_empty() => p.trim(),
+            _ => return Err("Password required for encrypted .bay archive".into()),
+        };
+
+        let _ = file.seek(std::io::SeekFrom::Start(8));
+        let mut enc_reader = ChunkedAesReader::new(file, pwd)
+            .map_err(|e| format!("Decryption error: {}", e))?;
+
+        let mut inner_sig = [0u8; 8];
+        enc_reader.read_exact(&mut inner_sig)
+            .map_err(|_| "Incorrect password for .bay archive".to_string())?;
+
+        if inner_sig.starts_with(b"BAYBRO\x02") {
+            let decoder = brotli::Decompressor::new(enc_reader, 64 * 1024);
+            return read_bay_entry_from_stream(decoder, entry_name);
+        } else if inner_sig.starts_with(b"BAYLZ4\x02") {
+            let decoder = lz4_flex::frame::FrameDecoder::new(enc_reader);
+            return read_bay_entry_from_stream(decoder, entry_name);
+        } else if inner_sig.starts_with(b"BAYZIP\x02") {
+            let decoder = zstd::stream::Decoder::new(enc_reader).map_err(|e| e.to_string())?;
+            return read_bay_entry_from_stream(decoder, entry_name);
+        } else {
+            let combined = std::io::Cursor::new(inner_sig).chain(enc_reader);
+            let decoder = zstd::stream::Decoder::new(combined).map_err(|e| e.to_string())?;
+            return read_bay_entry_from_stream(decoder, entry_name);
+        }
+    }
+
+    // Legacy encrypted .bay v1 & v2 (single buffer fallback)
     if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),

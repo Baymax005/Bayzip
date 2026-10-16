@@ -5,11 +5,6 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use zip::write::SimpleFileOptions;
 use zip::AesMode;
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce, Key
-};
-use rand::RngCore;
 use sevenz_rust2::{ArchiveWriter, ArchiveEntry, EncoderConfiguration};
 
 #[cfg(target_os = "windows")]
@@ -107,7 +102,8 @@ impl<'a, R: Read + Seek> Seek for ProgressReader<'a, R> {
 
 use crate::types::{CompressPayload, CompressResponse, CompressProgress};
 use crate::priority::ScopedPriorityGuard;
-use crate::inspector::{archive_stem_name, derive_bay_key};
+use crate::inspector::archive_stem_name;
+use crate::crypto::ChunkedAesWriter;
 
 /// Exact CPU Cores scaling matrix for both .bay and .bay_gamer:
 /// 0   -> 1 core
@@ -292,6 +288,38 @@ pub fn write_dir_to_bay_archive<W: Write>(
     Ok(())
 }
 
+pub enum BayOutputWriter {
+    Plain(BufWriter<File>),
+    Encrypted(ChunkedAesWriter<BufWriter<File>>),
+}
+
+impl Write for BayOutputWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            BayOutputWriter::Plain(w) => w.write(buf),
+            BayOutputWriter::Encrypted(w) => w.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            BayOutputWriter::Plain(w) => w.flush(),
+            BayOutputWriter::Encrypted(w) => w.flush(),
+        }
+    }
+}
+
+impl BayOutputWriter {
+    pub fn finish(self) -> std::io::Result<()> {
+        match self {
+            BayOutputWriter::Plain(mut w) => w.flush(),
+            BayOutputWriter::Encrypted(w) => {
+                let _ = w.finish()?;
+                Ok(())
+            }
+        }
+    }
+}
+
 pub fn compress_bay(
     files: &[String],
     output_path: &Path,
@@ -306,21 +334,11 @@ pub fn compress_bay(
     }
 
     let pwd_trimmed = password.map(|s| s.trim()).filter(|s| !s.is_empty());
-    let is_encrypted = pwd_trimmed.is_some();
 
     let temp_final = output_path.with_file_name(format!(
         "{}.baytmp",
         output_path.file_name().map(|n| n.to_string_lossy()).unwrap_or_else(|| "archive.bay".into())
     ));
-
-    let target_dest = if is_encrypted {
-        output_path.with_file_name(format!(
-            "{}.bayrawtmp",
-            output_path.file_name().map(|n| n.to_string_lossy()).unwrap_or_else(|| "archive.bay".into())
-        ))
-    } else {
-        temp_final.clone()
-    };
 
     let res = (|| -> Result<(), String> {
         let first_path = Path::new(&files[0]);
@@ -330,10 +348,18 @@ pub fn compress_bay(
         let mut bytes_processed: u64 = 0;
         let mut last_emit = Instant::now();
 
-        let out_file = File::create(&target_dest)
+        let out_file = File::create(&temp_final)
             .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
         // 32 MB buffer to prevent disk thrashing and maximize sequential write speeds
         let buf_out = BufWriter::with_capacity(32 * 1024 * 1024, out_file);
+
+        let out_writer = if let Some(pwd) = pwd_trimmed {
+            BayOutputWriter::Encrypted(
+                ChunkedAesWriter::new(buf_out, pwd).map_err(|e| e.to_string())?
+            )
+        } else {
+            BayOutputWriter::Plain(buf_out)
+        };
 
         // Allocate single 1 MB read buffer outside the file loop
         let mut read_buf = vec![0u8; 1024 * 1024];
@@ -383,8 +409,8 @@ pub fn compress_bay(
         }
 
         if algo_lower.contains("brotli") {
-            let mut out_writer = buf_out;
-            out_writer.write_all(b"BAYBRO\x02\x00")
+            let mut out_sink = out_writer;
+            out_sink.write_all(b"BAYBRO\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
             let quality = match slider_value {
                 0 => 1,
@@ -393,7 +419,7 @@ pub fn compress_bay(
                 75 => 9,
                 _ => 11,
             };
-            let mut encoder = brotli::CompressorWriter::new(out_writer, 64 * 1024, quality, 22);
+            let mut encoder = brotli::CompressorWriter::new(out_sink, 64 * 1024, quality, 22);
             for file_str in files {
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
@@ -410,12 +436,22 @@ pub fn compress_bay(
                 return Err("Compression cancelled by user".to_string());
             }
             let _ = encoder.write_all(&[0u8]); // EOF
-            encoder.flush().map_err(|e| format!("Brotli finalize error: {}", e))?;
+            encoder.flush().map_err(|e| format!("Brotli flush error: {}", e))?;
+            let mut finished_writer = encoder.into_inner();
+            let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
+            let toc_len = toc_json.len() as u64;
+            if toc_len > 0 {
+                let _ = finished_writer.write_all(&toc_json);
+                let _ = finished_writer.write_all(&toc_len.to_le_bytes());
+                let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
+                let _ = finished_writer.flush();
+            }
+            finished_writer.finish().map_err(|e| format!("Brotli finalize error: {}", e))?;
         } else if algo_lower.contains("lz4") {
-            let mut out_writer = buf_out;
-            out_writer.write_all(b"BAYLZ4\x02\x00")
+            let mut out_sink = out_writer;
+            out_sink.write_all(b"BAYLZ4\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
-            let mut encoder = lz4_flex::frame::FrameEncoder::new(out_writer);
+            let mut encoder = lz4_flex::frame::FrameEncoder::new(out_sink);
             for file_str in files {
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
@@ -441,17 +477,18 @@ pub fn compress_bay(
                 let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
                 let _ = finished_writer.flush();
             }
+            finished_writer.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
         } else {
             // Default to Zstandard or .bay_gamer preset
-            let mut out_writer = buf_out;
-            out_writer.write_all(b"BAYZIP\x02\x00")
+            let mut out_sink = out_writer;
+            out_sink.write_all(b"BAYZIP\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
             let is_gamer = algo_lower.contains("gamer");
             let zstd_level = calculate_zstd_level(slider_value, is_gamer);
             let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
             let threads = calculate_target_threads(slider_value, total_cores);
 
-            let mut encoder = zstd::stream::Encoder::new(out_writer, zstd_level)
+            let mut encoder = zstd::stream::Encoder::new(out_sink, zstd_level)
                 .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
             let _ = encoder.multithread(threads as u32);
             for file_str in files {
@@ -479,66 +516,18 @@ pub fn compress_bay(
                 let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
                 let _ = finished_writer.flush();
             }
+            finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
         }
 
-        if let Some(pwd) = pwd_trimmed {
-            if is_compression_cancelled() {
-                return Err("Compression cancelled by user".to_string());
-            }
-            let mut raw_data = Vec::new();
-            File::open(&target_dest)
-                .and_then(|mut f| f.read_to_end(&mut raw_data))
-                .map_err(|e| format!("Failed to read unencrypted buffer: {}", e))?;
-            let _ = std::fs::remove_file(&target_dest);
-
-            if is_compression_cancelled() {
-                return Err("Compression cancelled by user".to_string());
-            }
-
-            let mut salt = [0u8; 16];
-            let mut nonce_bytes = [0u8; 12];
-            rand::thread_rng().fill_bytes(&mut salt);
-            rand::thread_rng().fill_bytes(&mut nonce_bytes);
-
-            let key_bytes = derive_bay_key(pwd, &salt);
-            let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-            let cipher = Aes256Gcm::new(key);
-            let nonce = Nonce::from_slice(&nonce_bytes);
-
-            let ciphertext = cipher.encrypt(nonce, raw_data.as_ref())
-                .map_err(|e| format!("AES-256 encryption error: {}", e))?;
-
-            if is_compression_cancelled() {
-                return Err("Compression cancelled by user".to_string());
-            }
-
-            let mut final_file = File::create(&temp_final)
-                .map_err(|e| format!("Failed to create encrypted output file: {}", e))?;
-            final_file.write_all(b"BAYENC\x02\x00").map_err(|e| e.to_string())?;
-            final_file.write_all(&salt).map_err(|e| e.to_string())?;
-            final_file.write_all(&nonce_bytes).map_err(|e| e.to_string())?;
-            final_file.write_all(&ciphertext).map_err(|e| e.to_string())?;
-            final_file.flush().map_err(|e| e.to_string())?;
-            drop(final_file);
-
-            std::fs::rename(&temp_final, output_path)
-                .map_err(|e| format!("Failed to rename temporary encrypted file to destination: {}", e))?;
-        } else {
-            // Atomic rename of completed unencrypted archive
-            std::fs::rename(&temp_final, output_path)
-                .map_err(|e| format!("Failed to rename temporary archive to destination: {}", e))?;
-        }
+        // Atomic rename of completed archive
+        std::fs::rename(&temp_final, output_path)
+            .map_err(|e| format!("Failed to rename temporary archive to destination: {}", e))?;
 
         Ok(())
     })();
 
-    if res.is_err() {
-        if temp_final.exists() {
-            let _ = std::fs::remove_file(&temp_final);
-        }
-        if is_encrypted && target_dest.exists() {
-            let _ = std::fs::remove_file(&target_dest);
-        }
+    if res.is_err() && temp_final.exists() {
+        let _ = std::fs::remove_file(&temp_final);
     }
 
     res
