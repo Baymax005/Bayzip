@@ -146,6 +146,51 @@ pub fn calculate_zstd_level(slider_value: i32, is_gamer: bool) -> i32 {
     }
 }
 
+/// RAM-Scaled Read and Write Buffers by Hardware Allocation Slider:
+/// 0%   -> 2 MB read / 16 MB write
+/// 25%  -> 4 MB read / 32 MB write
+/// 50%  -> 8 MB read / 64 MB write
+/// 75%  -> 16 MB read / 96 MB write
+/// 100% -> 16 MB read / 128 MB write
+pub fn get_io_buffers(slider_value: i32) -> (usize, usize) {
+    match slider_value {
+        s if s <= 0 => (2 * 1024 * 1024, 16 * 1024 * 1024),
+        s if s <= 25 => (4 * 1024 * 1024, 32 * 1024 * 1024),
+        s if s <= 50 => (8 * 1024 * 1024, 64 * 1024 * 1024),
+        s if s <= 75 => (16 * 1024 * 1024, 96 * 1024 * 1024),
+        _ => (16 * 1024 * 1024, 128 * 1024 * 1024),
+    }
+}
+
+pub fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<crate::types::ArchiveEntryItem>, depth: usize) {
+    if depth > 32 { return; }
+    if let Ok(m) = std::fs::symlink_metadata(dir) {
+        let rel = dir.strip_prefix(base).unwrap_or(dir);
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        let clean = rel_str.trim_start_matches('/').to_string();
+        if !clean.is_empty() {
+            if m.is_dir() && !m.file_type().is_symlink() {
+                list.push(crate::types::ArchiveEntryItem {
+                    name: format!("{}/", clean.trim_end_matches('/')),
+                    size: 0,
+                    is_dir: true,
+                });
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        collect_bay_toc(&entry.path(), base, list, depth + 1);
+                    }
+                }
+            } else if m.is_file() {
+                list.push(crate::types::ArchiveEntryItem {
+                    name: clean,
+                    size: m.len(),
+                    is_dir: false,
+                });
+            }
+        }
+    }
+}
+
 pub fn compute_path_size(p: &Path) -> (u64, bool) {
     if let Ok(meta) = std::fs::symlink_metadata(p) {
         if meta.is_file() {
@@ -348,10 +393,11 @@ pub fn compress_bay(
         let mut bytes_processed: u64 = 0;
         let mut last_emit = Instant::now();
 
+        let (read_buf_size, write_buf_size) = get_io_buffers(slider_value);
         let out_file = File::create(&temp_final)
             .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
-        // 32 MB buffer to prevent disk thrashing and maximize sequential write speeds
-        let buf_out = BufWriter::with_capacity(32 * 1024 * 1024, out_file);
+        // Buffer capacity scaled by Hardware Allocation slider to maximize sequential throughput
+        let buf_out = BufWriter::with_capacity(write_buf_size, out_file);
 
         let out_writer = if let Some(pwd) = pwd_trimmed {
             BayOutputWriter::Encrypted(
@@ -361,8 +407,8 @@ pub fn compress_bay(
             BayOutputWriter::Plain(buf_out)
         };
 
-        // Allocate single 1 MB read buffer outside the file loop
-        let mut read_buf = vec![0u8; 1024 * 1024];
+        // Allocate read buffer scaled by hardware allocation
+        let mut read_buf = vec![0u8; read_buf_size];
 
         let mut toc_entries: Vec<crate::types::ArchiveEntryItem> = Vec::new();
         for file_str in files {
@@ -376,34 +422,6 @@ pub fn compress_bay(
                     is_dir: false,
                 });
             } else if p.is_dir() {
-                fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<crate::types::ArchiveEntryItem>, depth: usize) {
-                    if depth > 32 { return; }
-                    if let Ok(m) = std::fs::symlink_metadata(dir) {
-                        let rel = dir.strip_prefix(base).unwrap_or(dir);
-                        let rel_str = rel.to_string_lossy().replace('\\', "/");
-                        let clean = rel_str.trim_start_matches('/').to_string();
-                        if !clean.is_empty() {
-                            if m.is_dir() && !m.file_type().is_symlink() {
-                                list.push(crate::types::ArchiveEntryItem {
-                                    name: format!("{}/", clean.trim_end_matches('/')),
-                                    size: 0,
-                                    is_dir: true,
-                                });
-                                if let Ok(entries) = std::fs::read_dir(dir) {
-                                    for entry in entries.flatten() {
-                                        collect_bay_toc(&entry.path(), base, list, depth + 1);
-                                    }
-                                }
-                            } else if m.is_file() {
-                                list.push(crate::types::ArchiveEntryItem {
-                                    name: clean,
-                                    size: m.len(),
-                                    is_dir: false,
-                                });
-                            }
-                        }
-                    }
-                }
                 collect_bay_toc(p, parent_dir, &mut toc_entries, 0);
             }
         }
@@ -438,13 +456,15 @@ pub fn compress_bay(
             let _ = encoder.write_all(&[0u8]); // EOF
             encoder.flush().map_err(|e| format!("Brotli flush error: {}", e))?;
             let mut finished_writer = encoder.into_inner();
-            let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
-            let toc_len = toc_json.len() as u64;
-            if toc_len > 0 {
-                let _ = finished_writer.write_all(&toc_json);
-                let _ = finished_writer.write_all(&toc_len.to_le_bytes());
-                let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
-                let _ = finished_writer.flush();
+            if pwd_trimmed.is_none() {
+                let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
+                let toc_len = toc_json.len() as u64;
+                if toc_len > 0 {
+                    let _ = finished_writer.write_all(&toc_json);
+                    let _ = finished_writer.write_all(&toc_len.to_le_bytes());
+                    let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
+                    let _ = finished_writer.flush();
+                }
             }
             finished_writer.finish().map_err(|e| format!("Brotli finalize error: {}", e))?;
         } else if algo_lower.contains("lz4") {
@@ -469,13 +489,15 @@ pub fn compress_bay(
             }
             let _ = encoder.write_all(&[0u8]); // EOF
             let mut finished_writer = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
-            let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
-            let toc_len = toc_json.len() as u64;
-            if toc_len > 0 {
-                let _ = finished_writer.write_all(&toc_json);
-                let _ = finished_writer.write_all(&toc_len.to_le_bytes());
-                let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
-                let _ = finished_writer.flush();
+            if pwd_trimmed.is_none() {
+                let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
+                let toc_len = toc_json.len() as u64;
+                if toc_len > 0 {
+                    let _ = finished_writer.write_all(&toc_json);
+                    let _ = finished_writer.write_all(&toc_len.to_le_bytes());
+                    let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
+                    let _ = finished_writer.flush();
+                }
             }
             finished_writer.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
         } else {
@@ -508,13 +530,15 @@ pub fn compress_bay(
             }
             let _ = encoder.write_all(&[0u8]); // EOF
             let mut finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
-            let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
-            let toc_len = toc_json.len() as u64;
-            if toc_len > 0 {
-                let _ = finished_writer.write_all(&toc_json);
-                let _ = finished_writer.write_all(&toc_len.to_le_bytes());
-                let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
-                let _ = finished_writer.flush();
+            if pwd_trimmed.is_none() {
+                let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
+                let toc_len = toc_json.len() as u64;
+                if toc_len > 0 {
+                    let _ = finished_writer.write_all(&toc_json);
+                    let _ = finished_writer.write_all(&toc_len.to_le_bytes());
+                    let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
+                    let _ = finished_writer.flush();
+                }
             }
             finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
         }
@@ -557,10 +581,11 @@ pub fn compress_zip(
     ));
 
     let res = (|| -> Result<(), String> {
+        let (read_buf_size, write_buf_size) = get_io_buffers(slider_value);
         let out_file = File::create(&temp_output)
             .map_err(|e| format!("Failed to create zip file: {}", e))?;
-        // 32 MB buffer to prevent disk thrashing and maximize sequential write speeds
-        let buf_writer = BufWriter::with_capacity(32 * 1024 * 1024, out_file);
+        // Buffer capacity scaled by Hardware Allocation slider to maximize sequential throughput
+        let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);
         let mut writer = zip::ZipWriter::new(buf_writer);
     
     let algo_lower = algorithm.to_lowercase();
@@ -581,8 +606,8 @@ pub fn compress_zip(
         _ => AesMode::Aes256,
     };
 
-    // Allocate single 1 MB read buffer outside the zip file loop
-    let mut read_buf = vec![0u8; 1024 * 1024];
+    // Allocate read buffer scaled by hardware allocation
+    let mut read_buf = vec![0u8; read_buf_size];
 
     for file_str in files {
         if is_compression_cancelled() {
@@ -1049,9 +1074,24 @@ pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), S
 }
 
 pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), String> {
+    let parent = p.parent().unwrap_or(p);
+    let mut toc_entries: Vec<crate::types::ArchiveEntryItem> = Vec::new();
+    if p.is_file() {
+        let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+        let sz = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        toc_entries.push(crate::types::ArchiveEntryItem {
+            name: filename.to_string(),
+            size: sz,
+            is_dir: false,
+        });
+    } else if p.is_dir() {
+        collect_bay_toc(p, parent, &mut toc_entries, 0);
+    }
+
+    let (read_buf_size, write_buf_size) = get_io_buffers(50);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create output file: {}", e))?;
-    let mut buf_out = BufWriter::with_capacity(32 * 1024 * 1024, out_file);
+    let mut buf_out = BufWriter::with_capacity(write_buf_size, out_file);
     buf_out.write_all(b"BAYZIP\x02\x00")
         .map_err(|e| format!("Header write error: {}", e))?;
     
@@ -1063,8 +1103,7 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
         .map_err(|e| format!("Encoder error: {}", e))?;
     let _ = encoder.multithread(threads as u32);
 
-    let mut read_buf = vec![0u8; 1024 * 1024];
-    let parent = p.parent().unwrap_or(p);
+    let mut read_buf = vec![0u8; read_buf_size];
 
     if p.is_file() {
         if let Ok(mut f) = File::open(p) {
@@ -1151,7 +1190,15 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
     }
 
     let _ = encoder.write_all(&[0u8]); // 0 = EOF
-    encoder.finish().map_err(|e| format!("Finalize error: {}", e))?;
+    let mut finished_writer = encoder.finish().map_err(|e| format!("Finalize error: {}", e))?;
+    let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
+    let toc_len = toc_json.len() as u64;
+    if toc_len > 0 {
+        let _ = finished_writer.write_all(&toc_json);
+        let _ = finished_writer.write_all(&toc_len.to_le_bytes());
+        let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
+        let _ = finished_writer.flush();
+    }
     Ok(())
 }
 

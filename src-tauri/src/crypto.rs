@@ -1,12 +1,12 @@
 use std::io::{Read, Write};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
+    aead::{AeadInPlace, KeyInit},
     Aes256Gcm, Nonce, Key
 };
 use rand::RngCore;
 use sha2::{Sha256, Digest};
 
-pub const BAY_CHUNK_SIZE: usize = 1024 * 1024; // 1 MB plaintext chunk
+pub const BAY_CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4 MB plaintext chunk
 pub const BAY_ENC_V3_MAGIC: &[u8; 8] = b"BAYENC\x03\x00";
 
 /// PBKDF2-like key derivation using 10,000 rounds of SHA-256
@@ -29,9 +29,9 @@ pub fn derive_bay_key(password: &str, salt: &[u8]) -> [u8; 32] {
 }
 
 /// Streaming Chunked AEAD Writer:
-/// Buffers uncompressed/compressed output into 1 MB chunks, encrypts each chunk
-/// on-the-fly with AES-256-GCM using an incremental counter nonce, and writes
-/// the resulting ciphertext to the underlying writer without storing large files in RAM.
+/// Buffers uncompressed/compressed output into 4 MB chunks, encrypts each chunk
+/// on-the-fly with AES-256-GCM in-place using an incremental counter nonce, and writes
+/// the resulting ciphertext to the underlying writer with zero steady-state heap allocations.
 pub struct ChunkedAesWriter<W: Write> {
     inner: W,
     cipher: Aes256Gcm,
@@ -61,7 +61,7 @@ impl<W: Write> ChunkedAesWriter<W> {
             cipher,
             base_nonce,
             chunk_index: 0,
-            buffer: Vec::with_capacity(BAY_CHUNK_SIZE),
+            buffer: Vec::with_capacity(BAY_CHUNK_SIZE + 16),
         })
     }
 
@@ -75,12 +75,13 @@ impl<W: Write> ChunkedAesWriter<W> {
         nonce_bytes[8..].copy_from_slice(&self.chunk_index.to_be_bytes());
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let ciphertext = self.cipher.encrypt(nonce, self.buffer.as_slice())
+        // In-place encryption: encrypts the payload in self.buffer and appends the 16-byte tag
+        self.cipher.encrypt_in_place(nonce, b"", &mut self.buffer)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("AES-256-GCM encryption error: {}", e)))?;
 
-        let chunk_len = ciphertext.len() as u32;
+        let chunk_len = self.buffer.len() as u32;
         self.inner.write_all(&chunk_len.to_le_bytes())?;
-        self.inner.write_all(&ciphertext)?;
+        self.inner.write_all(&self.buffer)?;
 
         self.chunk_index = self.chunk_index.checked_add(1)
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Archive chunk count exceeded limit"))?;
@@ -120,14 +121,14 @@ impl<W: Write> Write for ChunkedAesWriter<W> {
 }
 
 /// Streaming Chunked AEAD Reader:
-/// Reads and decrypts 1 MB AES-256-GCM chunks on-the-fly, keeping memory strictly bounded
-/// under ~2 MB regardless of archive size.
+/// Reads and decrypts 4 MB AES-256-GCM chunks on-the-fly in-place, keeping memory strictly bounded
+/// under ~4 MB with zero steady-state heap allocations regardless of archive size.
 pub struct ChunkedAesReader<R: Read> {
     inner: R,
     cipher: Aes256Gcm,
     base_nonce: [u8; 8],
     chunk_index: u32,
-    current_plain: Vec<u8>,
+    buffer: Vec<u8>,
     plain_offset: usize,
     eof_reached: bool,
 }
@@ -151,7 +152,7 @@ impl<R: Read> ChunkedAesReader<R> {
             cipher,
             base_nonce,
             chunk_index: 0,
-            current_plain: Vec::new(),
+            buffer: Vec::with_capacity(BAY_CHUNK_SIZE + 16),
             plain_offset: 0,
             eof_reached: false,
         })
@@ -186,8 +187,9 @@ impl<R: Read> ChunkedAesReader<R> {
             ));
         }
 
-        let mut ciphertext = vec![0u8; chunk_len];
-        self.inner.read_exact(&mut ciphertext)
+        // Reuse allocated capacity without reallocating
+        self.buffer.resize(chunk_len, 0u8);
+        self.inner.read_exact(&mut self.buffer)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, format!("Incomplete chunk ciphertext: {}", e)))?;
 
         let mut nonce_bytes = [0u8; 12];
@@ -195,13 +197,13 @@ impl<R: Read> ChunkedAesReader<R> {
         nonce_bytes[8..].copy_from_slice(&self.chunk_index.to_be_bytes());
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let plaintext = self.cipher.decrypt(nonce, ciphertext.as_slice())
+        // In-place decryption: decrypts in self.buffer and truncates the 16-byte tag
+        self.cipher.decrypt_in_place(nonce, b"", &mut self.buffer)
             .map_err(|_| std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "Incorrect password or corrupted archive",
             ))?;
 
-        self.current_plain = plaintext;
         self.plain_offset = 0;
         self.chunk_index = self.chunk_index.checked_add(1)
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Archive chunk count exceeded limit"))?;
@@ -216,15 +218,15 @@ impl<R: Read> Read for ChunkedAesReader<R> {
             return Ok(0);
         }
 
-        while self.plain_offset >= self.current_plain.len() {
+        while self.plain_offset >= self.buffer.len() {
             if !self.load_next_chunk()? {
                 return Ok(0);
             }
         }
 
-        let available = self.current_plain.len() - self.plain_offset;
+        let available = self.buffer.len() - self.plain_offset;
         let to_copy = available.min(buf.len());
-        buf[..to_copy].copy_from_slice(&self.current_plain[self.plain_offset..self.plain_offset + to_copy]);
+        buf[..to_copy].copy_from_slice(&self.buffer[self.plain_offset..self.plain_offset + to_copy]);
         self.plain_offset += to_copy;
         Ok(to_copy)
     }

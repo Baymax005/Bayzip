@@ -663,6 +663,7 @@ function App() {
         destination: finalDest,
         password: extractPassword.trim() ? extractPassword.trim() : undefined,
         expectedSize: archiveInfo?.total_uncompressed_size || archiveInfo?.size || undefined,
+        extractToSubfolder: extractToSubfolder,
       });
 
       setExtractResult(res);

@@ -87,9 +87,16 @@ pub fn extract_bay_stream<R: Read>(
     dest_dir: &Path,
     total_expected_bytes: u64,
     app: Option<&AppHandle>,
+    single_root_prefix: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let mut extracted_files = Vec::new();
-    let root_strip = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
+    let root_strip = single_root_prefix.filter(|prefix| {
+        dest_dir.file_name()
+            .and_then(|s| s.to_str())
+            .map(base_folder_stem)
+            .map(|dest_stem| dest_stem.eq_ignore_ascii_case(prefix))
+            .unwrap_or(false)
+    });
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
 
@@ -199,10 +206,9 @@ pub fn extract_bay_stream<R: Read>(
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let mut out_file = File::create(&out_path)
-            .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
-
         if file_size <= 64 * 1024 {
+            let mut out_file = File::create(&out_path)
+                .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
             // Tiny files (<= 64 KB): Direct write to disk without BufWriter allocation overhead
             let sz = file_size as usize;
             if sz > 0 {
@@ -229,6 +235,16 @@ pub fn extract_bay_stream<R: Read>(
                 }
             }
         } else {
+            // Atomic extraction via .baypart: prevents leaving corrupted partial files on disk if interrupted
+            let part_path = {
+                let mut p = out_path.as_os_str().to_os_string();
+                p.push(".baypart");
+                PathBuf::from(p)
+            };
+
+            let out_file = File::create(&part_path)
+                .map_err(|e| format!("Failed to create temporary output file {:?}: {}", part_path, e))?;
+
             // Pre-allocate space for large files (> 16 MB) to prevent NTFS/disk fragmentation
             if file_size > 16 * 1024 * 1024 {
                 let _ = out_file.set_len(file_size);
@@ -289,11 +305,15 @@ pub fn extract_bay_stream<R: Read>(
 
             if let Some(err) = write_err {
                 drop(writer);
-                let _ = std::fs::remove_file(&out_path);
+                let _ = std::fs::remove_file(&part_path);
                 return Err(err);
             }
 
             writer.flush().map_err(|e| format!("Flush error: {}", e))?;
+            drop(writer);
+
+            std::fs::rename(&part_path, &out_path)
+                .map_err(|e| format!("Failed to finalize extracted file {:?}: {}", out_path, e))?;
         }
 
         extracted_files.push(out_path.to_string_lossy().to_string());
@@ -315,6 +335,19 @@ pub fn extract_bay_archive(
         std::fs::metadata(archive_path).map(|m| m.len() * 2).unwrap_or(1)
     };
 
+    let single_root_prefix = {
+        let (entries, _, _) = crate::inspector::list_bay_entries(archive_path, password);
+        if !entries.is_empty() && has_single_root_dir(&entries) {
+            entries[0].name.trim_start_matches(|c| c == '/' || c == '\\')
+                .split(['/', '\\'])
+                .next()
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    };
+    let s_prefix = single_root_prefix.as_deref();
+
     let raw_file = File::open(archive_path)
         .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
     let mut file = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
@@ -323,7 +356,7 @@ pub fn extract_bay_archive(
     let n = file.read(&mut magic)
         .map_err(|e| format!("Invalid or corrupted .bay header: {}", e))?;
 
-    // Encrypted .bay v3 (Streaming chunked AEAD - Constant ~1 MB RAM)
+    // Encrypted .bay v3 (Streaming chunked AEAD - Constant ~4 MB RAM)
     if n >= 7 && magic.starts_with(b"BAYENC\x03") {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),
@@ -340,19 +373,19 @@ pub fn extract_bay_archive(
 
         if inner_sig.starts_with(b"BAYBRO\x02") {
             let decoder = brotli::Decompressor::new(enc_reader, 64 * 1024);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         } else if inner_sig.starts_with(b"BAYLZ4\x02") {
             let decoder = lz4_flex::frame::FrameDecoder::new(enc_reader);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         } else if inner_sig.starts_with(b"BAYZIP\x02") {
             let decoder = zstd::stream::Decoder::new(enc_reader)
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         } else {
             let combined = std::io::Cursor::new(inner_sig).chain(enc_reader);
             let decoder = zstd::stream::Decoder::new(combined)
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         }
     }
 
@@ -390,25 +423,25 @@ pub fn extract_bay_archive(
         if plaintext.starts_with(b"BAYBRO\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         } else if plaintext.starts_with(b"BAYLZ4\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         } else if plaintext.starts_with(b"BAYZIP\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = zstd::stream::Decoder::new(&plaintext[offset..])
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
             // Raw LZ4 frame
             let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         } else {
             // Raw Zstandard fallback
             let decoder = zstd::stream::Decoder::new(&plaintext[..])
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
         }
     }
 
@@ -421,29 +454,29 @@ pub fn extract_bay_archive(
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = brotli::Decompressor::new(file, 64 * 1024);
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
     } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
     } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = zstd::stream::Decoder::new(file)
             .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
     } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
         // Raw LZ4 frame
         file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
     } else {
         // Standard Zstd
         file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let decoder = zstd::stream::Decoder::new(file)
             .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
     }
 }
 
@@ -461,7 +494,35 @@ pub fn extract_zip_archive(
     let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("Invalid zip archive: {}", e))?;
     let mut extracted = Vec::new();
-    let root_strip = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
+    let root_strip = {
+        let dest_stem = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
+        if let Some(prefix) = dest_stem {
+            let mut candidate_root: Option<String> = None;
+            let mut is_single = true;
+            for name in archive.file_names() {
+                let clean = name.trim().trim_start_matches(|c| c == '/' || c == '\\');
+                if clean.is_empty() || clean == "." { continue; }
+                let first = clean.split(['/', '\\']).next().unwrap_or("");
+                if first.is_empty() { continue; }
+                match &candidate_root {
+                    None => candidate_root = Some(first.to_string()),
+                    Some(root) => {
+                        if !root.eq_ignore_ascii_case(first) {
+                            is_single = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if is_single && candidate_root.as_deref().map(|r| r.eq_ignore_ascii_case(prefix)).unwrap_or(false) {
+                Some(prefix.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
     let total_entries = archive.len();
     let mut total_extracted: u64 = 0;
     let mut last_emit = Instant::now();
@@ -512,7 +573,7 @@ pub fn extract_zip_archive(
         };
 
         let effective_path = match root_strip {
-            Some(prefix) => {
+            Some(ref prefix) => {
                 match strip_root_component(&safe_path, prefix) {
                     Some(stripped) => {
                         if stripped.as_os_str().is_empty() {
@@ -536,9 +597,9 @@ pub fn extract_zip_archive(
                 let _ = std::fs::create_dir_all(p);
             }
             let file_size = file.size();
-            let mut out_file = File::create(&outpath).map_err(|e| format!("Create file error: {}", e))?;
 
             if file_size <= 64 * 1024 {
+                let mut out_file = File::create(&outpath).map_err(|e| format!("Create file error: {}", e))?;
                 let sz = file_size as usize;
                 if sz > 0 {
                     file.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Zip read error: {}", e))?;
@@ -546,6 +607,13 @@ pub fn extract_zip_archive(
                     total_extracted += file_size;
                 }
             } else {
+                let part_path = {
+                    let mut p = outpath.as_os_str().to_os_string();
+                    p.push(".baypart");
+                    PathBuf::from(p)
+                };
+
+                let out_file = File::create(&part_path).map_err(|e| format!("Create temporary file error: {}", e))?;
                 if file_size > 16 * 1024 * 1024 {
                     let _ = out_file.set_len(file_size);
                 }
@@ -559,7 +627,7 @@ pub fn extract_zip_archive(
                 while remaining > 0 {
                     if is_extraction_cancelled() {
                         drop(writer);
-                        let _ = std::fs::remove_file(&outpath);
+                        let _ = std::fs::remove_file(&part_path);
                         return Err("Extraction cancelled by user".to_string());
                     }
                     let to_read = (remaining as usize).min(io_buf.len());
@@ -586,10 +654,17 @@ pub fn extract_zip_archive(
                                 }
                             }
                         }
-                        Err(e) => return Err(format!("Zip read error: {}", e)),
+                        Err(e) => {
+                            drop(writer);
+                            let _ = std::fs::remove_file(&part_path);
+                            return Err(format!("Zip read error: {}", e));
+                        }
                     }
                 }
                 writer.flush().map_err(|e| format!("Zip flush error: {}", e))?;
+                drop(writer);
+                std::fs::rename(&part_path, &outpath)
+                    .map_err(|e| format!("Failed to finalize extracted file: {}", e))?;
             }
 
             extracted.push(outpath.to_string_lossy().to_string());
@@ -676,9 +751,9 @@ fn extract_tar_entries<R: Read>(
             }
 
             let file_size = entry.size();
-            let mut out_file = File::create(&out_path).map_err(|e| format!("Create file error: {}", e))?;
 
             if file_size <= 64 * 1024 {
+                let mut out_file = File::create(&out_path).map_err(|e| format!("Create file error: {}", e))?;
                 let sz = file_size as usize;
                 if sz > 0 {
                     entry.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Tar read error: {}", e))?;
@@ -686,6 +761,13 @@ fn extract_tar_entries<R: Read>(
                     total_extracted += file_size;
                 }
             } else {
+                let part_path = {
+                    let mut p = out_path.as_os_str().to_os_string();
+                    p.push(".baypart");
+                    PathBuf::from(p)
+                };
+
+                let out_file = File::create(&part_path).map_err(|e| format!("Create temporary file error: {}", e))?;
                 if file_size > 16 * 1024 * 1024 {
                     let _ = out_file.set_len(file_size);
                 }
@@ -700,7 +782,7 @@ fn extract_tar_entries<R: Read>(
                 while remaining > 0 {
                     if is_extraction_cancelled() {
                         drop(writer);
-                        let _ = std::fs::remove_file(&out_path);
+                        let _ = std::fs::remove_file(&part_path);
                         return Err("Extraction cancelled by user".to_string());
                     }
                     let to_read = (remaining as usize).min(io_buf.len());
@@ -723,10 +805,17 @@ fn extract_tar_entries<R: Read>(
                                 }
                             }
                         }
-                        Err(e) => return Err(format!("Tar read error: {}", e)),
+                        Err(e) => {
+                            drop(writer);
+                            let _ = std::fs::remove_file(&part_path);
+                            return Err(format!("Tar read error: {}", e));
+                        }
                     }
                 }
                 writer.flush().map_err(|e| format!("Flush error: {}", e))?;
+                drop(writer);
+                std::fs::rename(&part_path, &out_path)
+                    .map_err(|e| format!("Failed to finalize extracted file: {}", e))?;
             }
 
             extracted_files.push(out_path.to_string_lossy().to_string());
@@ -794,7 +883,35 @@ pub fn extract_7z_archive(
     };
 
     let mut extracted = Vec::new();
-    let root_strip = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
+    let root_strip = {
+        let dest_stem = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
+        if let Some(prefix) = dest_stem {
+            let mut candidate_root: Option<String> = None;
+            let mut is_single = true;
+            for f in &sz_reader.archive().files {
+                let clean = f.name().trim().trim_start_matches(|c| c == '/' || c == '\\');
+                if clean.is_empty() || clean == "." { continue; }
+                let first = clean.split(['/', '\\']).next().unwrap_or("");
+                if first.is_empty() { continue; }
+                match &candidate_root {
+                    None => candidate_root = Some(first.to_string()),
+                    Some(root) => {
+                        if !root.eq_ignore_ascii_case(first) {
+                            is_single = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if is_single && candidate_root.as_deref().map(|r| r.eq_ignore_ascii_case(prefix)).unwrap_or(false) {
+                Some(prefix.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
     let mut processed_count = 0;
     let mut last_emit = Instant::now();
     let mut total_extracted: u64 = 0;
@@ -813,7 +930,7 @@ pub fn extract_7z_archive(
         };
 
         let effective_path = match root_strip {
-            Some(prefix) => {
+            Some(ref prefix) => {
                 match strip_root_component(&safe_path, prefix) {
                     Some(stripped) => {
                         if stripped.as_os_str().is_empty() {
@@ -837,10 +954,10 @@ pub fn extract_7z_archive(
                 let _ = std::fs::create_dir_all(p);
             }
             let file_size = entry.size();
-            let mut out_file = File::create(&out_path)
-                .map_err(sevenz_rust2::Error::from)?;
 
             if file_size <= 64 * 1024 {
+                let mut out_file = File::create(&out_path)
+                    .map_err(sevenz_rust2::Error::from)?;
                 let sz = file_size as usize;
                 if sz > 0 {
                     reader.read_exact(&mut io_buf[..sz]).map_err(sevenz_rust2::Error::from)?;
@@ -848,6 +965,14 @@ pub fn extract_7z_archive(
                     total_extracted += file_size;
                 }
             } else {
+                let part_path = {
+                    let mut p = out_path.as_os_str().to_os_string();
+                    p.push(".baypart");
+                    PathBuf::from(p)
+                };
+
+                let out_file = File::create(&part_path)
+                    .map_err(sevenz_rust2::Error::from)?;
                 if file_size > 16 * 1024 * 1024 {
                     let _ = out_file.set_len(file_size);
                 }
@@ -861,7 +986,7 @@ pub fn extract_7z_archive(
                 while remaining > 0 {
                     if is_extraction_cancelled() {
                         drop(writer);
-                        let _ = std::fs::remove_file(&out_path);
+                        let _ = std::fs::remove_file(&part_path);
                         return Err(sevenz_rust2::Error::from(std::io::Error::new(std::io::ErrorKind::Interrupted, "Extraction cancelled by user")));
                     }
                     let to_read = (remaining as usize).min(io_buf.len());
@@ -890,10 +1015,17 @@ pub fn extract_7z_archive(
                                 }
                             }
                         }
-                        Err(e) => return Err(sevenz_rust2::Error::from(e)),
+                        Err(e) => {
+                            drop(writer);
+                            let _ = std::fs::remove_file(&part_path);
+                            return Err(sevenz_rust2::Error::from(e));
+                        }
                     }
                 }
                 writer.flush().map_err(sevenz_rust2::Error::from)?;
+                drop(writer);
+                std::fs::rename(&part_path, &out_path)
+                    .map_err(sevenz_rust2::Error::from)?;
             }
 
             extracted.push(out_path.to_string_lossy().to_string());
@@ -1147,6 +1279,7 @@ pub fn extract_archive_sync(
     destination: Option<String>,
     password: Option<String>,
     expected_size: Option<u64>,
+    extract_to_subfolder: Option<bool>,
 ) -> Result<ExtractResponse, String> {
     reset_extraction_cancel_flag();
     let _priority_guard = ScopedPriorityGuard::new();
@@ -1164,7 +1297,12 @@ pub fn extract_archive_sync(
         if custom_dest.trim().is_empty() {
             resolve_unique_folder_name(&parent.join(&stem))
         } else {
-            resolve_unique_folder_name(&PathBuf::from(custom_dest))
+            let p = PathBuf::from(custom_dest);
+            if extract_to_subfolder.unwrap_or(true) {
+                resolve_unique_folder_name(&p)
+            } else {
+                p
+            }
         }
     } else {
         resolve_unique_folder_name(&parent.join(&stem))
@@ -1257,7 +1395,7 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
         parent.to_path_buf()
     } else {
         let stem = archive_stem_name(p);
-        let d = parent.join(&stem);
+        let d = resolve_unique_folder_name(&parent.join(&stem));
         let _ = std::fs::create_dir_all(&d);
         d
     };
