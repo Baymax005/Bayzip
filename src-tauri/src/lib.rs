@@ -108,9 +108,10 @@ async fn extract_archive(
     password: Option<String>,
     expected_size: Option<u64>,
     extract_to_subfolder: Option<bool>,
+    excluded_paths: Option<Vec<String>>,
 ) -> Result<ExtractResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        extract_archive_sync(app, archive_path, destination, password, expected_size, extract_to_subfolder)
+        extract_archive_sync(app, archive_path, destination, password, expected_size, extract_to_subfolder, excluded_paths)
     })
     .await
     .map_err(|e| format!("Extraction task error: {}", e))?

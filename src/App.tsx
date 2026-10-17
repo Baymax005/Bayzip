@@ -11,7 +11,7 @@ import { AboutModal } from "./components/AboutModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { PasswordModal } from "./components/PasswordModal";
 import { ResultModals } from "./components/ResultModals";
-import { ArchiveTreeInspector } from "./components/ArchiveTreeInspector";
+import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./components/ArchiveTreeInspector";
 import { FilePreviewModal } from "./components/FilePreviewModal";
 
 import {
@@ -138,6 +138,56 @@ function App() {
   const [extractToSubfolder, setExtractToSubfolder] = useState<boolean>(true);
   const [openFolderOnExtract, setOpenFolderOnExtract] = useState<boolean>(true);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
+  const [excludedPaths, setExcludedPaths] = useState<Set<string>>(new Set());
+
+  const handleToggleExclude = (rawPath: string, isDir?: boolean) => {
+    const norm = normalizeArchiveEntryPath(rawPath);
+    setExcludedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(norm)) {
+        next.delete(norm);
+        if (isDir) {
+          const prefix = norm.endsWith("/") ? norm : norm + "/";
+          for (const p of Array.from(next)) {
+            if (p.startsWith(prefix)) {
+              next.delete(p);
+            }
+          }
+        }
+      } else {
+        next.add(norm);
+      }
+      return next;
+    });
+  };
+
+  const handleIncludeAll = () => {
+    setExcludedPaths(new Set());
+  };
+
+  const includedFilesCount = useMemo(() => {
+    if (!archiveInfo?.entries || archiveInfo.entries.length === 0) {
+      return Math.max(0, (archiveInfo?.file_count || 0) - excludedPaths.size);
+    }
+    if (excludedPaths.size === 0) {
+      return archiveInfo.file_count || archiveInfo.entries.filter((e) => !e.is_dir).length;
+    }
+    const excludedArray = Array.from(excludedPaths);
+    let count = 0;
+    for (const e of archiveInfo.entries) {
+      if (e.is_dir) continue;
+      const norm = normalizeArchiveEntryPath(e.name);
+      const isExcluded = excludedArray.some((ex) => {
+        if (norm === ex) return true;
+        const prefix = ex.endsWith("/") ? ex : ex + "/";
+        return norm.startsWith(prefix);
+      });
+      if (!isExcluded) {
+        count++;
+      }
+    }
+    return count;
+  }, [archiveInfo, excludedPaths]);
   const [isCancellingExtract, setIsCancellingExtract] = useState<boolean>(false);
   const [extractProgress, setExtractProgress] = useState<ExtractProgress | null>(null);
   const [extractResult, setExtractResult] = useState<ExtractResult | null>(null);
@@ -210,6 +260,7 @@ function App() {
   // Select Archive Handler (with metadata inquiry)
   const selectArchive = async (filePath: string, pwd?: string) => {
     setSelectedArchive(filePath);
+    setExcludedPaths(new Set());
     setExtractResult(null);
     setExtractError(null);
     setExtractProgress(null);
@@ -691,6 +742,7 @@ function App() {
         password: extractPassword.trim() ? extractPassword.trim() : undefined,
         expectedSize: archiveInfo?.total_uncompressed_size || archiveInfo?.size || undefined,
         extractToSubfolder: extractToSubfolder,
+        excludedPaths: excludedPaths.size > 0 ? Array.from(excludedPaths) : undefined,
       });
 
       setExtractResult(res);
@@ -1596,6 +1648,9 @@ function App() {
                     isLoading={isInspectingArchive}
                     onUnlockPreview={() => selectArchive(selectedArchive, extractPassword.trim())}
                     onPreviewEntry={handlePreviewEntry}
+                    excludedPaths={excludedPaths}
+                    onToggleExclude={handleToggleExclude}
+                    onIncludeAll={handleIncludeAll}
                   />
                 </div>
               ) : (
@@ -1841,7 +1896,23 @@ function App() {
               )}
 
               {/* Extract Action Button */}
-              <div className="flex justify-end pt-2">
+              <div className="flex items-center justify-between pt-2">
+                <div>
+                  {selectedArchive && excludedPaths.size > 0 && (
+                    <button
+                      type="button"
+                      disabled={isExtracting}
+                      onClick={handleIncludeAll}
+                      className="text-xs text-[#A8A8A8] hover:text-white px-3 py-2 rounded-md bg-[#252525] hover:bg-[#323232] border border-[#3E3E3E] transition-all flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+                      title="Include all excluded files and directories"
+                    >
+                      <svg className="w-3.5 h-3.5 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      <span>Include All ({excludedPaths.size} excluded)</span>
+                    </button>
+                  )}
+                </div>
                 <button
                   type="button"
                   disabled={isExtracting && isCancellingExtract}
@@ -1864,7 +1935,11 @@ function App() {
                         ? "Cancelling..."
                         : "Cancel Extraction"
                       : selectedArchive
-                        ? "Extract Now"
+                        ? excludedPaths.size > 0
+                          ? `Extract ${includedFilesCount} Files (${excludedPaths.size} Excluded)`
+                          : archiveInfo?.file_count
+                            ? `Extract All (${archiveInfo.file_count} Files)`
+                            : "Extract Now"
                         : "Select Archive to Extract"}
                   </span>
                 </button>

@@ -8,6 +8,13 @@ interface ArchiveTreeInspectorProps {
   isLoading?: boolean;
   onUnlockPreview?: () => void;
   onPreviewEntry: (entryName: string) => void;
+  excludedPaths?: Set<string>;
+  onToggleExclude?: (path: string, isDir?: boolean) => void;
+  onIncludeAll?: () => void;
+}
+
+export function normalizeArchiveEntryPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
 }
 
 export interface TreeNode {
@@ -141,6 +148,9 @@ export function ArchiveTreeInspector({
   isLoading = false,
   onUnlockPreview,
   onPreviewEntry,
+  excludedPaths = new Set(),
+  onToggleExclude,
+  onIncludeAll,
 }: ArchiveTreeInspectorProps) {
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [isExpandedModal, setIsExpandedModal] = useState<boolean>(false);
@@ -148,6 +158,26 @@ export function ArchiveTreeInspector({
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set([""]));
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedEntryName, setSelectedEntryName] = useState<string | null>(null);
+  const [isExclusionMode, setIsExclusionMode] = useState<boolean>(false);
+
+  const excludedCount = excludedPaths.size;
+
+  const isDirExcluded = (dirPath: string): boolean => {
+    if (!excludedPaths || excludedPaths.size === 0) return false;
+    const cleanDir = normalizeArchiveEntryPath(dirPath);
+    const prefix = cleanDir ? `${cleanDir}/` : "";
+    const allEntries = archiveInfo?.entries || [];
+    const filesInDir = allEntries.filter((e) => !e.is_dir && normalizeArchiveEntryPath(e.name).startsWith(prefix));
+    if (filesInDir.length === 0) return false;
+    return filesInDir.every((f) => excludedPaths.has(normalizeArchiveEntryPath(f.name)));
+  };
+
+  const excludedBytes = useMemo(() => {
+    if (!archiveInfo?.entries || excludedPaths.size === 0) return 0;
+    return archiveInfo.entries
+      .filter((e) => !e.is_dir && excludedPaths.has(normalizeArchiveEntryPath(e.name)))
+      .reduce((acc, curr) => acc + (curr.size || 0), 0);
+  }, [archiveInfo, excludedPaths]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -508,6 +538,42 @@ export function ArchiveTreeInspector({
           </button>
         </div>
 
+        {/* Selective Exclusion Mode Button */}
+        <button
+          type="button"
+          onClick={() => setIsExclusionMode(!isExclusionMode)}
+          className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all flex items-center space-x-1.5 cursor-pointer ${
+            isExclusionMode
+              ? "bg-rose-950/50 text-rose-300 border border-rose-700/80 shadow-[0_0_12px_rgba(244,63,94,0.25)] font-semibold"
+              : "bg-[#1C1C1C] hover:bg-[#2A2A2A] text-[#A8A8A8] hover:text-white border border-[#3E3E3E] hover:border-[#555555]"
+          }`}
+          title={isExclusionMode ? "Exit Exclusion Mode" : "Enable Selective Exclusion: skip unwanted files during extraction"}
+        >
+          {isExclusionMode && <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>}
+          <span className="text-rose-400 font-bold">✕</span>
+          <span>{isExclusionMode ? "Exclusion Mode" : "Exclude Files"}</span>
+          {excludedCount > 0 && (
+            <span className="text-[10px] font-mono bg-rose-900/70 text-white px-1.5 py-0.2 rounded-full border border-rose-600">
+              {excludedCount}
+            </span>
+          )}
+        </button>
+
+        {/* Reset / Include All Button */}
+        {excludedCount > 0 && onIncludeAll && (
+          <button
+            type="button"
+            onClick={onIncludeAll}
+            className="px-2 py-1 text-xs rounded-lg font-medium transition-colors flex items-center space-x-1 bg-[#1C1C1C] hover:bg-[#2A2A2A] text-[#60CDFF] hover:text-[#90DCFF] border border-[#3E3E3E] cursor-pointer"
+            title="Include all files (reset exclusions)"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span>Include All</span>
+          </button>
+        )}
+
         {/* Expand / Minimize Fullscreen Toggle (⤢) */}
         {!isFullModal ? (
           <button
@@ -687,29 +753,70 @@ export function ArchiveTreeInspector({
         renderRow={(item) => {
           if (item.kind === "folder") {
             const sub = item.data;
+            const isFolderSkipped = isDirExcluded(sub.path);
             return (
               <div
                 key={`folder-${sub.path}`}
                 onDoubleClick={() => navigateToFolder(sub.path)}
-                onClick={() => setSelectedEntryName(null)}
+                onClick={() => {
+                  if (isExclusionMode && onToggleExclude) {
+                    onToggleExclude(sub.path, true);
+                  } else {
+                    setSelectedEntryName(null);
+                  }
+                }}
                 style={{ height: "34px" }}
-                className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border"
+                className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
+                  isFolderSkipped
+                    ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
+                    : "hover:bg-[#252525]"
+                }`}
               >
                 <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
                   <svg className="w-4 h-4 text-[#E8C488] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                   </svg>
-                  <span className="text-white font-mono text-[11px] truncate group-hover:text-[#60CDFF] transition-colors font-medium">
+                  <span
+                    className={`font-mono text-[11px] truncate transition-colors font-medium ${
+                      isFolderSkipped ? "text-rose-300/80 line-through" : "text-white group-hover:text-[#60CDFF]"
+                    }`}
+                  >
                     {sub.name}/
                   </span>
+                  {isFolderSkipped && (
+                    <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-800 text-rose-300 shrink-0">
+                      ✕ Folder Excluded
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center space-x-3 shrink-0">
+                <div className="flex items-center space-x-2 shrink-0">
                   <span className="text-[#777777] font-mono text-[10px]">
                     {sub.totalItemCount} item{sub.totalItemCount !== 1 ? "s" : ""}
                   </span>
+                  {isExclusionMode && onToggleExclude && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleExclude(sub.path, true);
+                      }}
+                      className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center space-x-1 cursor-pointer ${
+                        isFolderSkipped
+                          ? "bg-rose-900/40 hover:bg-rose-900/70 text-rose-300 border-rose-700/60"
+                          : "bg-[#2D2D2D] hover:bg-rose-950/50 text-[#A8A8A8] hover:text-rose-300 border-[#3E3E3E] hover:border-rose-800/60"
+                      }`}
+                      title={isFolderSkipped ? "Include all files in this folder" : "Exclude all files in this folder"}
+                    >
+                      <span className="text-rose-400 font-bold">{isFolderSkipped ? "↺" : "✕"}</span>
+                      <span>{isFolderSkipped ? "Include" : "Skip Dir"}</span>
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => navigateToFolder(sub.path)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigateToFolder(sub.path);
+                    }}
                     className="text-[10px] text-[#A8A8A8] hover:text-[#60CDFF] px-2 py-0.5 rounded bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] cursor-pointer"
                   >
                     Open ➔
@@ -722,43 +829,81 @@ export function ArchiveTreeInspector({
           const file = item.data;
           const isSelected = selectedEntryName === file.name;
           const fileNameOnly = file.name.split("/").pop() || file.name;
+          const isExcluded = excludedPaths?.has(normalizeArchiveEntryPath(file.name));
 
           return (
             <div
               key={`file-${file.name}`}
-              onClick={() => setSelectedEntryName(file.name)}
+              onClick={() => {
+                if (isExclusionMode && onToggleExclude) {
+                  onToggleExclude(file.name);
+                } else {
+                  setSelectedEntryName(file.name);
+                }
+              }}
               onDoubleClick={() => onPreviewEntry(file.name)}
               style={{ height: "34px" }}
               className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
-                isSelected ? "bg-[#25394A] text-white" : "hover:bg-[#242424]"
+                isExcluded
+                  ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
+                  : isSelected
+                    ? "bg-[#25394A] text-white"
+                    : "hover:bg-[#242424]"
               }`}
             >
               <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
                 {renderFileIcon(fileNameOnly)}
                 <span
-                  className="font-mono text-[11px] truncate text-white group-hover:text-[#60CDFF] transition-colors"
-                  title={`${file.name} (Double-click or Spacebar to Preview)`}
+                  className={`font-mono text-[11px] truncate transition-colors ${
+                    isExcluded ? "text-rose-300/80 line-through" : "text-white group-hover:text-[#60CDFF]"
+                  }`}
+                  title={`${file.name} (Double-click or Spacebar to Preview${isExclusionMode ? " | Click to Toggle Exclusion" : ""})`}
                 >
                   {fileNameOnly}
                 </span>
+                {isExcluded && (
+                  <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-700/80 text-rose-300 flex items-center space-x-1 shrink-0 shadow-sm">
+                    <span>✕</span>
+                    <span>Excluded</span>
+                  </span>
+                )}
               </div>
 
-              <div className="flex items-center space-x-3 shrink-0">
-                <span className="text-[#888888] font-mono text-[11px]">
-                  {formatBytes(file.size)}
+              <div className="flex items-center space-x-2.5 shrink-0">
+                <span className={`font-mono text-[11px] ${isExcluded ? "text-rose-400 font-semibold" : "text-[#888888]"}`}>
+                  {isExcluded ? "(Skipped)" : formatBytes(file.size)}
                 </span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onPreviewEntry(file.name);
-                  }}
-                  className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
-                  title="In-memory safe preview (Zero-disk)"
-                >
-                  <span>👁️</span>
-                  <span>Preview</span>
-                </button>
+                {isExclusionMode && onToggleExclude ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleExclude(file.name);
+                    }}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center space-x-1 cursor-pointer ${
+                      isExcluded
+                        ? "bg-rose-900/40 hover:bg-rose-900/70 text-rose-300 border-rose-700/70"
+                        : "bg-[#2E2E2E] hover:bg-rose-950/50 text-[#A8A8A8] hover:text-rose-300 border-[#3E3E3E] hover:border-rose-800/60"
+                    }`}
+                    title={isExcluded ? "Include this file in extraction" : "Exclude this file from extraction"}
+                  >
+                    <span className="text-rose-400 font-bold">{isExcluded ? "↺" : "✕"}</span>
+                    <span>{isExcluded ? "Include" : "Skip"}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPreviewEntry(file.name);
+                    }}
+                    className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
+                    title="In-memory safe preview (Zero-disk)"
+                  >
+                    <span>👁️</span>
+                    <span>Preview</span>
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -795,17 +940,30 @@ export function ArchiveTreeInspector({
         renderRow={(entry, idx) => {
           const isSelected = selectedEntryName === entry.name;
           const fileNameOnly = entry.name.split("/").pop() || entry.name;
+          const isExcluded = !entry.is_dir && excludedPaths?.has(normalizeArchiveEntryPath(entry.name));
+          const isFolderSkipped = entry.is_dir && isDirExcluded(entry.name);
+          const isDimmed = isExcluded || isFolderSkipped;
 
           return (
             <div
               key={`flat-${entry.name || idx}`}
-              onClick={() => setSelectedEntryName(entry.name)}
+              onClick={() => {
+                if (isExclusionMode && onToggleExclude) {
+                  onToggleExclude(entry.name, entry.is_dir);
+                } else {
+                  setSelectedEntryName(entry.name);
+                }
+              }}
               onDoubleClick={() => {
                 if (!entry.is_dir) onPreviewEntry(entry.name);
               }}
               style={{ height: "34px" }}
               className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
-                isSelected ? "bg-[#25394A] text-white" : "hover:bg-[#252525]"
+                isDimmed
+                  ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
+                  : isSelected
+                    ? "bg-[#25394A] text-white"
+                    : "hover:bg-[#252525]"
               }`}
             >
               <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
@@ -816,28 +974,69 @@ export function ArchiveTreeInspector({
                 ) : (
                   renderFileIcon(fileNameOnly)
                 )}
-                <span className="text-white truncate font-mono text-[11px] group-hover:text-[#60CDFF] transition-colors" title={entry.name}>
+                <span
+                  className={`truncate font-mono text-[11px] transition-colors ${
+                    isDimmed ? "text-rose-300/80 line-through" : "text-white group-hover:text-[#60CDFF]"
+                  }`}
+                  title={entry.name}
+                >
                   {entry.name}
                 </span>
+                {isExcluded && (
+                  <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-700/80 text-rose-300 flex items-center space-x-1 shrink-0 shadow-sm">
+                    <span>✕</span>
+                    <span>Excluded</span>
+                  </span>
+                )}
+                {isFolderSkipped && (
+                  <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-800 text-rose-300 shrink-0">
+                    ✕ Folder Excluded
+                  </span>
+                )}
               </div>
 
-              <div className="flex items-center space-x-3 shrink-0">
-                <span className="text-[#888888] font-mono text-[11px]">
-                  {entry.is_dir ? "Directory" : formatBytes(entry.size)}
+              <div className="flex items-center space-x-2.5 shrink-0">
+                <span className={`font-mono text-[11px] ${isDimmed ? "text-rose-400 font-semibold" : "text-[#888888]"}`}>
+                  {isExcluded
+                    ? "(Skipped)"
+                    : isFolderSkipped
+                      ? "(Folder Skipped)"
+                      : entry.is_dir
+                        ? "Directory"
+                        : formatBytes(entry.size)}
                 </span>
-                {!entry.is_dir && (
+                {isExclusionMode && onToggleExclude ? (
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onPreviewEntry(entry.name);
+                      onToggleExclude(entry.name, entry.is_dir);
                     }}
-                    className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
-                    title="In-memory safe preview"
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center space-x-1 cursor-pointer ${
+                      isDimmed
+                        ? "bg-rose-900/40 hover:bg-rose-900/70 text-rose-300 border-rose-700/70"
+                        : "bg-[#2E2E2E] hover:bg-rose-950/50 text-[#A8A8A8] hover:text-rose-300 border-[#3E3E3E] hover:border-rose-800/60"
+                    }`}
+                    title={isDimmed ? "Include in extraction" : "Exclude from extraction"}
                   >
-                    <span>👁️</span>
-                    <span>Preview</span>
+                    <span className="text-rose-400 font-bold">{isDimmed ? "↺" : "✕"}</span>
+                    <span>{isDimmed ? "Include" : "Skip"}</span>
                   </button>
+                ) : (
+                  !entry.is_dir && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPreviewEntry(entry.name);
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
+                      title="In-memory safe preview"
+                    >
+                      <span>👁️</span>
+                      <span>Preview</span>
+                    </button>
+                  )
                 )}
               </div>
             </div>
@@ -884,12 +1083,19 @@ export function ArchiveTreeInspector({
 
         {/* Compact Footer */}
         <div className="px-3.5 py-1.5 bg-[#1C1C1C] border-t border-[#333333] flex items-center justify-between text-[11px] font-mono text-[#888888]">
-          <span className="truncate max-w-[280px]">
+          <span className="truncate max-w-[240px]">
             {selectedArchive.split(/[/\\]/).pop()}
           </span>
-          <span className="text-white">
-            {isLoading ? "Indexing tree..." : `Uncompressed: ${formatBytes(archiveInfo.total_uncompressed_size || 0)}`}
-          </span>
+          <div className="flex items-center space-x-2">
+            {excludedCount > 0 && (
+              <span className="text-rose-400 font-semibold">
+                {excludedCount} excluded ({formatBytes(excludedBytes)} skipped)
+              </span>
+            )}
+            <span className="text-white">
+              {isLoading ? "Indexing tree..." : `Uncompressed: ${formatBytes(archiveInfo.total_uncompressed_size || 0)}`}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -954,6 +1160,14 @@ export function ArchiveTreeInspector({
                 <span>Total Items: <span className="text-white">{archiveInfo.file_count || 0}</span></span>
                 <span>•</span>
                 <span>Uncompressed: <span className="text-white">{formatBytes(archiveInfo.total_uncompressed_size || 0)}</span></span>
+                {excludedCount > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="text-rose-400 font-semibold">
+                      {excludedCount} excluded ({formatBytes(excludedBytes)} skipped)
+                    </span>
+                  </>
+                )}
                 {selectedEntryName && (
                   <>
                     <span>•</span>

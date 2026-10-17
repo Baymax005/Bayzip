@@ -1,4 +1,4 @@
-# 📦 Bayzip (v1.0.7)
+# 📦 Bayzip (v1.1.0)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, and seamless Windows File Explorer shell integration.
 
@@ -19,6 +19,19 @@
 - **Instant TOC Trailer (`O(1)` Archive Inspection)**:
   - `.bay` archives feature a binary Table of Contents trailer (`BAYTOC\x02\x00` + 8-byte LE offset) written at the EOF.
   - Inspect multi-gigabyte archives instantly without full-container decompression or linear reading.
+
+### ✕ Selective Extraction & Exclusion Mode (Skip Mode)
+- **HCI-Compliant Inverted File Selection**:
+  - By default, all archive files are marked **Included** for 1-click full extraction.
+  - Clicking **"Exclude Files"** (`[ ✕ Exclude Files ]`) unlocks interactive exclusion toggles in both Tree and Flat views.
+  - Marked unwanted files/folders display a red cross badge `[✕ Excluded]`, dimmed (50% opacity), strikethrough filename, and size indicates `(Skipped)` in soft rose.
+  - Skips extracting unwanted files to disk, saving massive disk space and I/O time when only specific files are needed.
+- **Decompression Container Stream Alignment**:
+  - For streaming `.bay` archives, excluded files are safely drained through an in-memory buffer without creating disk files, preserving container decompressor alignment and data integrity.
+  - Supported across `.bay`, `.zip`, `.tar`, and `.7z`.
+- **Dynamic Extraction Status**:
+  - Dynamic button updates in real time: `[ Extract All (100 Files) ]` vs `[ Extract 98 Files (2 Excluded) ]`.
+  - 1-click **"Include All"** reset button in the inspector toolbar and extraction action bar.
 
 ### 🛡️ Restricted Safe Preview Mode (In-Memory Streaming)
 - **Zero-Disk Streaming**:
@@ -84,6 +97,14 @@
 ---
 
 ## 📋 Release Notes
+
+### v1.1.0
+- **Selective Extraction & Exclusion Mode (`✕` Skip Mode)**:
+  - Added inverted file/folder selection to skip extracting unwanted files directly to disk, saving massive storage and I/O time.
+  - Interactive toolbar toggle with pulsating indicator (`[ ✕ Exclude Files ]`) and 1-click reset (`[ Include All ]`).
+  - Tree and Flat views show red cross badges (`[✕ Excluded]` / `[✕ Folder Excluded]`), dimmed 50% opacity, strikethrough labels, and `(Skipped)` size badges.
+  - Safe decompressor byte-draining preserves container stream alignment for `.bay`, `.zip`, `.tar`, and `.7z` without partial file disk writes.
+  - Bottom action button dynamically displays live extraction counts: `[ Extract 98 Files (2 Excluded) ]` alongside a quick reset button.
 
 ### v1.0.7
 - **Independent Multi-Window Settings**: Upgraded Settings from an in-page modal to a true native Windows 11 window (`580x560` borderless with custom titlebar and drag region). Users can now drag the Settings window anywhere across multiple monitors independently of the main Bayzip window, while preserving real-time configuration sync.

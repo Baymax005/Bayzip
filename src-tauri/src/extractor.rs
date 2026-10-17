@@ -82,12 +82,34 @@ pub fn resolve_unique_folder_name(target_dir: &Path) -> PathBuf {
     }
 }
 
+pub fn is_path_excluded(raw_path: &str, excluded: Option<&std::collections::HashSet<String>>) -> bool {
+    if let Some(set) = excluded {
+        let clean = raw_path.replace('\\', "/");
+        let trimmed = clean.trim_start_matches('/');
+        let lower = trimmed.to_lowercase();
+        if set.contains(trimmed) || set.contains(&lower) {
+            return true;
+        }
+        for exc in set.iter() {
+            let exc_clean = exc.trim_end_matches('/');
+            let exc_lower = exc_clean.to_lowercase();
+            if lower.starts_with(&format!("{}/", exc_lower)) || lower == exc_lower {
+                return true;
+            }
+        }
+        false
+    } else {
+        false
+    }
+}
+
 pub fn extract_bay_stream<R: Read>(
     mut decoder: R,
     dest_dir: &Path,
     total_expected_bytes: u64,
     app: Option<&AppHandle>,
     single_root_prefix: Option<&str>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     let mut extracted_files = Vec::new();
     let root_strip = single_root_prefix.filter(|prefix| {
@@ -159,9 +181,10 @@ pub fn extract_bay_stream<R: Read>(
             .map_err(|e| format!("Failed to read entry size: {}", e))?;
         let file_size = u64::from_le_bytes(size_bytes);
 
+        let is_excluded = is_path_excluded(&rel_path_str, excluded);
         let safe_rel_path = match sanitize_archive_path(&rel_path_str) {
-            Some(p) => p,
-            None => {
+            Some(p) if !is_excluded => p,
+            _ => {
                 let mut remaining = file_size;
                 while remaining > 0 {
                     let to_read = (remaining as usize).min(io_buf.len());
@@ -328,6 +351,7 @@ pub fn extract_bay_archive(
     password: Option<&str>,
     expected_size: Option<u64>,
     app: Option<&AppHandle>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     let total_expected_bytes: u64 = if let Some(sz) = expected_size.filter(|&s| s > 0) {
         sz
@@ -373,19 +397,19 @@ pub fn extract_bay_archive(
 
         if inner_sig.starts_with(b"BAYBRO\x02") {
             let decoder = brotli::Decompressor::new(enc_reader, 64 * 1024);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         } else if inner_sig.starts_with(b"BAYLZ4\x02") {
             let decoder = lz4_flex::frame::FrameDecoder::new(enc_reader);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         } else if inner_sig.starts_with(b"BAYZIP\x02") {
             let decoder = zstd::stream::Decoder::new(enc_reader)
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         } else {
             let combined = std::io::Cursor::new(inner_sig).chain(enc_reader);
             let decoder = zstd::stream::Decoder::new(combined)
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         }
     }
 
@@ -423,25 +447,25 @@ pub fn extract_bay_archive(
         if plaintext.starts_with(b"BAYBRO\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         } else if plaintext.starts_with(b"BAYLZ4\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         } else if plaintext.starts_with(b"BAYZIP\x02") {
             let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
             let decoder = zstd::stream::Decoder::new(&plaintext[offset..])
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
             // Raw LZ4 frame
             let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         } else {
             // Raw Zstandard fallback
             let decoder = zstd::stream::Decoder::new(&plaintext[..])
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix);
+            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
         }
     }
 
@@ -454,29 +478,29 @@ pub fn extract_bay_archive(
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = brotli::Decompressor::new(file, 64 * 1024);
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded)
     } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded)
     } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
         let decoder = zstd::stream::Decoder::new(file)
             .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded)
     } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
         // Raw LZ4 frame
         file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded)
     } else {
         // Standard Zstd
         file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let decoder = zstd::stream::Decoder::new(file)
             .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
-        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix)
+        extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded)
     }
 }
 
@@ -486,6 +510,7 @@ pub fn extract_zip_archive(
     password: Option<&str>,
     expected_size: Option<u64>,
     app: Option<&AppHandle>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
@@ -567,6 +592,9 @@ pub fn extract_zip_archive(
         };
 
         let raw_name = file.name();
+        if is_path_excluded(raw_name, excluded) {
+            continue;
+        }
         let safe_path = match sanitize_archive_path(raw_name) {
             Some(p) => p,
             None => continue,
@@ -694,6 +722,7 @@ fn extract_tar_entries<R: Read>(
     dest_dir: &Path,
     expected_size: Option<u64>,
     app: Option<&AppHandle>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
 
@@ -713,6 +742,10 @@ fn extract_tar_entries<R: Read>(
         let mut entry = entry_res.map_err(|e| format!("Tar entry error: {}", e))?;
         let entry_path = entry.path().map_err(|e| format!("Tar path error: {}", e))?;
         let path_str = entry_path.to_string_lossy().to_string();
+
+        if is_path_excluded(&path_str, excluded) {
+            continue;
+        }
 
         let safe_path = match sanitize_archive_path(&path_str) {
             Some(p) => p,
@@ -830,6 +863,7 @@ pub fn extract_tar_archive(
     dest_dir: &Path,
     expected_size: Option<u64>,
     app: Option<&AppHandle>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     let raw_file = File::open(archive_path).map_err(|e| format!("Failed to open tar: {}", e))?;
     let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
@@ -841,10 +875,10 @@ pub fn extract_tar_archive(
     if is_gz {
         let tar = flate2::read::GzDecoder::new(reader);
         let archive = tar::Archive::new(tar);
-        extract_tar_entries(archive, dest_dir, expected_size, app)
+        extract_tar_entries(archive, dest_dir, expected_size, app, excluded)
     } else {
         let archive = tar::Archive::new(reader);
-        extract_tar_entries(archive, dest_dir, expected_size, app)
+        extract_tar_entries(archive, dest_dir, expected_size, app, excluded)
     }
 }
 
@@ -854,6 +888,7 @@ pub fn extract_7z_archive(
     password: Option<&str>,
     expected_size: Option<u64>,
     app: Option<&AppHandle>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
 
@@ -869,7 +904,7 @@ pub fn extract_7z_archive(
             return Err("Password required: This 7z archive is encrypted with AES-256.".into());
         }
         Err(e) => {
-            return extract_with_system_tar(archive_path, dest_dir, app)
+            return extract_with_system_tar(archive_path, dest_dir, app, excluded)
                 .map_err(|_| format!("7z open error: {}", e));
         }
     };
@@ -924,6 +959,9 @@ pub fn extract_7z_archive(
             return Err(sevenz_rust2::Error::from(std::io::Error::new(std::io::ErrorKind::Interrupted, "Extraction cancelled by user")));
         }
         let raw_name = entry.name();
+        if is_path_excluded(raw_name, excluded) {
+            return Ok(true);
+        }
         let safe_path = match sanitize_archive_path(raw_name) {
             Some(p) => p,
             None => return Ok(true),
@@ -1062,7 +1100,7 @@ pub fn extract_7z_archive(
             if e.to_string().to_lowercase().contains("password") {
                 Err("Incorrect password: Could not decrypt 7z archive.".into())
             } else {
-                extract_with_system_tar(archive_path, dest_dir, app)
+                extract_with_system_tar(archive_path, dest_dir, app, excluded)
                     .map_err(|_| format!("7z extraction error: {}", e))
             }
         }
@@ -1073,6 +1111,7 @@ pub fn extract_with_system_tar(
     archive_path: &Path,
     dest_dir: &Path,
     app: Option<&AppHandle>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
@@ -1088,7 +1127,18 @@ pub fn extract_with_system_tar(
     }
 
     let mut cmd = Command::new("tar.exe");
-    cmd.args(["-xvf", &archive_path.to_string_lossy(), "-C", &dest_dir.to_string_lossy()]);
+    let mut args: Vec<String> = vec![
+        "-xvf".into(),
+        archive_path.to_string_lossy().to_string(),
+        "-C".into(),
+        dest_dir.to_string_lossy().to_string(),
+    ];
+    if let Some(set) = excluded {
+        for exc in set.iter() {
+            args.push(format!("--exclude={}", exc));
+        }
+    }
+    cmd.args(&args);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.stdout(Stdio::null());
@@ -1231,44 +1281,45 @@ pub fn universal_extract(
     password: Option<&str>,
     expected_size: Option<u64>,
     app: Option<&AppHandle>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     let format = detect_archive_type(archive_path);
     match format {
         ArchiveFormat::Bay => {
-            extract_bay_archive(archive_path, dest_dir, password, expected_size, app)
+            extract_bay_archive(archive_path, dest_dir, password, expected_size, app, excluded)
         },
         ArchiveFormat::Zip => {
-            extract_zip_archive(archive_path, dest_dir, password, expected_size, app)
+            extract_zip_archive(archive_path, dest_dir, password, expected_size, app, excluded)
                 .or_else(|e| {
                     if e.contains("Password") || e.contains("password") {
                         return Err(e);
                     }
-                    extract_bay_archive(archive_path, dest_dir, password, expected_size, app)
-                        .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
+                    extract_bay_archive(archive_path, dest_dir, password, expected_size, app, excluded)
+                        .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app, excluded))
                 })
         },
         ArchiveFormat::SevenZip => {
-            extract_7z_archive(archive_path, dest_dir, password, expected_size, app)
+            extract_7z_archive(archive_path, dest_dir, password, expected_size, app, excluded)
                 .or_else(|e| {
                     if e.contains("Password") || e.contains("password") {
                         return Err(e);
                     }
-                    extract_with_system_tar(archive_path, dest_dir, app)
+                    extract_with_system_tar(archive_path, dest_dir, app, excluded)
                 })
         },
         ArchiveFormat::Tar | ArchiveFormat::TarGz => {
-            extract_with_system_tar(archive_path, dest_dir, app)
-                .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app))
+            extract_with_system_tar(archive_path, dest_dir, app, excluded)
+                .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app, excluded))
         },
         ArchiveFormat::Rar => {
-            extract_with_system_tar(archive_path, dest_dir, app)
+            extract_with_system_tar(archive_path, dest_dir, app, excluded)
         },
         ArchiveFormat::Unknown => {
-            extract_zip_archive(archive_path, dest_dir, password, expected_size, app)
-                .or_else(|_| extract_7z_archive(archive_path, dest_dir, password, expected_size, app))
-                .or_else(|_| extract_bay_archive(archive_path, dest_dir, password, expected_size, app))
-                .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app))
-                .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app))
+            extract_zip_archive(archive_path, dest_dir, password, expected_size, app, excluded)
+                .or_else(|_| extract_7z_archive(archive_path, dest_dir, password, expected_size, app, excluded))
+                .or_else(|_| extract_bay_archive(archive_path, dest_dir, password, expected_size, app, excluded))
+                .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app, excluded))
+                .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app, excluded))
         }
     }
 }
@@ -1280,6 +1331,7 @@ pub fn extract_archive_sync(
     password: Option<String>,
     expected_size: Option<u64>,
     extract_to_subfolder: Option<bool>,
+    excluded_paths: Option<Vec<String>>,
 ) -> Result<ExtractResponse, String> {
     reset_extraction_cancel_flag();
     let _priority_guard = ScopedPriorityGuard::new();
@@ -1310,7 +1362,14 @@ pub fn extract_archive_sync(
 
     let dest_dir_existed_before = dest_dir.exists();
     let pwd_ref = password.as_deref();
-    let res = universal_extract(path, &dest_dir, pwd_ref, expected_size, Some(&app));
+
+    let excluded_set: Option<std::collections::HashSet<String>> = excluded_paths.filter(|p| !p.is_empty()).map(|paths| {
+        paths.into_iter()
+            .map(|p| p.replace('\\', "/").trim_start_matches('/').to_lowercase())
+            .collect()
+    });
+
+    let res = universal_extract(path, &dest_dir, pwd_ref, expected_size, Some(&app), excluded_set.as_ref());
 
     let extracted_files = match res {
         Ok(files) => files,
@@ -1363,7 +1422,7 @@ pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
         return Err("Archive file does not exist".into());
     }
     let parent = p.parent().unwrap_or_else(|| Path::new("."));
-    universal_extract(p, parent, None, None, None)?;
+    universal_extract(p, parent, None, None, None, None)?;
 
     #[cfg(target_os = "windows")]
     {
@@ -1400,7 +1459,7 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
         d
     };
 
-    if let Err(e) = universal_extract(p, &dest, None, None, None) {
+    if let Err(e) = universal_extract(p, &dest, None, None, None, None) {
         // If extraction failed and we created a subfolder, clean it up completely
         if !has_single_root {
             let _ = std::fs::remove_dir_all(&dest);
