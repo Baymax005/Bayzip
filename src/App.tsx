@@ -514,6 +514,15 @@ function App() {
     }
   };
 
+  const handleOpenSettings = async () => {
+    try {
+      await invoke("open_settings_window");
+    } catch (err) {
+      console.warn("Failed to open native settings window, falling back to modal:", err);
+      setIsSettingsOpen(true);
+    }
+  };
+
   const handleCancelCompress = async () => {
     try {
       setIsCancellingCompress(true);
@@ -653,9 +662,27 @@ function App() {
     try {
       let finalDest = extractDest;
       if (extractToSubfolder) {
-        const fallbackName = selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "archive";
-        const stem = getArchiveStemName(archiveInfo?.filename || fallbackName);
-        finalDest = `${extractDest}\\${stem}`;
+        // Check if all files in the archive already share a single common top-level root folder
+        const entries = archiveInfo?.entries || [];
+        let hasSingleRoot = false;
+        if (entries.length > 0) {
+          const firstPath = entries[0].name.replace(/\\/g, "/");
+          const firstSlash = firstPath.indexOf("/");
+          if (firstSlash !== -1) {
+            const rootPrefix = firstPath.substring(0, firstSlash);
+            hasSingleRoot = entries.every((e) => {
+              const clean = e.name.replace(/\\/g, "/");
+              return clean === rootPrefix || clean.startsWith(rootPrefix + "/");
+            });
+          }
+        }
+
+        // Only append subfolder if the archive does not already contain a single root folder
+        if (!hasSingleRoot) {
+          const fallbackName = selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "archive";
+          const stem = getArchiveStemName(archiveInfo?.filename || fallbackName);
+          finalDest = `${extractDest}\\${stem}`;
+        }
       }
 
       const res = await invoke<ExtractResult>("extract_archive", {
@@ -814,7 +841,7 @@ function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setIsSettingsOpen(true)}
+                onClick={handleOpenSettings}
                 className="p-1.5 text-[#A8A8A8] hover:text-[#60CDFF] transition-colors cursor-pointer group"
                 title="Settings"
               >

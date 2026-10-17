@@ -148,6 +148,43 @@ fn cancel_extraction() {
     crate::extractor::cancel_extraction_flag();
 }
 
+#[tauri::command]
+async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        Ok(())
+    } else {
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "settings",
+            tauri::WebviewUrl::App("index.html?window=settings".into()),
+        )
+        .title("Bayzip Settings")
+        .inner_size(580.0, 560.0)
+        .resizable(false)
+        .decorations(false)
+        .shadow(true)
+        .center()
+        .build()
+        .map_err(|e| format!("Failed to create settings window: {}", e))?;
+
+        let _ = window.set_focus();
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn close_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -171,7 +208,9 @@ pub fn run() {
             get_selected_items_info,
             extract_archive,
             get_archive_info,
-            preview_archive_entry
+            preview_archive_entry,
+            open_settings_window,
+            close_settings_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

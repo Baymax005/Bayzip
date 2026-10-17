@@ -1,6 +1,7 @@
-# 📦 Bayzip (v1.0.6)
+# 📦 Bayzip (v1.0.7)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, and seamless Windows File Explorer shell integration.
+
 
 ---
 
@@ -83,6 +84,13 @@
 ---
 
 ## 📋 Release Notes
+
+### v1.0.7
+- **Independent Multi-Window Settings**: Upgraded Settings from an in-page modal to a true native Windows 11 window (`580x560` borderless with custom titlebar and drag region). Users can now drag the Settings window anywhere across multiple monitors independently of the main Bayzip window, while preserving real-time configuration sync.
+- **Ultra-Scale Virtual Scrolling (DOM Recycling)**: Implemented high-performance virtual windowing in `ArchiveTreeInspector` (fixed 34px row height + 5-row overscan) for both the compact inspector and expanded dual-pane workspace. Archives with 100,000+ files now render only ~20–25 DOM elements at 60 FPS with minimal memory overhead.
+- **Spacebar Shortcut Input Focus Fix**: Fixed a bug where pressing the Spacebar inside the search filter box or password field was intercepted by the global preview shortcut, allowing normal space typing in all inputs.
+- **Single-Root Folder Deduplication**: Enhanced extraction target resolution to automatically detect archives that already encapsulate a single root directory, preventing redundant double-folder nesting (e.g. `ArchiveName\ArchiveName`).
+- **Safe Preview Large File DOM Protection**: Added a 3,000-line DOM rendering cap with a warning banner for massive text and code files, safeguarding the UI from freezes while preserving full clipboard copy.
 
 ### v1.0.6
 - **Zero-Allocation In-Place AES-256-GCM**: Switched streaming encryption and decryption to `AeadInPlace`, eliminating heap allocations on every chunk and upgrading chunk sizes to 4 MB for maximum AES throughput.

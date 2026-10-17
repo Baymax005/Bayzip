@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ArchiveEntryPreview } from "../types";
 
 interface FilePreviewModalProps {
@@ -28,6 +28,27 @@ export function FilePreviewModal({
 }: FilePreviewModalProps) {
   const [copied, setCopied] = useState(false);
   const [wrapText, setWrapText] = useState(true);
+
+  // Split and cap lines to prevent DOM lockup on large files (>3,000 lines)
+  const { renderedLines, totalLineCount, isCapped } = useMemo(() => {
+    if (!preview?.content || preview.preview_type === "image") {
+      return { renderedLines: [], totalLineCount: 0, isCapped: false };
+    }
+    const allLines = preview.content.split("\n");
+    const MAX_LINES = 3000;
+    if (allLines.length > MAX_LINES) {
+      return {
+        renderedLines: allLines.slice(0, MAX_LINES),
+        totalLineCount: allLines.length,
+        isCapped: true,
+      };
+    }
+    return {
+      renderedLines: allLines,
+      totalLineCount: allLines.length,
+      isCapped: false,
+    };
+  }, [preview?.content, preview?.preview_type]);
 
   // Close on Escape key
   useEffect(() => {
@@ -252,14 +273,14 @@ export function FilePreviewModal({
             </div>
           ) : preview?.content ? (
             /* Text & Code Viewer with Line Numbers */
-            <div className="h-full flex text-xs font-mono">
+            <div className="h-full flex flex-col text-xs font-mono">
               <div className="flex-1 overflow-auto custom-scrollbar p-4 bg-[#141414] text-[#E0E0E0] select-text">
                 <pre
                   className={`font-mono text-xs leading-5 ${
                     wrapText ? "whitespace-pre-wrap break-words" : "whitespace-pre"
                   }`}
                 >
-                  {preview.content.split("\n").map((line, idx) => (
+                  {renderedLines.map((line, idx) => (
                     <div key={idx} className="flex hover:bg-[#202020] transition-colors">
                       <span className="w-12 shrink-0 select-none text-[#555555] text-right pr-4">
                         {idx + 1}
@@ -268,6 +289,15 @@ export function FilePreviewModal({
                     </div>
                   ))}
                 </pre>
+                {isCapped && (
+                  <div className="mt-4 p-3 rounded-lg bg-[#221D12] border border-amber-500/40 text-amber-300 text-xs flex items-center space-x-2.5 shadow-sm">
+                    <span className="text-base shrink-0">⚠️</span>
+                    <span>
+                      Showing first <strong>3,000</strong> lines of{" "}
+                      <strong>{totalLineCount.toLocaleString()}</strong> lines in memory preview. Extract the archive to view the full file.
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

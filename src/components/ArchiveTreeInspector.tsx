@@ -54,6 +54,86 @@ function getFileCategory(name: string): "code" | "image" | "restricted" | "archi
   return "doc";
 }
 
+interface VirtualScrollListProps<T> {
+  items: T[];
+  rowHeight?: number;
+  overscan?: number;
+  className?: string;
+  renderRow: (item: T, index: number) => React.ReactNode;
+}
+
+function VirtualScrollList<T>({
+  items,
+  rowHeight = 34,
+  overscan = 5,
+  className = "",
+  renderRow,
+}: VirtualScrollListProps<T>) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(300);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      setScrollTop(el.scrollTop);
+    };
+
+    const updateHeight = () => {
+      if (el) {
+        setViewportHeight(el.clientHeight || 300);
+      }
+    };
+
+    updateHeight();
+    el.addEventListener("scroll", onScroll, { passive: true });
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => updateHeight());
+      ro.observe(el);
+    } else {
+      window.addEventListener("resize", updateHeight);
+    }
+
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (ro) ro.disconnect();
+      else window.removeEventListener("resize", updateHeight);
+    };
+  }, []);
+
+  const totalHeight = items.length * rowHeight;
+  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const endIndex = Math.min(items.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan);
+  const visibleItems = items.slice(startIndex, endIndex);
+  const offsetY = startIndex * rowHeight;
+
+  return (
+    <div
+      ref={scrollRef}
+      className={`overflow-y-auto custom-scrollbar relative ${className}`}
+    >
+      <div style={{ height: `${totalHeight}px`, position: "relative", width: "100%" }}>
+        <div
+          style={{
+            transform: `translateY(${offsetY}px)`,
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+          }}
+          className="divide-y divide-[#262626]"
+        >
+          {visibleItems.map((item, idx) => renderRow(item, startIndex + idx))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ArchiveTreeInspector({
   archiveInfo,
   selectedArchive,
@@ -83,10 +163,16 @@ export function ArchiveTreeInspector({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isExpandedModal]);
 
-  // Spacebar to preview selected entry
+  // Spacebar to preview selected entry (safely ignoring text inputs)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === " " && selectedEntryName) {
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName;
+        const isEditable = target?.isContentEditable;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || isEditable) {
+          return;
+        }
         // Prevent page scroll on Space
         e.preventDefault();
         onPreviewEntry(selectedEntryName);
@@ -583,50 +669,67 @@ export function ArchiveTreeInspector({
       );
     }
 
-    return (
-      <div className="overflow-y-auto custom-scrollbar divide-y divide-[#262626]">
-        {/* Subfolders */}
-        {currentFolderNode.subfolders.map((sub) => (
-          <div
-            key={sub.path}
-            onDoubleClick={() => navigateToFolder(sub.path)}
-            onClick={() => setSelectedEntryName(null)}
-            className="flex items-center justify-between px-3 py-2 text-xs hover:bg-[#252525] transition-colors cursor-pointer group"
-          >
-            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-              <svg className="w-4 h-4 text-[#E8C488] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              <span className="text-white font-mono text-[11px] truncate group-hover:text-[#60CDFF] transition-colors font-medium">
-                {sub.name}/
-              </span>
-            </div>
-            <div className="flex items-center space-x-3 shrink-0">
-              <span className="text-[#777777] font-mono text-[10px]">
-                {sub.totalItemCount} item{sub.totalItemCount !== 1 ? "s" : ""}
-              </span>
-              <button
-                type="button"
-                onClick={() => navigateToFolder(sub.path)}
-                className="text-[10px] text-[#A8A8A8] hover:text-[#60CDFF] px-2 py-0.5 rounded bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] cursor-pointer"
-              >
-                Open ➔
-              </button>
-            </div>
-          </div>
-        ))}
+    type FolderItem =
+      | { kind: "folder"; data: TreeNode }
+      | { kind: "file"; data: ArchiveEntryItem };
 
-        {/* Files */}
-        {filteredCurrentFiles.map((file) => {
+    const folderItems: FolderItem[] = [
+      ...currentFolderNode.subfolders.map((node) => ({ kind: "folder" as const, data: node })),
+      ...filteredCurrentFiles.map((file) => ({ kind: "file" as const, data: file })),
+    ];
+
+    return (
+      <VirtualScrollList
+        key={`folder-virtual-${currentFolderPath}-${searchQuery}`}
+        items={folderItems}
+        rowHeight={34}
+        className="flex-1 h-full"
+        renderRow={(item) => {
+          if (item.kind === "folder") {
+            const sub = item.data;
+            return (
+              <div
+                key={`folder-${sub.path}`}
+                onDoubleClick={() => navigateToFolder(sub.path)}
+                onClick={() => setSelectedEntryName(null)}
+                style={{ height: "34px" }}
+                className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border"
+              >
+                <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                  <svg className="w-4 h-4 text-[#E8C488] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  <span className="text-white font-mono text-[11px] truncate group-hover:text-[#60CDFF] transition-colors font-medium">
+                    {sub.name}/
+                  </span>
+                </div>
+                <div className="flex items-center space-x-3 shrink-0">
+                  <span className="text-[#777777] font-mono text-[10px]">
+                    {sub.totalItemCount} item{sub.totalItemCount !== 1 ? "s" : ""}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => navigateToFolder(sub.path)}
+                    className="text-[10px] text-[#A8A8A8] hover:text-[#60CDFF] px-2 py-0.5 rounded bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] cursor-pointer"
+                  >
+                    Open ➔
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
+          const file = item.data;
           const isSelected = selectedEntryName === file.name;
           const fileNameOnly = file.name.split("/").pop() || file.name;
 
           return (
             <div
-              key={file.name}
+              key={`file-${file.name}`}
               onClick={() => setSelectedEntryName(file.name)}
               onDoubleClick={() => onPreviewEntry(file.name)}
-              className={`flex items-center justify-between px-3 py-2 text-xs transition-colors cursor-pointer group ${
+              style={{ height: "34px" }}
+              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
                 isSelected ? "bg-[#25394A] text-white" : "hover:bg-[#242424]"
               }`}
             >
@@ -659,8 +762,8 @@ export function ArchiveTreeInspector({
               </div>
             </div>
           );
-        })}
-      </div>
+        }}
+      />
     );
   };
 
@@ -684,19 +787,24 @@ export function ArchiveTreeInspector({
     }
 
     return (
-      <div className="overflow-y-auto custom-scrollbar divide-y divide-[#262626]">
-        {filteredFlatEntries.map((entry, idx) => {
+      <VirtualScrollList
+        key={`flat-virtual-${searchQuery}`}
+        items={filteredFlatEntries}
+        rowHeight={34}
+        className="flex-1 h-full"
+        renderRow={(entry, idx) => {
           const isSelected = selectedEntryName === entry.name;
           const fileNameOnly = entry.name.split("/").pop() || entry.name;
 
           return (
             <div
-              key={idx}
+              key={`flat-${entry.name || idx}`}
               onClick={() => setSelectedEntryName(entry.name)}
               onDoubleClick={() => {
                 if (!entry.is_dir) onPreviewEntry(entry.name);
               }}
-              className={`flex items-center justify-between px-3 py-2 text-xs transition-colors cursor-pointer group ${
+              style={{ height: "34px" }}
+              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
                 isSelected ? "bg-[#25394A] text-white" : "hover:bg-[#252525]"
               }`}
             >
@@ -734,8 +842,8 @@ export function ArchiveTreeInspector({
               </div>
             </div>
           );
-        })}
-      </div>
+        }}
+      />
     );
   };
 
@@ -759,14 +867,14 @@ export function ArchiveTreeInspector({
               <>
                 {renderBreadcrumbs()}
                 {renderSearchInput()}
-                <div className="max-h-64 flex flex-col">
+                <div className="h-64 flex flex-col overflow-hidden">
                   {renderCurrentFolderContents()}
                 </div>
               </>
             ) : (
               <>
                 {renderSearchInput()}
-                <div className="max-h-64 flex flex-col">
+                <div className="h-64 flex flex-col overflow-hidden">
                   {renderFlatTable()}
                 </div>
               </>
@@ -818,12 +926,12 @@ export function ArchiveTreeInspector({
                       </div>
 
                       {/* Right Pane: Files inside selected folder */}
-                      <div className="flex-1 bg-[#181818] overflow-y-auto custom-scrollbar flex flex-col">
-                        <div className="px-3 py-1.5 bg-[#222222] border-b border-[#2E2E2E] text-[11px] font-mono text-[#A8A8A8] flex justify-between">
+                      <div className="flex-1 bg-[#181818] overflow-hidden flex flex-col">
+                        <div className="px-3 py-1.5 bg-[#222222] border-b border-[#2E2E2E] text-[11px] font-mono text-[#A8A8A8] flex justify-between shrink-0">
                           <span>Folder: <span className="text-white font-semibold">/{currentFolderPath || ""}</span></span>
                           <span>Double-click or Spacebar to Preview</span>
                         </div>
-                        <div className="flex-1">
+                        <div className="flex-1 flex flex-col overflow-hidden">
                           {renderCurrentFolderContents()}
                         </div>
                       </div>
@@ -832,7 +940,7 @@ export function ArchiveTreeInspector({
                 ) : (
                   <>
                     {renderSearchInput()}
-                    <div className="flex-1 overflow-y-auto custom-scrollbar bg-[#181818]">
+                    <div className="flex-1 overflow-hidden bg-[#181818] flex flex-col">
                       {renderFlatTable()}
                     </div>
                   </>
