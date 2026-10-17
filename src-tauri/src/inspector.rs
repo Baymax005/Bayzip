@@ -163,12 +163,33 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
     }
 }
 
+pub fn has_instant_bay_toc(p: &Path) -> bool {
+    let Ok(mut file) = File::open(p) else { return false; };
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if file_len < 24 {
+        return false;
+    }
+    if file.seek(std::io::SeekFrom::End(-8)).is_ok() {
+        let mut magic = [0u8; 8];
+        if file.read_exact(&mut magic).is_ok() {
+            return &magic == b"BAYTOC\x02\x00" || &magic == b"BAYETOC\x03";
+        }
+    }
+    false
+}
+
 pub fn is_archive_encrypted(path: &Path) -> bool {
     let Ok(mut file) = File::open(path) else { return false; };
     let mut header = [0u8; 16];
     let n = file.read(&mut header).unwrap_or(0);
     if n >= 6 && header.starts_with(b"BAYENC") {
         return true;
+    }
+    if file.seek(std::io::SeekFrom::End(-8)).is_ok() {
+        let mut trailer = [0u8; 8];
+        if file.read_exact(&mut trailer).is_ok() && &trailer == b"BAYETOC\x03" {
+            return true;
+        }
     }
     // Check ZIP encryption
     if n >= 4 && header[0] == 0x50 && header[1] == 0x4B {
@@ -474,29 +495,71 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
     };
 
     // Instant TOC (Table of Contents) check at EOF:
-    // If BAYTOC trailer exists, we read metadata in < 1ms without decompressing gigabytes!
+    // If BAYTOC or BAYETOC trailer exists, we read metadata in < 1ms without decompressing gigabytes!
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     if file_len >= 24 {
         if file.seek(std::io::SeekFrom::End(-8)).is_ok() {
             let mut trailer_magic = [0u8; 8];
-            if file.read_exact(&mut trailer_magic).is_ok() && &trailer_magic == b"BAYTOC\x02\x00" {
-                if file.seek(std::io::SeekFrom::End(-16)).is_ok() {
-                    let mut len_bytes = [0u8; 8];
-                    if file.read_exact(&mut len_bytes).is_ok() {
-                        let toc_len = u64::from_le_bytes(len_bytes);
-                        if toc_len > 0 && toc_len < file_len - 16 {
-                            if file.seek(std::io::SeekFrom::End(-16 - toc_len as i64)).is_ok() {
-                                let mut toc_bytes = vec![0u8; toc_len as usize];
-                                if file.read_exact(&mut toc_bytes).is_ok() {
-                                    if let Ok(entries) = serde_json::from_slice::<Vec<ArchiveEntryItem>>(&toc_bytes) {
-                                        let count = entries.len();
-                                        let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
-                                        return (entries, count, total_uncompressed);
+            if file.read_exact(&mut trailer_magic).is_ok() {
+                if &trailer_magic == b"BAYTOC\x02\x00" {
+                    if file.seek(std::io::SeekFrom::End(-16)).is_ok() {
+                        let mut len_bytes = [0u8; 8];
+                        if file.read_exact(&mut len_bytes).is_ok() {
+                            let toc_len = u64::from_le_bytes(len_bytes);
+                            if toc_len > 0 && toc_len < file_len - 16 {
+                                if file.seek(std::io::SeekFrom::End(-16 - toc_len as i64)).is_ok() {
+                                    let mut toc_bytes = vec![0u8; toc_len as usize];
+                                    if file.read_exact(&mut toc_bytes).is_ok() {
+                                        if let Ok(entries) = serde_json::from_slice::<Vec<ArchiveEntryItem>>(&toc_bytes) {
+                                            let count = entries.len();
+                                            let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
+                                            return (entries, count, total_uncompressed);
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                } else if &trailer_magic == b"BAYETOC\x03" {
+                    let pwd = match password {
+                        Some(p) if !p.trim().is_empty() => p.trim(),
+                        _ => return (Vec::new(), 0, 0),
+                    };
+
+                    // Seek to SeekFrom::End(-44):
+                    // Layout: [enc_toc_bytes][enc_toc_len: 8B][salt: 16B][nonce: 12B][b"BAYETOC\x03": 8B]
+                    // Total trailer length after enc_toc_bytes = 44 bytes.
+                    if file_len >= 44 && file.seek(std::io::SeekFrom::End(-44)).is_ok() {
+                        let mut meta = [0u8; 36];
+                        if file.read_exact(&mut meta).is_ok() {
+                            let mut len_bytes = [0u8; 8];
+                            len_bytes.copy_from_slice(&meta[0..8]);
+                            let enc_toc_len = u64::from_le_bytes(len_bytes);
+                            let salt = &meta[8..24];
+                            let nonce_bytes = &meta[24..36];
+
+                            if enc_toc_len > 0 && enc_toc_len < file_len - 44 {
+                                if file.seek(std::io::SeekFrom::End(-44 - enc_toc_len as i64)).is_ok() {
+                                    let mut enc_bytes = vec![0u8; enc_toc_len as usize];
+                                    if file.read_exact(&mut enc_bytes).is_ok() {
+                                        let key_bytes = derive_bay_key(pwd, salt);
+                                        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+                                        let cipher = Aes256Gcm::new(key);
+                                        let nonce = Nonce::from_slice(nonce_bytes);
+
+                                        if let Ok(decrypted) = cipher.decrypt(nonce, enc_bytes.as_ref()) {
+                                            if let Ok(entries) = serde_json::from_slice::<Vec<ArchiveEntryItem>>(&decrypted) {
+                                                let count = entries.len();
+                                                let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
+                                                return (entries, count, total_uncompressed);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return (Vec::new(), 0, 0);
                 }
             }
         }
@@ -637,6 +700,30 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
     let detected = detect_archive_type(p);
     let is_enc = is_archive_encrypted(p);
     let pwd_ref = password;
+    let pwd_clean = pwd_ref.map(|s| s.trim()).filter(|s| !s.is_empty());
+
+    let is_bay = detected == ArchiveFormat::Bay
+        || path.ends_with(".bay")
+        || path.ends_with(".bay_gamer");
+
+    if is_bay && is_enc && pwd_clean.is_none() {
+        let format = if path.ends_with(".bay_gamer") {
+            "Bayzip Gamer Archive (.bay_gamer)".to_string()
+        } else {
+            "Bayzip Archive (.bay)".to_string()
+        };
+        return Ok(ArchiveInfo {
+            path: path.to_string(),
+            filename,
+            size,
+            file_count: 0,
+            total_uncompressed_size: 0,
+            format,
+            is_archive: true,
+            is_encrypted: true,
+            entries: Vec::new(),
+        });
+    }
 
     let (entries, file_count, total_uncompressed_size) = match detected {
         ArchiveFormat::Zip => list_zip_entries(p, pwd_ref),

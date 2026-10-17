@@ -279,11 +279,19 @@ function App() {
     else if (lower.endsWith(".rar")) format = "RAR Archive (.rar)";
     else if (lower.endsWith(".tar") || lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) format = "TAR Archive";
 
-    // Immediate synchronous skeleton info so UI renders archive card & dedicated folder name immediately
+    // Immediate query for exact file size so UI never shows "0 B" while indexing
+    let initialSize = 0;
+    try {
+      initialSize = await invoke<number>("get_file_size", { path: filePath });
+    } catch {
+      initialSize = 0;
+    }
+
+    // Immediate skeleton info so UI renders archive card & dedicated folder name immediately with real size
     setArchiveInfo({
       path: filePath,
       filename,
-      size: 0,
+      size: initialSize,
       format,
       is_archive: true,
       is_encrypted: false,
@@ -298,6 +306,9 @@ function App() {
         path: filePath,
         password: pwd || (extractPassword.trim() ? extractPassword.trim() : undefined),
       });
+      if (info.size === 0 && initialSize > 0) {
+        info.size = initialSize;
+      }
       setArchiveInfo(info);
       if (info.is_encrypted && (!pwd || !pwd.trim())) {
         setIsPasswordPromptOpen(true);
@@ -309,7 +320,7 @@ function App() {
       setArchiveInfo({
         path: filePath,
         filename,
-        size: 0,
+        size: initialSize,
         format,
         is_archive: true,
         is_encrypted: isEnc,

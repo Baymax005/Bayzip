@@ -126,14 +126,14 @@ pub fn calculate_target_threads(slider_value: i32, total_cores: usize) -> usize 
 }
 
 /// Exact Zstd Level matrix:
-/// For .bay_gamer: 0 -> Level 1, 25 -> Level 1, 50 -> Level 2, 75 & 100 -> Level 3 (locked max at Level 3).
+/// For .bay_gamer: <= 25 -> Level -2 (fast acceleration), 50 -> Level 1, 75 & 100 -> Level 2
 /// For standard .bay: 0 -> Level 1, 25 -> Level 3, 50 -> Level 7, 75 -> Level 14, 100 -> Level 19.
 pub fn calculate_zstd_level(slider_value: i32, is_gamer: bool) -> i32 {
     if is_gamer {
         match slider_value {
-            s if s <= 25 => 1,
-            s if s <= 50 => 2,
-            _ => 3,
+            s if s <= 25 => -2,
+            s if s <= 50 => 1,
+            _ => 2,
         }
     } else {
         match slider_value {
@@ -354,15 +354,66 @@ impl Write for BayOutputWriter {
 }
 
 impl BayOutputWriter {
-    pub fn finish(self) -> std::io::Result<()> {
+    pub fn finish(self) -> std::io::Result<BufWriter<File>> {
         match self {
-            BayOutputWriter::Plain(mut w) => w.flush(),
-            BayOutputWriter::Encrypted(w) => {
-                let _ = w.finish()?;
-                Ok(())
+            BayOutputWriter::Plain(mut w) => {
+                w.flush()?;
+                Ok(w)
             }
+            BayOutputWriter::Encrypted(w) => w.finish(),
         }
     }
+}
+
+pub fn write_bay_toc_trailer<W: Write>(
+    file_writer: &mut W,
+    toc_entries: &[crate::types::ArchiveEntryItem],
+    password: Option<&str>,
+) -> std::io::Result<()> {
+    if toc_entries.is_empty() {
+        return Ok(());
+    }
+
+    let toc_json = serde_json::to_vec(toc_entries).unwrap_or_default();
+    if toc_json.is_empty() {
+        return Ok(());
+    }
+
+    if let Some(pwd) = password.filter(|p| !p.trim().is_empty()) {
+        use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
+        use rand::RngCore;
+
+        let mut salt = [0u8; 16];
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut salt);
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+        let key_bytes = crate::crypto::derive_bay_key(pwd.trim(), &salt);
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let encrypted_toc = cipher
+            .encrypt(nonce, toc_json.as_slice())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("TOC encryption error: {}", e)))?;
+
+        let enc_toc_len = encrypted_toc.len() as u64;
+
+        file_writer.write_all(&encrypted_toc)?;
+        file_writer.write_all(&enc_toc_len.to_le_bytes())?;
+        file_writer.write_all(&salt)?;
+        file_writer.write_all(&nonce_bytes)?;
+        file_writer.write_all(b"BAYETOC\x03")?;
+        file_writer.flush()?;
+    } else {
+        let toc_len = toc_json.len() as u64;
+        file_writer.write_all(&toc_json)?;
+        file_writer.write_all(&toc_len.to_le_bytes())?;
+        file_writer.write_all(b"BAYTOC\x02\x00")?;
+        file_writer.flush()?;
+    }
+
+    Ok(())
 }
 
 pub fn compress_bay(
@@ -455,18 +506,10 @@ pub fn compress_bay(
             }
             let _ = encoder.write_all(&[0u8]); // EOF
             encoder.flush().map_err(|e| format!("Brotli flush error: {}", e))?;
-            let mut finished_writer = encoder.into_inner();
-            if pwd_trimmed.is_none() {
-                let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
-                let toc_len = toc_json.len() as u64;
-                if toc_len > 0 {
-                    let _ = finished_writer.write_all(&toc_json);
-                    let _ = finished_writer.write_all(&toc_len.to_le_bytes());
-                    let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
-                    let _ = finished_writer.flush();
-                }
-            }
-            finished_writer.finish().map_err(|e| format!("Brotli finalize error: {}", e))?;
+            let finished_writer = encoder.into_inner();
+            let mut file_writer = finished_writer.finish().map_err(|e| format!("Brotli finalize error: {}", e))?;
+            write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+                .map_err(|e| format!("Failed to write TOC: {}", e))?;
         } else if algo_lower.contains("lz4") {
             let mut out_sink = out_writer;
             out_sink.write_all(b"BAYLZ4\x02\x00")
@@ -488,18 +531,10 @@ pub fn compress_bay(
                 return Err("Compression cancelled by user".to_string());
             }
             let _ = encoder.write_all(&[0u8]); // EOF
-            let mut finished_writer = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
-            if pwd_trimmed.is_none() {
-                let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
-                let toc_len = toc_json.len() as u64;
-                if toc_len > 0 {
-                    let _ = finished_writer.write_all(&toc_json);
-                    let _ = finished_writer.write_all(&toc_len.to_le_bytes());
-                    let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
-                    let _ = finished_writer.flush();
-                }
-            }
-            finished_writer.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
+            let finished_writer = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
+            let mut file_writer = finished_writer.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
+            write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+                .map_err(|e| format!("Failed to write TOC: {}", e))?;
         } else {
             // Default to Zstandard or .bay_gamer preset
             let mut out_sink = out_writer;
@@ -513,6 +548,9 @@ pub fn compress_bay(
             let mut encoder = zstd::stream::Encoder::new(out_sink, zstd_level)
                 .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
             let _ = encoder.multithread(threads as u32);
+            if is_gamer {
+                let _ = encoder.include_checksum(false);
+            }
             for file_str in files {
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
@@ -529,18 +567,10 @@ pub fn compress_bay(
                 return Err("Compression cancelled by user".to_string());
             }
             let _ = encoder.write_all(&[0u8]); // EOF
-            let mut finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
-            if pwd_trimmed.is_none() {
-                let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
-                let toc_len = toc_json.len() as u64;
-                if toc_len > 0 {
-                    let _ = finished_writer.write_all(&toc_json);
-                    let _ = finished_writer.write_all(&toc_len.to_le_bytes());
-                    let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
-                    let _ = finished_writer.flush();
-                }
-            }
-            finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
+            let finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
+            let mut file_writer = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
+            write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+                .map_err(|e| format!("Failed to write TOC: {}", e))?;
         }
 
         // Atomic rename of completed archive
@@ -1191,14 +1221,8 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
 
     let _ = encoder.write_all(&[0u8]); // 0 = EOF
     let mut finished_writer = encoder.finish().map_err(|e| format!("Finalize error: {}", e))?;
-    let toc_json = serde_json::to_vec(&toc_entries).unwrap_or_default();
-    let toc_len = toc_json.len() as u64;
-    if toc_len > 0 {
-        let _ = finished_writer.write_all(&toc_json);
-        let _ = finished_writer.write_all(&toc_len.to_le_bytes());
-        let _ = finished_writer.write_all(b"BAYTOC\x02\x00");
-        let _ = finished_writer.flush();
-    }
+    write_bay_toc_trailer(&mut finished_writer, &toc_entries, None)
+        .map_err(|e| format!("Failed to write TOC: {}", e))?;
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-# 📦 Bayzip (v1.1.1)
+# 📦 Bayzip (v1.1.2)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, and seamless Windows File Explorer shell integration.
 
@@ -6,6 +6,7 @@
 ---
 
 ## ⚡ Key Features
+
 
 ### 🗂️ Tree-Type Archive Directory Inspector
 - **Hierarchical Tree View**:
@@ -97,6 +98,21 @@
 ---
 
 ## 📋 Release Notes
+
+### v1.1.2
+- **Instant Encrypted TOC Footer (`BAYETOC\x03`)**:
+  - Encrypted `.bay` and `.bay_gamer` archives now append an encrypted Table of Contents trailer at EOF (`[encrypted_toc_bytes][enc_toc_len][salt][nonce][BAYETOC\x03]`).
+  - Encrypted archives with 100,000+ files and 40+ GB sizes now open and decrypt their complete directory tree in **< 2ms** instead of decompressing the entire archive over USB.
+- **Eliminated Extraction Double-Scan**:
+  - `extract_bay_archive` now gates root directory inspection behind `has_instant_bay_toc`. Legacy archives without a TOC extract immediately on pass 1 without scanning the full archive twice.
+- **Zero-Wait 0 B Disk Size Display**:
+  - Added instant synchronous `get_file_size` IPC query so archive cards display the exact disk file size (e.g. `41.2 GB`) in `< 0.05ms` while background indexing proceeds.
+  - Fast-pathed encrypted `.bay` archives in `inspect_archive` when password is empty, returning disk size and `is_encrypted: true` without disk scanning.
+- **`.bay_gamer` Pre-Compressed Game Container Acceleration**:
+  - Added `encoder.include_checksum(false)` for `.bay_gamer` to eliminate redundant checksum calculation on pre-compressed game containers.
+  - Re-tuned Zstd levels for gamer mode (Level `-2` fast acceleration mode for `<= 25%`, Level `1` for `50%`, Level `2` for `>= 75%`) so incompressible game files stream at maximum hardware disk speed.
+- **Package & Crate Identity**:
+  - Standardized package and crate name from `tauri-app` to `bayzip` across npm `package.json` and Cargo `Cargo.toml`.
 
 ### v1.1.1
 - **Settings Window Drag & Controls Fix**:

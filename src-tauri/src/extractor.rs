@@ -359,7 +359,7 @@ pub fn extract_bay_archive(
         std::fs::metadata(archive_path).map(|m| m.len() * 2).unwrap_or(1)
     };
 
-    let single_root_prefix = {
+    let single_root_prefix = if crate::inspector::has_instant_bay_toc(archive_path) {
         let (entries, _, _) = crate::inspector::list_bay_entries(archive_path, password);
         if !entries.is_empty() && has_single_root_dir(&entries) {
             entries[0].name.trim_start_matches(|c| c == '/' || c == '\\')
@@ -369,6 +369,8 @@ pub fn extract_bay_archive(
         } else {
             None
         }
+    } else {
+        None
     };
     let s_prefix = single_root_prefix.as_deref();
 
