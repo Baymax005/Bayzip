@@ -207,6 +207,93 @@ pub fn has_instant_bay_toc(p: &Path) -> bool {
     false
 }
 
+fn check_rar4_encrypted(file: &mut File) -> bool {
+    let mut buf = [0u8; 4096];
+    let _ = file.seek(std::io::SeekFrom::Start(7));
+    let n = match file.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let mut offset = 0;
+    while offset + 7 <= n {
+        let head_type = buf[offset + 2];
+        let head_flags = u16::from_le_bytes([buf[offset + 3], buf[offset + 4]]);
+        let head_size = u16::from_le_bytes([buf[offset + 5], buf[offset + 6]]) as usize;
+        if head_size < 7 {
+            break;
+        }
+        // 0x73 is MAIN_HEAD (MHD_PASSWORD = 0x0080)
+        if head_type == 0x73 && (head_flags & 0x0080) != 0 {
+            return true;
+        }
+        // 0x74 is FILE_HEAD (LHD_PASSWORD = 0x0004)
+        if head_type == 0x74 && (head_flags & 0x0004) != 0 {
+            return true;
+        }
+        let add_size = if (head_flags & 0x8000) != 0 && offset + 11 <= n {
+            u32::from_le_bytes([buf[offset + 7], buf[offset + 8], buf[offset + 9], buf[offset + 10]]) as usize
+        } else {
+            0
+        };
+        offset += head_size.saturating_add(add_size);
+    }
+    false
+}
+
+fn read_rar5_vint(buf: &[u8], offset: &mut usize) -> Option<u64> {
+    let mut val = 0u64;
+    let mut shift = 0;
+    while *offset < buf.len() {
+        let b = buf[*offset];
+        *offset += 1;
+        val |= ((b & 0x7F) as u64) << shift;
+        if (b & 0x80) == 0 {
+            return Some(val);
+        }
+        shift += 7;
+        if shift > 56 {
+            return None;
+        }
+    }
+    None
+}
+
+fn check_rar5_encrypted(file: &mut File) -> bool {
+    let mut buf = [0u8; 8192];
+    let _ = file.seek(std::io::SeekFrom::Start(8));
+    let n = match file.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let mut offset = 0;
+    while offset + 4 < n {
+        offset += 4; // Skip CRC32
+        let header_size = match read_rar5_vint(&buf[..n], &mut offset) {
+            Some(sz) => sz as usize,
+            None => break,
+        };
+        let header_start = offset;
+        let header_type = match read_rar5_vint(&buf[..n], &mut offset) {
+            Some(t) => t,
+            None => break,
+        };
+        // Header type 4 is H_CRYPT (entire archive header is encrypted)
+        if header_type == 4 {
+            return true;
+        }
+        let header_flags = match read_rar5_vint(&buf[..n], &mut offset) {
+            Some(f) => f,
+            None => break,
+        };
+        // Header type 2 is file header (flag 0x0004 indicates password protection)
+        if header_type == 2 && (header_flags & 0x0004) != 0 {
+            return true;
+        }
+        offset = header_start.saturating_add(header_size);
+    }
+    false
+}
+
 pub fn is_archive_encrypted(path: &Path) -> bool {
     let Ok(mut file) = File::open(path) else { return false; };
     let mut header = [0u8; 16];
@@ -257,6 +344,16 @@ pub fn is_archive_encrypted(path: &Path) -> bool {
                 }
                 _ => {}
             }
+        }
+    }
+    // Check RAR encryption (RAR4 and RAR5)
+    if n >= 7 && &header[0..7] == b"Rar!\x1a\x07\x00" {
+        if check_rar4_encrypted(&mut file) {
+            return true;
+        }
+    } else if n >= 8 && &header[0..8] == b"Rar!\x1a\x07\x01\x00" {
+        if check_rar5_encrypted(&mut file) {
+            return true;
         }
     }
     false
@@ -376,24 +473,65 @@ pub fn list_rar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
                 let is_dir_perm = trimmed.starts_with('d');
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
                 if parts.len() >= 6 {
-                    // Standard bsdtar: mode, nlinks, uid, gid, size, month, day, time/year, filename...
-                    let mut parsed_size = 0u64;
-                    let mut name_start_idx = 8;
-                    if let Ok(sz) = parts[4].parse::<u64>() {
-                        parsed_size = sz;
-                    } else if parts.len() >= 7 {
-                        // Fallback column checks
-                        if let Ok(sz) = parts[3].parse::<u64>() {
-                            parsed_size = sz;
-                            name_start_idx = 7;
-                        } else if let Ok(sz) = parts[5].parse::<u64>() {
-                            parsed_size = sz;
-                            name_start_idx = 9;
+                    // Detect date token column to support both 3-column dates (Oct 18 04:11)
+                    // and 2-column ISO/locale dates (2026-10-18 04:11)
+                    let months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+                    let mut date_col_idx = None;
+                    let mut date_span = 2; // 2 columns by default (e.g. 2026-10-18 04:11)
+
+                    for (idx, token) in parts.iter().enumerate() {
+                        let lower_token = token.to_lowercase();
+                        if months.contains(&lower_token.as_str()) {
+                            date_col_idx = Some(idx);
+                            date_span = 3; // month, day, time/year
+                            break;
+                        } else if token.len() >= 8 && (token.contains('-') || token.contains('/')) && token.chars().any(|c| c.is_ascii_digit()) {
+                            date_col_idx = Some(idx);
+                            date_span = 2; // date, time
+                            break;
                         }
                     }
 
-                    let raw_name = if parts.len() > name_start_idx {
-                        parts[name_start_idx..].join(" ")
+                    let (parsed_size, name_start_col) = match date_col_idx {
+                        Some(d_idx) => {
+                            let sz = if d_idx > 0 {
+                                parts[d_idx - 1].parse::<u64>().unwrap_or(0)
+                            } else {
+                                0
+                            };
+                            (sz, (d_idx + date_span).min(parts.len()))
+                        }
+                        None => {
+                            let mut sz = 0u64;
+                            let mut start = 8;
+                            if let Ok(s) = parts[4].parse::<u64>() {
+                                sz = s;
+                            } else if parts.len() >= 7 {
+                                if let Ok(s) = parts[3].parse::<u64>() {
+                                    sz = s;
+                                    start = 7;
+                                } else if let Ok(s) = parts[5].parse::<u64>() {
+                                    sz = s;
+                                    start = 9;
+                                }
+                            }
+                            (sz, start.min(parts.len()))
+                        }
+                    };
+
+                    // Extract the exact filename slice directly from `trimmed` by stepping
+                    // past prefix columns to preserve all consecutive spaces within the filename!
+                    let mut search_from = 0;
+                    for i in 0..name_start_col {
+                        if let Some(pos) = trimmed[search_from..].find(parts[i]) {
+                            search_from += pos + parts[i].len();
+                        }
+                    }
+                    let raw_name_slice = trimmed[search_from..].trim_start();
+                    let raw_name = if !raw_name_slice.is_empty() {
+                        raw_name_slice.to_string()
+                    } else if parts.len() > name_start_col {
+                        parts[name_start_col..].join(" ")
                     } else {
                         parts.last().unwrap_or(&"").to_string()
                     };
@@ -726,17 +864,18 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("archive").to_string();
     let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     
+    let lower = path.to_lowercase();
     let detected = detect_archive_type(p);
     let is_enc = is_archive_encrypted(p);
     let pwd_ref = password;
     let pwd_clean = pwd_ref.map(|s| s.trim()).filter(|s| !s.is_empty());
 
     let is_bay = detected == ArchiveFormat::Bay
-        || path.ends_with(".bay")
-        || path.ends_with(".bayg");
+        || lower.ends_with(".bay")
+        || lower.ends_with(".bayg");
 
     if is_bay && is_enc && pwd_clean.is_none() {
-        let format = if path.ends_with(".bayg") {
+        let format = if lower.ends_with(".bayg") {
             "Bayzip Gamer Archive (.bayg)".to_string()
         } else {
             "Bayzip Archive (.bay)".to_string()
@@ -1214,8 +1353,21 @@ fn preview_rar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>, u6
         }
     }
 
+    let mut stderr_msg = String::new();
+    if let Some(mut err_pipe) = child.stderr.take() {
+        let _ = err_pipe.read_to_string(&mut stderr_msg);
+    }
     let _ = child.kill();
     let _ = child.wait();
+
+    if buf.is_empty() {
+        let err = if !stderr_msg.trim().is_empty() {
+            format!("Failed to preview entry: {}", stderr_msg.trim())
+        } else {
+            format!("Entry '{}' not found or empty in RAR archive", entry_name)
+        };
+        return Err(err);
+    }
 
     let size = buf.len() as u64;
     Ok((buf, size))

@@ -41,7 +41,7 @@ export function AboutModal({ isOpen, onClose }: AboutModalProps) {
               <h2 className="text-xl font-bold tracking-tight text-white font-sans">Bayzip</h2>
               <span className="text-[11px] font-mono font-semibold bg-[#183144] text-[#60CDFF] px-2.5 py-0.5 rounded-full border border-[#60CDFF]/30 flex items-center space-x-1.5 shadow-sm">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span>v1.1.3</span>
+                <span>v1.1.4</span>
               </span>
             </div>
             <p className="text-xs text-[#A8A8A8] mt-0.5">Hardware-Accelerated Archiver for Windows 11</p>

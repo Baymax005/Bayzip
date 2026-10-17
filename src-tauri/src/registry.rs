@@ -35,6 +35,19 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             let mut reg_content = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
 
+            // Explicitly delete legacy and deprecated registry associations for .baygamers / .baygamer / .bay_gamer
+            reg_content.push_str(
+                "[-HKEY_CURRENT_USER\\Software\\Classes\\.baygamers]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\SystemFileAssociations\\.baygamers]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.baygamers]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\.baygamer]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\SystemFileAssociations\\.baygamer]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.baygamer]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\SystemFileAssociations\\.bay_gamer]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay_gamer]\r\n\r\n"
+            );
+
             // 1. File Association for .bay and .bayg
             reg_content.push_str(&format!(
                 "[HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\

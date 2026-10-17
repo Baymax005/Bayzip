@@ -1,4 +1,4 @@
-# 📦 Bayzip (v1.1.3)
+# 📦 Bayzip (v1.1.4)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, and seamless Windows File Explorer shell integration.
 
@@ -98,6 +98,14 @@
 ---
 
 ## 📋 Release Notes
+
+### v1.1.4
+- **Format Hardening & Audit Across All Containers**:
+  - **RAR Encryption & Parsing**: Added detection for encrypted RAR4 and RAR5 archives in `is_archive_encrypted`. Revamped `list_rar_entries` to support both 2-column ISO/locale and 3-column dates while strictly preserving multi-space filenames. Corrected empty-buffer preview handling.
+  - **ZIP Deflate Level & Locked File Safety**: Integrated hardware slider scaling into Deflate compression levels (1, 3, 6, 7, 9) and prevented 0-byte ghost entries on locked or inaccessible files by pre-validating file read handles before starting ZIP entry headers.
+  - **.bay & .bayg Empty Folders & TOCTOU Stream Framing**: Normalized path separators (`/`) for directory entries, added `[2u8]` directory entry encoding/decoding to preserve empty directory structures, and bounded file reads to declared `file_size` to eliminate stream framing corruption if files grow during compression.
+  - **Cancellable TAR Compression & Safe Root Stripping**: Converted blocking `append_dir_all` to an iterative folder walk with live cancellation checks and progress reporting; conditioned TAR extraction root stripping on `get_single_root_dir`.
+  - **Orphaned Windows Registry Cleanup**: Automatically purges legacy `.baygamers`, `.baygamer`, and `.bay_gamer` registry keys via `[-HKEY_...]` during shell integration sync.
 
 ### v1.1.3
 - **Encrypted `.zip` Inspector (`list_zip_entries`)**:
