@@ -21,9 +21,9 @@ The **Hardware Allocation** slider controls three core parameters simultaneously
 
 ---
 
-## 🏎️ 2. Format: `.bay_gamer` (Fast Gaming & Modpack Preset)
+## 🏎️ 2. Format: `.bayg` (Fast Gaming & Modpack Preset)
 
-The `.bay_gamer` container is engineered specifically for **game mods, texture packs, and local disk backups**. Its primary goal is **instant, near-zero-latency decompression** that saturates modern NVMe SSDs.
+The `.bayg` container is engineered specifically for **game mods, texture packs, and local disk backups**. Its primary goal is **instant, near-zero-latency decompression** that saturates modern NVMe SSDs.
 
 * **Primary Engine**: Multi-threaded **Zstandard Fast**.
 * **Decompression Throughput**: **1.8 GB/s to 3.2 GB/s** (Direct NVMe burst speeds).
@@ -38,7 +38,7 @@ The `.bay_gamer` container is engineered specifically for **game mods, texture p
 | **75% – 100%** | **Level 3 (Hard-Capped)** | ~3.5 MB | **~160 MB – 190 MB (inc. 128 MB buffer)** |
 
 > [!NOTE]
-> In `.bay_gamer`, Zstd is locked at a maximum of **Level 3** across 75% and 100%. This is intentional: higher levels increase decompression CPU overhead, which slows down game loading and extraction.
+> In `.bayg`, Zstd is locked at a maximum of **Level 3** across 75% and 100%. This is intentional: higher levels increase decompression CPU overhead, which slows down game loading and extraction.
 
 ---
 
@@ -113,6 +113,6 @@ Understanding real-world drive physical limits helps distinguish between softwar
 | **External USB 3.0 HDD (2.5" 5400 RPM)** | **80 – 120 MB/s** | **70 – 110 MB/s** | **~40 – 95 MB/s Total Combined** |
 
 ### Why "Active Time: 100%" Occurs on External USB Hard Drives:
-1. **Mechanical Seeking**: Mechanical hard drives have a single physical actuator arm. When reading game files and writing the `.bay_gamer` file to the same drive, the mechanical head must physically jump between read and write tracks.
+1. **Mechanical Seeking**: Mechanical hard drives have a single physical actuator arm. When reading game files and writing the `.bayg` file to the same drive, the mechanical head must physically jump between read and write tracks.
 2. **Bandwidth Splitting**: An external USB mechanical drive has a physical ceiling of ~100 MB/s. If reading at **74 MB/s**, only **~23 MB/s** physical bandwidth remains for writing.
 3. **The Benefit of Bayzip's 64 MB Buffer**: Without Bayzip's large write buffer, the drive head would thrash every few kilobytes, dropping speed to ~30 MB/s. With the 64 MB RAM buffer, writes occur in smooth sequential bursts, allowing the drive to sustain its maximum possible physical speed (~97 MB/s).

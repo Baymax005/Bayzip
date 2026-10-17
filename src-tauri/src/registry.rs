@@ -24,7 +24,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             let archive_exts = [
                 ".bay",
-                ".bay_gamer",
+                ".bayg",
                 ".zip",
                 ".7z",
                 ".rar",
@@ -35,9 +35,11 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             let mut reg_content = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
 
-            // 1. File Association for .bay and .bay_gamer
+            // 1. File Association for .bay and .bayg (with cleanup for legacy .bay_gamer)
             reg_content.push_str(&format!(
-                "[HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
+                "[-HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay_gamer]\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
                 @=\"Bayzip.Archive\"\r\n\
                 \"Content Type\"=\"application/x-bayzip\"\r\n\
                 \"PerceivedType\"=\"compressed\"\r\n\r\n\
@@ -62,15 +64,15 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open\\command]\r\n\
                 @=\"\\\"{escaped_exe}\\\" --gui-extract \\\"%1\\\"\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer]\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bayg]\r\n\
                 @=\"Bayzip.GamerArchive\"\r\n\
                 \"Content Type\"=\"application/x-bayzip-gamer\"\r\n\
                 \"PerceivedType\"=\"compressed\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer\\DefaultIcon]\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\DefaultIcon]\r\n\
                 @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer\\OpenWithProgids]\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\OpenWithProgids]\r\n\
                 \"Bayzip.GamerArchive\"=\"\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\.bay_gamer\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
                 @=\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive]\r\n\
                 @=\"Bayzip Gamer Mod Pack\"\r\n\
@@ -89,14 +91,14 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 @=\"\\\"{escaped_exe}\\\" --gui-extract \\\"%1\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay\\OpenWithProgids]\r\n\
                 \"Bayzip.Archive\"=hex(0):\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay_gamer\\OpenWithProgids]\r\n\
+                [HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bayg\\OpenWithProgids]\r\n\
                 \"Bayzip.GamerArchive\"=hex(0):\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Bayzip\\Capabilities]\r\n\
                 \"ApplicationDescription\"=\"Bayzip Archiver\"\r\n\
                 \"ApplicationName\"=\"Bayzip\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Bayzip\\Capabilities\\FileAssociations]\r\n\
                 \".bay\"=\"Bayzip.Archive\"\r\n\
-                \".bay_gamer\"=\"Bayzip.GamerArchive\"\r\n\r\n\
+                \".bayg\"=\"Bayzip.GamerArchive\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\RegisteredApplications]\r\n\
                 \"Bayzip\"=\"Software\\\\Bayzip\\\\Capabilities\"\r\n\r\n"
             ));

@@ -28,7 +28,7 @@ import {
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
-  ".bay_gamer": ["Zstd-Fast (Auto)"],
+  ".bayg": ["Zstd-Fast (Auto)"],
   ".7z": ["LZMA2", "LZMA", "BZip2"],
   ".zip": ["Deflate (Standard)", "None (Store)", "BZip2 (Requires 3rd-party App)"],
   ".tar": ["None (Store)"],
@@ -36,7 +36,7 @@ const FORMAT_ALGORITHMS: Record<string, string[]> = {
 
 const ARCHIVE_EXTS = [
   ".bay",
-  ".bay_gamer",
+  ".bayg",
   ".zip",
   ".7z",
   ".tar",
@@ -59,7 +59,7 @@ function getArchiveStemName(filename: string): string {
     ".tar.lz4",
     ".tar.zstd",
     ".tar.br",
-    ".bay_gamer",
+    ".bayg",
   ];
   for (const ext of compoundExts) {
     if (lower.endsWith(ext)) {
@@ -272,7 +272,7 @@ function App() {
     const filename = filePath.split(/[/\\]/).pop() || "archive";
     const lower = filename.toLowerCase();
     let format = "Archive";
-    if (lower.endsWith(".bay_gamer")) format = "Bayzip Gamer Archive (.bay_gamer)";
+    if (lower.endsWith(".bayg")) format = "Bayzip Gamer Archive (.bayg)";
     else if (lower.endsWith(".bay")) format = "Bayzip Archive (.bay)";
     else if (lower.endsWith(".zip")) format = "ZIP Archive (.zip)";
     else if (lower.endsWith(".7z")) format = "7-Zip Archive (.7z)";
@@ -494,11 +494,11 @@ function App() {
         filters: [
           {
             name: "Supported Archives",
-            extensions: ["bay", "bay_gamer", "zip", "7z", "tar", "gz", "tgz", "rar"],
+            extensions: ["bay", "bayg", "zip", "7z", "tar", "gz", "tgz", "rar"],
           },
           {
-            name: "Bayzip Archives (*.bay, *.bay_gamer)",
-            extensions: ["bay", "bay_gamer"],
+            name: "Bayzip Archives (*.bay, *.bayg)",
+            extensions: ["bay", "bayg"],
           },
           {
             name: "ZIP Archives (*.zip)",
@@ -807,7 +807,7 @@ function App() {
       if (val === 75) return "High (Level 7)";
       return "Maximum (Level 9)";
     }
-    if (fmt === ".bay_gamer") {
+    if (fmt === ".bayg") {
       if (val === 0) return "Eco (1 Core)";
       if (val === 25) return "Fast";
       if (val === 50) return "Balanced";
@@ -1212,7 +1212,7 @@ function App() {
                     </button>
                     <span className="text-xs bg-[#3E3E3E] text-[#60CDFF] px-2 py-1 rounded-md font-mono text-[10px] tracking-wider uppercase font-semibold">
                       {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay" && "Zstandard Multi-Core"}
-                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay_gamer" && "Zstd Gamer Capped"}
+                      {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bayg" && "Zstd Gamer Capped"}
                       {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".7z" && "LZMA2 Multi-Thread"}
                       {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".zip" && "Zip Single-Thread"}
                       {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".tar" && "Store Direct I/O"}
@@ -1318,7 +1318,7 @@ function App() {
               {isAdvanced && (
                 <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6 space-y-5">
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5">
-                    <div className={(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay_gamer" ? "sm:col-span-6" : "sm:col-span-3"}>
+                    <div className={(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bayg" ? "sm:col-span-6" : "sm:col-span-3"}>
                       <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Format</label>
                       <div className="relative group">
                         <select
@@ -1336,7 +1336,7 @@ function App() {
                             }`}
                         >
                           <option value=".bay">.bay</option>
-                          <option value=".bay_gamer">.bay (Gamer Mod Pack)</option>
+                          <option value=".bayg">.bayg (Gamer Mod Pack)</option>
                           <option value=".7z">.7z</option>
                           <option value=".zip">.zip</option>
                           <option value=".tar">.tar</option>
@@ -1350,7 +1350,7 @@ function App() {
                     </div>
 
                     {/* Hide algorithm dropdown if Gamer Mod Pack is selected */}
-                    {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) !== ".bay_gamer" && (
+                    {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) !== ".bayg" && (
                       <div className="sm:col-span-5">
                         <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Algorithm</label>
                         <div className="relative group">
@@ -1379,7 +1379,7 @@ function App() {
                       </div>
                     )}
 
-                    <div className={(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay_gamer" ? "sm:col-span-6" : "sm:col-span-4"}>
+                    <div className={(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bayg" ? "sm:col-span-6" : "sm:col-span-4"}>
                       <label className="block text-xs font-medium mb-1.5 text-[#C8C8C8]">Encryption</label>
                       <div className="relative group">
                         <select
@@ -1682,7 +1682,7 @@ function App() {
                   <div>
                     <p className="text-sm font-medium text-white mb-1">Drag & drop archive to uncompress</p>
                     <p className="text-xs text-[#A8A8A8]">
-                      Supports <span className="text-[#60CDFF]">.bay</span>, <span className="text-[#60CDFF]">.bay_gamer</span>, <span className="text-[#60CDFF]">.zip</span>, <span className="text-[#60CDFF]">.7z</span>, <span className="text-[#60CDFF]">.rar</span>, and <span className="text-[#60CDFF]">.tar</span>
+                      Supports <span className="text-[#60CDFF]">.bay</span>, <span className="text-[#60CDFF]">.bayg</span>, <span className="text-[#60CDFF]">.zip</span>, <span className="text-[#60CDFF]">.7z</span>, <span className="text-[#60CDFF]">.rar</span>, and <span className="text-[#60CDFF]">.tar</span>
                     </p>
                   </div>
                   <button

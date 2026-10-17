@@ -64,7 +64,7 @@ export function AboutModal({ isOpen, onClose }: AboutModalProps) {
               🎮
             </div>
             <div className="min-w-0">
-              <p className="font-semibold text-white text-[11px] truncate">Gamer Mod Pack</p>
+              <p className="font-semibold text-white text-[11px] truncate">Gamer Mod Pack (.bayg)</p>
               <p className="text-[10px] text-[#888888] truncate">High-throughput level 3</p>
             </div>
           </div>

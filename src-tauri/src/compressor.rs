@@ -105,7 +105,7 @@ use crate::priority::ScopedPriorityGuard;
 use crate::inspector::archive_stem_name;
 use crate::crypto::ChunkedAesWriter;
 
-/// Exact CPU Cores scaling matrix for both .bay and .bay_gamer:
+/// Exact CPU Cores scaling matrix for both .bay and .bayg:
 /// 0   -> 1 core
 /// 25  -> max(1, total_cores / 4)
 /// 50  -> max(1, total_cores / 2)
@@ -126,7 +126,7 @@ pub fn calculate_target_threads(slider_value: i32, total_cores: usize) -> usize 
 }
 
 /// Exact Zstd Level matrix:
-/// For .bay_gamer: <= 25 -> Level -2 (fast acceleration), 50 -> Level 1, 75 & 100 -> Level 2
+/// For .bayg: <= 25 -> Level -2 (fast acceleration), 50 -> Level 1, 75 & 100 -> Level 2
 /// For standard .bay: 0 -> Level 1, 25 -> Level 3, 50 -> Level 7, 75 -> Level 14, 100 -> Level 19.
 pub fn calculate_zstd_level(slider_value: i32, is_gamer: bool) -> i32 {
     if is_gamer {
@@ -536,11 +536,11 @@ pub fn compress_bay(
             write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
                 .map_err(|e| format!("Failed to write TOC: {}", e))?;
         } else {
-            // Default to Zstandard or .bay_gamer preset
+            // Default to Zstandard or .bayg preset
             let mut out_sink = out_writer;
             out_sink.write_all(b"BAYZIP\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
-            let is_gamer = algo_lower.contains("gamer");
+            let is_gamer = algo_lower.contains("gamer") || algo_lower.contains("bayg");
             let zstd_level = calculate_zstd_level(slider_value, is_gamer);
             let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
             let threads = calculate_target_threads(slider_value, total_cores);
@@ -1426,7 +1426,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
         "7z" => {
             compress_7z(&payload.files, &output_path, payload.slider_value, pwd_ref, &app, total_original)
         },
-        "bay_gamer" => {
+        "bayg" => {
             compress_bay(
                 &payload.files,
                 &output_path,

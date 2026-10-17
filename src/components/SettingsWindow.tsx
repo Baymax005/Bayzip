@@ -210,7 +210,7 @@ export function SettingsWindow() {
             </div>
             <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-[#181818] border border-[#353535] text-xs">
               <span className="w-2 h-2 rounded-full bg-[#E8C488]"></span>
-              <span className="font-mono text-white text-[11px]">.bay_gamer</span>
+              <span className="font-mono text-white text-[11px]">.bayg</span>
               <span className="text-[10px] text-[#7A7A7A]">• Gamer Modpack</span>
             </div>
           </div>

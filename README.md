@@ -55,11 +55,11 @@
   - OS priority scheduling (`ScopedPriorityGuard`) sets background compression threads to below-normal priority to maintain 100% system and game responsiveness.
 - **Format Support**:
   - **`.bay`**: High-performance custom format supporting **Zstandard** (Levels 1–19), **Brotli**, and **LZ4**.
-  - **`.bay_gamer`**: Ultra-fast gaming modpack preset using Zstd-Fast (capped at Level 3 for near-zero decompression latency).
+  - **`.bayg`**: Ultra-fast gaming modpack preset using Zstd-Fast (capped at Level 3 for near-zero decompression latency).
   - **`.7z`**: 7-Zip LZMA2 multi-threaded compression with smooth progress reporting.
   - **`.zip`**: Standard ZIP with Deflate, uncompressed Store, and BZip2 options.
   - **`.tar`**: Uncompressed TAR container packaging.
-  - **Extraction**: Universal extraction for `.bay`, `.bay_gamer`, `.zip`, `.7z`, `.tar`, `.gz`, `.tgz`, and `.rar`.
+  - **Extraction**: Universal extraction for `.bay`, `.bayg`, `.zip`, `.7z`, `.tar`, `.gz`, `.tgz`, and `.rar`.
 - **Atomic Operations & Instant Cancellation**:
   - **Atomic `.baypart` Extraction**: Unpacked files are staged into `.baypart` temporary files and atomically renamed upon success. Any extraction cancellation or error immediately scrubs partial files, guaranteeing zero corrupted or half-written files on disk.
   - **Atomic `.baytmp` Compression**: Compression writes to temporary files before atomic finalization.
@@ -79,7 +79,7 @@
 ### 🪟 Windows File Explorer Integration
 - **Context Menus**: Right-click files or folders to quickly compress to `.bay`, `.zip`, `.7z`, or `.tar` (including headless background compression with instant TOC generation).
 - **Quick Extract**: Right-click archives to *"Extract to dedicated folder"*, *"Extract Here"*, or *"Open in Bayzip"*.
-- **Branded File Associations**: Displays Bayzip icons on `.bay` and `.bay_gamer` files in Windows File Explorer.
+- **Branded File Associations**: Displays Bayzip icons on `.bay` and `.bayg` files in Windows File Explorer.
 
 ---
 
@@ -88,7 +88,7 @@
 | Format | Extensions | Creation / Compression | Extraction | In-Memory Preview | Compression Algorithms |
 |---|---|:---:|:---:|:---:|---|
 | **Bayzip** | `.bay` | ✅ | ✅ | ✅ | Zstandard (Levels 1–19), Brotli, LZ4 |
-| **Bayzip Gamer** | `.bay_gamer` | ✅ | ✅ | ✅ | Zstd-Fast (Capped at Level 3) |
+| **Bayzip Gamer** | `.bayg` | ✅ | ✅ | ✅ | Zstd-Fast (Capped at Level 3) |
 | **ZIP** | `.zip` | ✅ | ✅ | ✅ | Deflate, Store, BZip2 |
 | **7-Zip** | `.7z` | ✅ | ✅ | ✅ | LZMA2 Multi-Threaded |
 | **TAR** | `.tar` | ✅ | ✅ | ✅ | Uncompressed (Store) |
@@ -101,15 +101,16 @@
 
 ### v1.1.2
 - **Instant Encrypted TOC Footer (`BAYETOC\x03`)**:
-  - Encrypted `.bay` and `.bay_gamer` archives now append an encrypted Table of Contents trailer at EOF (`[encrypted_toc_bytes][enc_toc_len][salt][nonce][BAYETOC\x03]`).
+  - Encrypted `.bay` and `.bayg` archives now append an encrypted Table of Contents trailer at EOF (`[encrypted_toc_bytes][enc_toc_len][salt][nonce][BAYETOC\x03]`).
   - Encrypted archives with 100,000+ files and 40+ GB sizes now open and decrypt their complete directory tree in **< 2ms** instead of decompressing the entire archive over USB.
 - **Eliminated Extraction Double-Scan**:
   - `extract_bay_archive` now gates root directory inspection behind `has_instant_bay_toc`. Legacy archives without a TOC extract immediately on pass 1 without scanning the full archive twice.
 - **Zero-Wait 0 B Disk Size Display**:
   - Added instant synchronous `get_file_size` IPC query so archive cards display the exact disk file size (e.g. `41.2 GB`) in `< 0.05ms` while background indexing proceeds.
   - Fast-pathed encrypted `.bay` archives in `inspect_archive` when password is empty, returning disk size and `is_encrypted: true` without disk scanning.
-- **`.bay_gamer` Pre-Compressed Game Container Acceleration**:
-  - Added `encoder.include_checksum(false)` for `.bay_gamer` to eliminate redundant checksum calculation on pre-compressed game containers.
+- **`.bayg` Container Format & Pre-Compressed Game Acceleration**:
+  - Introduced `.bayg` as the dedicated high-speed gamer container format.
+  - Added `encoder.include_checksum(false)` for `.bayg` to eliminate redundant checksum calculation on pre-compressed game containers.
   - Re-tuned Zstd levels for gamer mode (Level `-2` fast acceleration mode for `<= 25%`, Level `1` for `50%`, Level `2` for `>= 75%`) so incompressible game files stream at maximum hardware disk speed.
 - **Package & Crate Identity**:
   - Standardized package and crate name from `tauri-app` to `bayzip` across npm `package.json` and Cargo `Cargo.toml`.
@@ -158,7 +159,7 @@
 
 ### v1.0.2
 - Real-time extraction progress and throughput metrics.
-- Added `.bay_gamer` file selector and preset tuning.
+- Added `.bayg` file selector and preset tuning.
 
 ### v1.0.1
 - Universal extraction support for `.bay`, `.zip`, `.7z`, and `.tar`.

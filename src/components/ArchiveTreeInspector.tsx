@@ -44,7 +44,7 @@ function getFileCategory(name: string): "code" | "image" | "restricted" | "archi
   if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "svg"].includes(ext)) {
     return "image";
   }
-  if (["zip", "7z", "bay", "bay_gamer", "tar", "gz", "tgz", "rar", "bz2", "xz"].includes(ext)) {
+  if (["zip", "7z", "bay", "bayg", "tar", "gz", "tgz", "rar", "bz2", "xz"].includes(ext)) {
     return "archive";
   }
   if (["mp3", "wav", "flac", "mp4", "mkv", "avi", "mov", "webm"].includes(ext)) {
