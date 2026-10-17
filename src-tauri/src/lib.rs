@@ -186,6 +186,15 @@ async fn close_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn minimize_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.minimize();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -211,7 +220,8 @@ pub fn run() {
             get_archive_info,
             preview_archive_entry,
             open_settings_window,
-            close_settings_window
+            close_settings_window,
+            minimize_settings_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

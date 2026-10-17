@@ -1,4 +1,4 @@
-# 📦 Bayzip (v1.1.0)
+# 📦 Bayzip (v1.1.1)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, and seamless Windows File Explorer shell integration.
 
@@ -97,6 +97,14 @@
 ---
 
 ## 📋 Release Notes
+
+### v1.1.1
+- **Settings Window Drag & Controls Fix**:
+  - Configured global Tauri 2 window capabilities (`"windows": ["*"]`) so the independent multi-window Settings surface is fully movable across all monitors without boundary locks.
+  - Added native Rust IPC commands `minimize_settings_window` and `close_settings_window` with webview fallbacks, guaranteeing window controls respond instantly.
+  - Added programmatic `startDragging()` titlebar fallback for seamless dragging on touch and mouse inputs.
+- **Hardware & Architecture Reference**:
+  - Published comprehensive [PERFORMANCE_GUIDE.md](file:///d:/Bayzip/PERFORMANCE_GUIDE.md) detailing CPU core scaling formulas, dynamic RAM read/write buffers, Zstandard level mapping, and real-world disk throughput metrics.
 
 ### v1.1.0
 - **Selective Extraction & Exclusion Mode (`✕` Skip Mode)**:

@@ -30,12 +30,20 @@ export function SettingsWindow() {
     }
   };
 
-  const handleClose = () => {
-    getCurrentWindow().hide().catch(() => {});
+  const handleClose = async () => {
+    try {
+      await invoke("close_settings_window");
+    } catch {
+      getCurrentWindow().hide().catch(() => {});
+    }
   };
 
-  const handleMinimize = () => {
-    getCurrentWindow().minimize().catch(() => {});
+  const handleMinimize = async () => {
+    try {
+      await invoke("minimize_settings_window");
+    } catch {
+      getCurrentWindow().minimize().catch(() => {});
+    }
   };
 
   return (
@@ -43,6 +51,11 @@ export function SettingsWindow() {
       {/* Native Drag Region Titlebar */}
       <div
         data-tauri-drag-region
+        onMouseDown={(e) => {
+          if (e.buttons === 1) {
+            getCurrentWindow().startDragging().catch(() => {});
+          }
+        }}
         className="h-11 w-full flex justify-between items-center bg-[#252525] border-b border-[#333333] cursor-default select-none shrink-0"
       >
         {/* Left Branding Area - Fully Grabbable */}
@@ -61,7 +74,7 @@ export function SettingsWindow() {
             Bayzip Preferences
           </span>
           <span data-tauri-drag-region className="text-[10px] font-mono text-[#888888] bg-[#1A1A1A] px-2 py-0.5 rounded border border-[#333333]">
-            v1.1.0
+            v1.1.1
           </span>
         </div>
 
@@ -213,7 +226,7 @@ export function SettingsWindow() {
             </div>
             <div>
               <p className="text-xs font-semibold text-white">Application Updates</p>
-              <p className="text-[11px] text-[#888888]">Current version v1.1.0 • Up to date</p>
+              <p className="text-[11px] text-[#888888]">Current version v1.1.1 • Up to date</p>
             </div>
           </div>
           <button
@@ -228,7 +241,7 @@ export function SettingsWindow() {
 
       {/* Footer */}
       <div className="bg-[#181818] px-6 py-2.5 border-t border-[#2A2A2A] flex items-center justify-between text-[11px] text-[#7A7A7A] shrink-0">
-        <span>Bayzip v1.1.0 • Native Settings Window</span>
+        <span>Bayzip v1.1.1 • Native Settings Window</span>
         <span className="font-mono text-[#888888]">Press Esc to close</span>
       </div>
     </div>
