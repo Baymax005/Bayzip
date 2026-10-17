@@ -67,7 +67,7 @@ pub fn archive_stem_name(p: &Path) -> String {
         ".tar.xz",
         ".tar.lz4",
         ".tar.br",
-        ".bay_gamer",
+        ".bayg",
     ];
 
     for ext in compound_exts {
@@ -83,7 +83,7 @@ pub fn archive_stem_name(p: &Path) -> String {
         .to_string()
 }
 
-pub fn has_single_root_dir(entries: &[ArchiveEntryItem]) -> bool {
+pub fn get_single_root_dir(entries: &[ArchiveEntryItem]) -> Option<String> {
     let mut candidate_root: Option<&str> = None;
     let mut non_empty_count = 0;
 
@@ -96,25 +96,54 @@ pub fn has_single_root_dir(entries: &[ArchiveEntryItem]) -> bool {
 
         let first_segment = match clean.split(['/', '\\']).next() {
             Some(s) if !s.is_empty() => s,
-            _ => return false,
+            _ => return None,
         };
 
         // If it has no slash and is a file, then it is a top-level file (not a wrapped single root)
         if !clean.contains('/') && !clean.contains('\\') && !entry.is_dir {
-            return false;
+            return None;
         }
 
         match candidate_root {
             None => candidate_root = Some(first_segment),
             Some(r) => {
-                if r != first_segment {
-                    return false;
+                if !r.eq_ignore_ascii_case(first_segment) {
+                    return None;
                 }
             }
         }
     }
 
-    non_empty_count > 0 && candidate_root.is_some()
+    if non_empty_count > 0 {
+        candidate_root.map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
+pub fn has_single_root_dir(entries: &[ArchiveEntryItem]) -> bool {
+    get_single_root_dir(entries).is_some()
+}
+
+pub fn clear_readonly(p: &Path) {
+    if let Ok(metadata) = p.metadata() {
+        let mut perms = metadata.permissions();
+        if perms.readonly() {
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(p, perms);
+        }
+    }
+}
+
+pub fn safe_atomic_rename(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.exists() {
+        clear_readonly(to);
+        if std::fs::rename(from, to).is_ok() {
+            return Ok(());
+        }
+        let _ = std::fs::remove_file(to);
+    }
+    std::fs::rename(from, to)
 }
 
 pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
@@ -153,7 +182,7 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
 
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
     match ext.as_str() {
-        "bay" | "bay_gamer" => ArchiveFormat::Bay,
+        "bay" | "bayg" => ArchiveFormat::Bay,
         "zip" => ArchiveFormat::Zip,
         "7z" => ArchiveFormat::SevenZip,
         "rar" => ArchiveFormat::Rar,
@@ -239,7 +268,7 @@ pub fn list_zip_entries(p: &Path, _password: Option<&str>) -> (Vec<ArchiveEntryI
     if let Ok(file) = File::open(p) {
         if let Ok(mut zip) = zip::ZipArchive::new(file) {
             for i in 0..zip.len() {
-                if let Ok(entry) = zip.by_index(i) {
+                if let Ok(entry) = zip.by_index_raw(i) {
                     let clean = entry.name().replace('\\', "/");
                     let name = clean.trim_start_matches('/').to_string();
                     if !name.is_empty() {
@@ -704,11 +733,11 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
 
     let is_bay = detected == ArchiveFormat::Bay
         || path.ends_with(".bay")
-        || path.ends_with(".bay_gamer");
+        || path.ends_with(".bayg");
 
     if is_bay && is_enc && pwd_clean.is_none() {
-        let format = if path.ends_with(".bay_gamer") {
-            "Bayzip Gamer Archive (.bay_gamer)".to_string()
+        let format = if path.ends_with(".bayg") {
+            "Bayzip Gamer Archive (.bayg)".to_string()
         } else {
             "Bayzip Archive (.bay)".to_string()
         };
@@ -741,7 +770,7 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
                 list_tar_entries(p)
             } else if lower.ends_with(".rar") {
                 list_rar_entries(p)
-            } else if lower.ends_with(".bay") || lower.ends_with(".bay_gamer") {
+            } else if lower.ends_with(".bay") || lower.ends_with(".bayg") {
                 list_bay_entries(p, pwd_ref)
             } else {
                 (Vec::new(), 0, 0)
@@ -750,14 +779,23 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
     };
 
     let (format, is_archive) = match detected {
-        ArchiveFormat::Bay => ("Bayzip Archive (.bay)".to_string(), true),
+        ArchiveFormat::Bay => {
+            let lower = path.to_lowercase();
+            if lower.ends_with(".bayg") {
+                ("Bayzip Gamer Archive (.bayg)".to_string(), true)
+            } else {
+                ("Bayzip Archive (.bay)".to_string(), true)
+            }
+        },
         ArchiveFormat::Zip => ("ZIP Archive (.zip)".to_string(), true),
         ArchiveFormat::SevenZip => ("7-Zip Archive (.7z)".to_string(), true),
         ArchiveFormat::Rar => ("RAR Archive (.rar)".to_string(), true),
         ArchiveFormat::Tar | ArchiveFormat::TarGz => ("TAR Archive (.tar)".to_string(), true),
         ArchiveFormat::Unknown => {
             let lower = path.to_lowercase();
-            if lower.ends_with(".bay") || lower.ends_with(".bay_gamer") {
+            if lower.ends_with(".bayg") {
+                ("Bayzip Gamer Archive (.bayg)".to_string(), true)
+            } else if lower.ends_with(".bay") {
                 ("Bayzip Archive (.bay)".to_string(), true)
             } else if lower.ends_with(".zip") {
                 ("ZIP Archive (.zip)".to_string(), true)
@@ -1217,7 +1255,7 @@ pub fn preview_archive_entry_sync(
         ArchiveFormat::Rar => preview_rar_entry_bytes(p, entry_name)?,
         ArchiveFormat::Unknown => {
             let lower = archive_path.to_lowercase();
-            if lower.ends_with(".bay") || lower.ends_with(".bay_gamer") {
+            if lower.ends_with(".bay") || lower.ends_with(".bayg") {
                 preview_bay_entry_bytes(p, entry_name, password)?
             } else if lower.ends_with(".zip") {
                 preview_zip_entry_bytes(p, entry_name, password)?

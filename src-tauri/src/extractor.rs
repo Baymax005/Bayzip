@@ -41,6 +41,9 @@ use crate::inspector::{
     archive_stem_name,
     inspect_archive,
     has_single_root_dir,
+    get_single_root_dir,
+    safe_atomic_rename,
+    clear_readonly,
     derive_bay_key,
 };
 
@@ -230,6 +233,7 @@ pub fn extract_bay_stream<R: Read>(
         }
 
         if file_size <= 64 * 1024 {
+            clear_readonly(&out_path);
             let mut out_file = File::create(&out_path)
                 .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
             // Tiny files (<= 64 KB): Direct write to disk without BufWriter allocation overhead
@@ -335,7 +339,7 @@ pub fn extract_bay_stream<R: Read>(
             writer.flush().map_err(|e| format!("Flush error: {}", e))?;
             drop(writer);
 
-            std::fs::rename(&part_path, &out_path)
+            safe_atomic_rename(&part_path, &out_path)
                 .map_err(|e| format!("Failed to finalize extracted file {:?}: {}", out_path, e))?;
         }
 
@@ -629,6 +633,7 @@ pub fn extract_zip_archive(
             let file_size = file.size();
 
             if file_size <= 64 * 1024 {
+                clear_readonly(&outpath);
                 let mut out_file = File::create(&outpath).map_err(|e| format!("Create file error: {}", e))?;
                 let sz = file_size as usize;
                 if sz > 0 {
@@ -693,7 +698,7 @@ pub fn extract_zip_archive(
                 }
                 writer.flush().map_err(|e| format!("Zip flush error: {}", e))?;
                 drop(writer);
-                std::fs::rename(&part_path, &outpath)
+                safe_atomic_rename(&part_path, &outpath)
                     .map_err(|e| format!("Failed to finalize extracted file: {}", e))?;
             }
 
@@ -788,6 +793,7 @@ fn extract_tar_entries<R: Read>(
             let file_size = entry.size();
 
             if file_size <= 64 * 1024 {
+                clear_readonly(&out_path);
                 let mut out_file = File::create(&out_path).map_err(|e| format!("Create file error: {}", e))?;
                 let sz = file_size as usize;
                 if sz > 0 {
@@ -849,7 +855,7 @@ fn extract_tar_entries<R: Read>(
                 }
                 writer.flush().map_err(|e| format!("Flush error: {}", e))?;
                 drop(writer);
-                std::fs::rename(&part_path, &out_path)
+                safe_atomic_rename(&part_path, &out_path)
                     .map_err(|e| format!("Failed to finalize extracted file: {}", e))?;
             }
 
@@ -996,6 +1002,7 @@ pub fn extract_7z_archive(
             let file_size = entry.size();
 
             if file_size <= 64 * 1024 {
+                clear_readonly(&out_path);
                 let mut out_file = File::create(&out_path)
                     .map_err(sevenz_rust2::Error::from)?;
                 let sz = file_size as usize;
@@ -1064,7 +1071,7 @@ pub fn extract_7z_archive(
                 }
                 writer.flush().map_err(sevenz_rust2::Error::from)?;
                 drop(writer);
-                std::fs::rename(&part_path, &out_path)
+                safe_atomic_rename(&part_path, &out_path)
                     .map_err(sevenz_rust2::Error::from)?;
             }
 
@@ -1347,22 +1354,62 @@ pub fn extract_archive_sync(
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let stem = archive_stem_name(path);
 
+    let format = detect_archive_type(path);
+    let is_tar_or_rar = matches!(format, ArchiveFormat::Rar | ArchiveFormat::Tar | ArchiveFormat::TarGz)
+        || path.extension().and_then(|s| s.to_str()).map(|ext| {
+            let l = ext.to_lowercase();
+            l == "rar" || l == "tar" || l == "gz" || l == "tgz"
+        }).unwrap_or(false);
+
+    let rar_single_root_match = if is_tar_or_rar && extract_to_subfolder.unwrap_or(true) {
+        if let Ok(info) = inspect_archive(&archive_path, password.as_deref()) {
+            if let Some(root_dir) = get_single_root_dir(&info.entries) {
+                root_dir.eq_ignore_ascii_case(&stem)
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
     let dest_dir = if let Some(custom_dest) = destination {
         if custom_dest.trim().is_empty() {
-            resolve_unique_folder_name(&parent.join(&stem))
+            if rar_single_root_match {
+                parent.to_path_buf()
+            } else {
+                resolve_unique_folder_name(&parent.join(&stem))
+            }
         } else {
             let p = PathBuf::from(custom_dest);
-            if extract_to_subfolder.unwrap_or(true) {
+            if rar_single_root_match {
+                if p.file_name().and_then(|s| s.to_str()).map(|n| n.eq_ignore_ascii_case(&stem)).unwrap_or(false) {
+                    p.parent().map(|d| d.to_path_buf()).unwrap_or_else(|| parent.to_path_buf())
+                } else {
+                    p
+                }
+            } else if extract_to_subfolder.unwrap_or(true) {
                 resolve_unique_folder_name(&p)
             } else {
                 p
             }
         }
     } else {
-        resolve_unique_folder_name(&parent.join(&stem))
+        if rar_single_root_match {
+            parent.to_path_buf()
+        } else {
+            resolve_unique_folder_name(&parent.join(&stem))
+        }
     };
 
-    let dest_dir_existed_before = dest_dir.exists();
+    let target_folder = if rar_single_root_match {
+        dest_dir.join(&stem)
+    } else {
+        dest_dir.clone()
+    };
+    let target_folder_existed_before = target_folder.exists();
     let pwd_ref = password.as_deref();
 
     let excluded_set: Option<std::collections::HashSet<String>> = excluded_paths.filter(|p| !p.is_empty()).map(|paths| {
@@ -1378,9 +1425,9 @@ pub fn extract_archive_sync(
         Err(e) => {
             // User requested cancellation or fatal error occurred:
             // Clean up the half-extracted folder if it was newly created for this extraction!
-            if !dest_dir_existed_before && dest_dir.exists() {
+            if !target_folder_existed_before && target_folder.exists() {
                 for _ in 0..5 {
-                    if std::fs::remove_dir_all(&dest_dir).is_ok() {
+                    if std::fs::remove_dir_all(&target_folder).is_ok() {
                         break;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(60));
@@ -1409,7 +1456,7 @@ pub fn extract_archive_sync(
 
     Ok(ExtractResponse {
         success: true,
-        output_directory: dest_dir.to_string_lossy().to_string(),
+        output_directory: target_folder.to_string_lossy().to_string(),
         file_count: extracted_files.len(),
         elapsed_ms: start_time.elapsed().as_millis() as u64,
         error: None,

@@ -74,7 +74,7 @@ export function SettingsWindow() {
             Bayzip Preferences
           </span>
           <span data-tauri-drag-region className="text-[10px] font-mono text-[#888888] bg-[#1A1A1A] px-2 py-0.5 rounded border border-[#333333]">
-            v1.1.2
+            v1.1.3
           </span>
         </div>
 
@@ -210,7 +210,7 @@ export function SettingsWindow() {
             </div>
             <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-[#181818] border border-[#353535] text-xs">
               <span className="w-2 h-2 rounded-full bg-[#E8C488]"></span>
-              <span className="font-mono text-white text-[11px]">.bay_gamer</span>
+              <span className="font-mono text-white text-[11px]">.bayg</span>
               <span className="text-[10px] text-[#7A7A7A]">• Gamer Modpack</span>
             </div>
           </div>
@@ -226,7 +226,7 @@ export function SettingsWindow() {
             </div>
             <div>
               <p className="text-xs font-semibold text-white">Application Updates</p>
-              <p className="text-[11px] text-[#888888]">Current version v1.1.2 • Up to date</p>
+              <p className="text-[11px] text-[#888888]">Current version v1.1.3 • Up to date</p>
             </div>
           </div>
           <button
@@ -241,7 +241,7 @@ export function SettingsWindow() {
 
       {/* Footer */}
       <div className="bg-[#181818] px-6 py-2.5 border-t border-[#2A2A2A] flex items-center justify-between text-[11px] text-[#7A7A7A] shrink-0">
-        <span>Bayzip v1.1.2 • Native Settings Window</span>
+        <span>Bayzip v1.1.3 • Native Settings Window</span>
         <span className="font-mono text-[#888888]">Press Esc to close</span>
       </div>
     </div>
