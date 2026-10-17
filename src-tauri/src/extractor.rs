@@ -228,6 +228,22 @@ pub fn extract_bay_stream<R: Read>(
 
         let out_path = dest_dir.join(&effective_path);
 
+        let is_dir = entry_type == 2 || rel_path_str.ends_with('/');
+        if is_dir {
+            let _ = std::fs::create_dir_all(&out_path);
+            extracted_files.push(out_path.to_string_lossy().to_string());
+            let mut remaining = file_size;
+            while remaining > 0 {
+                let to_read = (remaining as usize).min(io_buf.len());
+                match decoder.read(&mut io_buf[..to_read]) {
+                    Ok(0) => break,
+                    Ok(n) => remaining -= n as u64,
+                    Err(_) => break,
+                }
+            }
+            continue;
+        }
+
         if let Some(parent) = out_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -730,12 +746,12 @@ fn extract_tar_entries<R: Read>(
     expected_size: Option<u64>,
     app: Option<&AppHandle>,
     excluded: Option<&std::collections::HashSet<String>>,
+    root_strip: Option<&str>,
 ) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
 
     let total_expected_bytes = expected_size.unwrap_or(1).max(1);
     let mut extracted_files = Vec::new();
-    let root_strip = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
     let mut total_extracted: u64 = 0;
     let mut last_emit = Instant::now();
     let mut io_buf = vec![0u8; 2 * 1024 * 1024];
@@ -880,13 +896,31 @@ pub fn extract_tar_archive(
     
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest: {}", e))?;
     
+    let root_strip = {
+        let dest_stem = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
+        if let Some(prefix) = dest_stem {
+            let (entries, _, _) = crate::inspector::list_tar_entries(archive_path);
+            if let Some(single_root) = get_single_root_dir(&entries) {
+                if single_root.eq_ignore_ascii_case(prefix) {
+                    Some(prefix.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
     if is_gz {
         let tar = flate2::read::GzDecoder::new(reader);
         let archive = tar::Archive::new(tar);
-        extract_tar_entries(archive, dest_dir, expected_size, app, excluded)
+        extract_tar_entries(archive, dest_dir, expected_size, app, excluded, root_strip.as_deref())
     } else {
         let archive = tar::Archive::new(reader);
-        extract_tar_entries(archive, dest_dir, expected_size, app, excluded)
+        extract_tar_entries(archive, dest_dir, expected_size, app, excluded, root_strip.as_deref())
     }
 }
 
@@ -1159,7 +1193,7 @@ pub fn extract_with_system_tar(
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let reader_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             if tx.send(line).is_err() {
                 break;
             }
@@ -1199,9 +1233,17 @@ pub fn extract_with_system_tar(
 
                 if let Some(safe_path) = safe {
                     let out_path = dest_dir.join(&safe_path);
-                    current_file_name = safe_path.to_string_lossy().to_string();
-                    current_file_path = Some(out_path.clone());
-                    extracted_files.push(out_path.to_string_lossy().to_string());
+                    if is_path_excluded(&clean_rel, excluded) {
+                        if out_path.is_file() {
+                            let _ = std::fs::remove_file(&out_path);
+                        } else if out_path.is_dir() {
+                            let _ = std::fs::remove_dir(&out_path);
+                        }
+                    } else {
+                        current_file_name = safe_path.to_string_lossy().to_string();
+                        current_file_path = Some(out_path.clone());
+                        extracted_files.push(out_path.to_string_lossy().to_string());
+                    }
                 } else {
                     current_file_name = clean_rel;
                 }
@@ -1220,7 +1262,15 @@ pub fn extract_with_system_tar(
                         let clean_rel = rel_path.trim().replace('\\', "/");
                         if let Some(safe_path) = sanitize_archive_path(&clean_rel) {
                             let out_path = dest_dir.join(&safe_path);
-                            extracted_files.push(out_path.to_string_lossy().to_string());
+                            if is_path_excluded(&clean_rel, excluded) {
+                                if out_path.is_file() {
+                                    let _ = std::fs::remove_file(&out_path);
+                                } else if out_path.is_dir() {
+                                    let _ = std::fs::remove_dir(&out_path);
+                                }
+                            } else {
+                                extracted_files.push(out_path.to_string_lossy().to_string());
+                            }
                         }
                     } else if trimmed.to_lowercase().contains("error") || trimmed.to_lowercase().contains("fatal") {
                         error_lines.push(trimmed.to_string());
@@ -1414,7 +1464,11 @@ pub fn extract_archive_sync(
 
     let excluded_set: Option<std::collections::HashSet<String>> = excluded_paths.filter(|p| !p.is_empty()).map(|paths| {
         paths.into_iter()
-            .map(|p| p.replace('\\', "/").trim_start_matches('/').to_lowercase())
+            .flat_map(|p| {
+                let clean = p.replace('\\', "/").trim_start_matches('/').to_string();
+                let lower = clean.to_lowercase();
+                vec![clean, lower]
+            })
             .collect()
     });
 

@@ -11,7 +11,7 @@ fn main() {
     }
     if args.len() >= 3 && args[1] == "--extract-here" {
         let target_file = args[2].trim_matches('\"');
-        if let Err(_) = bayzip_lib::headless_extract_here(target_file) {
+        if bayzip_lib::headless_extract_here(target_file).is_err() {
             // If headless extraction fails (e.g. archive is password protected), open the GUI
             bayzip_lib::run();
             return;
@@ -20,7 +20,7 @@ fn main() {
     }
     if args.len() >= 3 && args[1] == "--extract-to-folder" {
         let target_file = args[2].trim_matches('\"');
-        if let Err(_) = bayzip_lib::headless_extract_to_subfolder(target_file) {
+        if bayzip_lib::headless_extract_to_subfolder(target_file).is_err() {
             // If headless extraction fails (e.g. archive is password protected), open the GUI
             bayzip_lib::run();
             return;

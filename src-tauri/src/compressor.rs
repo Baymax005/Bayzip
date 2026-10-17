@@ -252,11 +252,12 @@ pub fn write_file_to_bay_archive<W: Write>(
     encoder.write_all(&file_size.to_le_bytes()).map_err(|e| e.to_string())?;
 
     let mut written_bytes: u64 = 0;
-    loop {
+    while written_bytes < file_size {
         if is_compression_cancelled() {
             return Err("Compression cancelled by user".to_string());
         }
-        match f.read(read_buf) {
+        let to_read = ((file_size - written_bytes) as usize).min(read_buf.len());
+        match f.read(&mut read_buf[..to_read]) {
             Ok(0) => break,
             Ok(n) => {
                 if is_compression_cancelled() {
@@ -323,8 +324,21 @@ pub fn write_dir_to_bay_archive<W: Write>(
             if let Ok(m) = std::fs::symlink_metadata(&ep) {
                 if m.is_file() {
                     let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
-                    write_file_to_bay_archive(&ep, &rel.to_string_lossy(), encoder, read_buf, bytes_processed, total_original, app, last_emit)?;
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    let clean_rel = rel_str.trim_start_matches('/');
+                    write_file_to_bay_archive(&ep, clean_rel, encoder, read_buf, bytes_processed, total_original, app, last_emit)?;
                 } else if m.is_dir() && !m.file_type().is_symlink() {
+                    let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    let clean_rel = rel_str.trim_start_matches('/').to_string();
+                    if !clean_rel.is_empty() {
+                        let dir_name = format!("{}/", clean_rel);
+                        let dir_bytes = dir_name.as_bytes();
+                        encoder.write_all(&[2u8]).map_err(|e| e.to_string())?; // 2 = Directory entry
+                        encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+                        encoder.write_all(dir_bytes).map_err(|e| e.to_string())?;
+                        encoder.write_all(&0u64.to_le_bytes()).map_err(|e| e.to_string())?;
+                    }
                     write_dir_to_bay_archive(&ep, base_parent, encoder, read_buf, bytes_processed, total_original, app, depth + 1, last_emit)?;
                 }
             }
@@ -639,6 +653,14 @@ pub fn compress_zip(
     // Allocate read buffer scaled by hardware allocation
     let mut read_buf = vec![0u8; read_buf_size];
 
+    let deflate_level = match slider_value {
+        0..=15 => 1,
+        16..=35 => 3,
+        36..=65 => 6,
+        66..=85 => 7,
+        _ => 9,
+    };
+
     for file_str in files {
         if is_compression_cancelled() {
             return Err("Compression cancelled by user".to_string());
@@ -648,9 +670,11 @@ pub fn compress_zip(
         let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         let options = SimpleFileOptions::default()
             .compression_method(method)
+            .compression_level(Some(deflate_level))
             .large_file(file_len >= 0xFFFF_FFFF);
 
         if p.is_file() {
+            let mut f = File::open(p).map_err(|e| format!("Failed to open file '{}': {}", p.display(), e))?;
             let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
             if let Some(pwd) = has_pwd {
                 writer.start_file(file_name, options.with_aes_encryption(aes_mode, pwd))
@@ -660,37 +684,35 @@ pub fn compress_zip(
                     .map_err(|e| format!("Zip start file error: {}", e))?;
             }
             
-            if let Ok(mut f) = File::open(p) {
-                loop {
-                    if is_compression_cancelled() {
-                        return Err("Compression cancelled by user".to_string());
-                    }
-                    match f.read(&mut read_buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if is_compression_cancelled() {
-                                return Err("Compression cancelled by user".to_string());
-                            }
-                            writer.write_all(&read_buf[..n])
-                                .map_err(|e| format!("Zip write error: {}", e))?;
-                            bytes_processed += n as u64;
-                            if last_emit.elapsed().as_millis() >= 50 {
-                                last_emit = Instant::now();
-                                let pct = if total_original > 0 {
-                                    ((bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
-                                } else {
-                                    50.0
-                                };
-                                let _ = app.emit("compress_progress", CompressProgress {
-                                    percent: pct,
-                                    current_file: file_name.to_string(),
-                                    bytes_processed,
-                                    total_bytes: total_original,
-                                });
-                            }
+            loop {
+                if is_compression_cancelled() {
+                    return Err("Compression cancelled by user".to_string());
+                }
+                match f.read(&mut read_buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if is_compression_cancelled() {
+                            return Err("Compression cancelled by user".to_string());
                         }
-                        Err(e) => return Err(format!("File read error: {}", e)),
+                        writer.write_all(&read_buf[..n])
+                            .map_err(|e| format!("Zip write error: {}", e))?;
+                        bytes_processed += n as u64;
+                        if last_emit.elapsed().as_millis() >= 50 {
+                            last_emit = Instant::now();
+                            let pct = if total_original > 0 {
+                                ((bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                            } else {
+                                50.0
+                            };
+                            let _ = app.emit("compress_progress", CompressProgress {
+                                percent: pct,
+                                current_file: file_name.to_string(),
+                                bytes_processed,
+                                total_bytes: total_original,
+                            });
+                        }
                     }
+                    Err(e) => return Err(format!("File read error: {}", e)),
                 }
             }
         } else if p.is_dir() {
@@ -716,6 +738,7 @@ pub fn compress_zip(
                 writer: &mut zip::ZipWriter<W>,
                 read_buf: &mut [u8],
                 method: zip::CompressionMethod,
+                deflate_level: i64,
                 has_pwd: Option<&str>,
                 aes_mode: AesMode,
                 bytes_processed: &mut u64,
@@ -740,6 +763,7 @@ pub fn compress_zip(
                             let is_large = m.len() >= 0xFFFF_FFFF;
                             let options = SimpleFileOptions::default()
                                 .compression_method(method)
+                                .compression_level(Some(deflate_level))
                                 .large_file(is_large);
 
                             if m.is_dir() && !m.file_type().is_symlink() {
@@ -749,8 +773,12 @@ pub fn compress_zip(
                                 } else {
                                     let _ = writer.add_directory(&dir_name, options);
                                 }
-                                add_dir_to_zip(&path, base, writer, read_buf, method, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1)?;
+                                add_dir_to_zip(&path, base, writer, read_buf, method, deflate_level, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1)?;
                             } else if m.is_file() {
+                                let mut f = match File::open(&path) {
+                                    Ok(file) => file,
+                                    Err(_) => continue, // Skip unreadable/locked file without creating ghost 0-byte entry!
+                                };
                                 if let Some(pwd) = has_pwd {
                                     writer.start_file(clean_rel, options.with_aes_encryption(aes_mode, pwd))
                                         .map_err(|e| format!("Zip start file error: {}", e))?;
@@ -758,37 +786,35 @@ pub fn compress_zip(
                                     writer.start_file(clean_rel, options)
                                         .map_err(|e| format!("Zip start file error: {}", e))?;
                                 }
-                                if let Ok(mut f) = File::open(&path) {
-                                    loop {
-                                        if is_compression_cancelled() {
-                                            return Err("Compression cancelled by user".to_string());
-                                        }
-                                        match f.read(read_buf) {
-                                            Ok(0) => break,
-                                            Ok(n) => {
-                                                if is_compression_cancelled() {
-                                                    return Err("Compression cancelled by user".to_string());
-                                                }
-                                                writer.write_all(&read_buf[..n])
-                                                    .map_err(|e| format!("Zip write error: {}", e))?;
-                                                *bytes_processed += n as u64;
-                                                if last_emit.elapsed().as_millis() >= 50 {
-                                                    *last_emit = Instant::now();
-                                                    let pct = if total_original > 0 {
-                                                        ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
-                                                    } else {
-                                                        50.0
-                                                    };
-                                                    let _ = app.emit("compress_progress", CompressProgress {
-                                                        percent: pct,
-                                                        current_file: rel_str.clone(),
-                                                        bytes_processed: *bytes_processed,
-                                                        total_bytes: total_original,
-                                                    });
-                                                }
+                                loop {
+                                    if is_compression_cancelled() {
+                                        return Err("Compression cancelled by user".to_string());
+                                    }
+                                    match f.read(read_buf) {
+                                        Ok(0) => break,
+                                        Ok(n) => {
+                                            if is_compression_cancelled() {
+                                                return Err("Compression cancelled by user".to_string());
                                             }
-                                            Err(e) => return Err(format!("File read error: {}", e)),
+                                            writer.write_all(&read_buf[..n])
+                                                .map_err(|e| format!("Zip write error: {}", e))?;
+                                            *bytes_processed += n as u64;
+                                            if last_emit.elapsed().as_millis() >= 50 {
+                                                *last_emit = Instant::now();
+                                                let pct = if total_original > 0 {
+                                                    ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                                                } else {
+                                                    50.0
+                                                };
+                                                let _ = app.emit("compress_progress", CompressProgress {
+                                                    percent: pct,
+                                                    current_file: rel_str.clone(),
+                                                    bytes_processed: *bytes_processed,
+                                                    total_bytes: total_original,
+                                                });
+                                            }
                                         }
+                                        Err(e) => return Err(format!("File read error: {}", e)),
                                     }
                                 }
                             }
@@ -797,7 +823,7 @@ pub fn compress_zip(
                 }
                 Ok(())
             }
-            add_dir_to_zip(p, parent_dir, &mut writer, &mut read_buf, method, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
+            add_dir_to_zip(p, parent_dir, &mut writer, &mut read_buf, method, deflate_level, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
         }
     }
 
@@ -846,7 +872,61 @@ pub fn compress_tar(
             .map_err(|e| format!("Failed to create tar file: {}", e))?;
         let mut builder = tar::Builder::new(BufWriter::with_capacity(32 * 1024 * 1024, out_file));
 
-        for (i, file_str) in files.iter().enumerate() {
+        fn add_dir_to_tar<W: Write>(
+            dir: &Path,
+            base: &Path,
+            builder: &mut tar::Builder<W>,
+            bytes_processed: &mut u64,
+            total_original: u64,
+            app: &AppHandle,
+            last_emit: &mut Instant,
+            depth: usize,
+        ) -> Result<(), String> {
+            if depth > 32 { return Ok(()); }
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    if is_compression_cancelled() {
+                        return Err("Compression cancelled by user".to_string());
+                    }
+                    let path = entry.path();
+                    if let Ok(m) = std::fs::symlink_metadata(&path) {
+                        let rel = path.strip_prefix(base).unwrap_or(&path);
+                        let clean = rel.to_string_lossy().replace('\\', "/");
+                        let trimmed = clean.trim_start_matches('/');
+                        if trimmed.is_empty() { continue; }
+
+                        if m.is_dir() && !m.file_type().is_symlink() {
+                            let _ = builder.append_dir(trimmed, &path);
+                            add_dir_to_tar(&path, base, builder, bytes_processed, total_original, app, last_emit, depth + 1)?;
+                        } else if m.is_file() {
+                            builder.append_path_with_name(&path, trimmed)
+                                .map_err(|e| format!("Tar append file error: {}", e))?;
+                            *bytes_processed += m.len();
+                            if last_emit.elapsed().as_millis() >= 50 {
+                                *last_emit = Instant::now();
+                                let pct = if total_original > 0 {
+                                    ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                                } else {
+                                    50.0
+                                };
+                                let _ = app.emit("compress_progress", CompressProgress {
+                                    percent: pct,
+                                    current_file: trimmed.to_string(),
+                                    bytes_processed: *bytes_processed,
+                                    total_bytes: total_original,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        let mut bytes_processed = 0u64;
+        let mut last_emit = Instant::now();
+
+        for file_str in files {
             if is_compression_cancelled() {
                 return Err("Compression cancelled by user".to_string());
             }
@@ -855,17 +935,25 @@ pub fn compress_tar(
             if p.is_file() {
                 builder.append_path_with_name(p, name)
                     .map_err(|e| format!("Tar append file error: {}", e))?;
+                if let Ok(m) = p.metadata() {
+                    bytes_processed += m.len();
+                }
+                let pct = if total_original > 0 {
+                    ((bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+                } else {
+                    50.0
+                };
+                let _ = app.emit("compress_progress", CompressProgress {
+                    percent: pct,
+                    current_file: name.to_string(),
+                    bytes_processed,
+                    total_bytes: total_original,
+                });
             } else if p.is_dir() {
-                builder.append_dir_all(name, p)
-                    .map_err(|e| format!("Tar append dir error: {}", e))?;
+                let parent = p.parent().unwrap_or(p);
+                let _ = builder.append_dir(name, p);
+                add_dir_to_tar(p, parent, &mut builder, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
             }
-            let pct = ((i + 1) as f64 / files.len() as f64) * 100.0;
-            let _ = app.emit("compress_progress", CompressProgress {
-                percent: pct,
-                current_file: name.to_string(),
-                bytes_processed: total_original,
-                total_bytes: total_original,
-            });
         }
 
         if is_compression_cancelled() {
@@ -1048,15 +1136,16 @@ pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), S
     let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
+        .compression_level(Some(6))
         .large_file(file_len >= 0xFFFF_FFFF);
 
     let parent = p.parent().unwrap_or(p);
 
     if p.is_file() {
-        let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-        writer.start_file(file_name, options)
-            .map_err(|e| format!("Zip start error: {}", e))?;
         if let Ok(mut f) = File::open(p) {
+            let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            writer.start_file(file_name, options)
+                .map_err(|e| format!("Zip start error: {}", e))?;
             std::io::copy(&mut f, &mut writer)
                 .map_err(|e| format!("Zip copy error: {}", e))?;
         }
@@ -1077,16 +1166,18 @@ pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), S
                         if m.is_dir() && !m.file_type().is_symlink() {
                             let dir_opt = SimpleFileOptions::default()
                                 .compression_method(zip::CompressionMethod::Deflated)
+                                .compression_level(Some(6))
                                 .large_file(false);
                             let _ = writer.add_directory(format!("{}/", rel_str), dir_opt);
                             add_dir(&path, base, writer, depth + 1)?;
                         } else if m.is_file() {
-                            let file_opt = SimpleFileOptions::default()
-                                .compression_method(zip::CompressionMethod::Deflated)
-                                .large_file(m.len() >= 0xFFFF_FFFF);
-                            writer.start_file(&rel_str, file_opt)
-                                .map_err(|e| format!("Zip start error: {}", e))?;
                             if let Ok(mut f) = File::open(&path) {
+                                let file_opt = SimpleFileOptions::default()
+                                    .compression_method(zip::CompressionMethod::Deflated)
+                                    .compression_level(Some(6))
+                                    .large_file(m.len() >= 0xFFFF_FFFF);
+                                writer.start_file(&rel_str, file_opt)
+                                    .map_err(|e| format!("Zip start error: {}", e))?;
                                 std::io::copy(&mut f, writer)
                                     .map_err(|e| format!("Zip write error: {}", e))?;
                             }
@@ -1103,7 +1194,7 @@ pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), S
     Ok(())
 }
 
-pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), String> {
+pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool) -> Result<(), String> {
     let parent = p.parent().unwrap_or(p);
     let mut toc_entries: Vec<crate::types::ArchiveEntryItem> = Vec::new();
     if p.is_file() {
@@ -1125,13 +1216,16 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
     buf_out.write_all(b"BAYZIP\x02\x00")
         .map_err(|e| format!("Header write error: {}", e))?;
     
-    // Balanced profile level 7 (50% slider equivalent)
+    // Balanced profile (50% slider equivalent)
     let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
     let threads = calculate_target_threads(50, total_cores);
-    let zstd_level = calculate_zstd_level(50, false);
+    let zstd_level = calculate_zstd_level(50, is_gamer);
     let mut encoder = zstd::stream::Encoder::new(buf_out, zstd_level)
         .map_err(|e| format!("Encoder error: {}", e))?;
     let _ = encoder.multithread(threads as u32);
+    if is_gamer {
+        let _ = encoder.include_checksum(false);
+    }
 
     let mut read_buf = vec![0u8; read_buf_size];
 
@@ -1148,8 +1242,9 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
             let _ = encoder.write_all(&file_size.to_le_bytes());
 
             let mut written: u64 = 0;
-            loop {
-                match f.read(&mut read_buf) {
+            while written < file_size {
+                let to_read = ((file_size - written) as usize).min(read_buf.len());
+                match f.read(&mut read_buf[..to_read]) {
                     Ok(0) => break,
                     Ok(n) => {
                         let _ = encoder.write_all(&read_buf[..n]);
@@ -1181,7 +1276,8 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
                             if let Ok(mut f) = File::open(&entry_path) {
                                 let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
                                 let rel_str = rel_name.to_string_lossy().replace('\\', "/");
-                                let bytes = rel_str.as_bytes();
+                                let clean_rel = rel_str.trim_start_matches('/').to_string();
+                                let bytes = clean_rel.as_bytes();
                                 let file_size = f.metadata().map(|m| m.len()).unwrap_or(m.len());
                                 let _ = encoder.write_all(&[1u8]);
                                 let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
@@ -1189,8 +1285,9 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
                                 let _ = encoder.write_all(&file_size.to_le_bytes());
 
                                 let mut written: u64 = 0;
-                                loop {
-                                    match f.read(read_buf) {
+                                while written < file_size {
+                                    let to_read = ((file_size - written) as usize).min(read_buf.len());
+                                    match f.read(&mut read_buf[..to_read]) {
                                         Ok(0) => break,
                                         Ok(n) => { 
                                             let _ = encoder.write_all(&read_buf[..n]); 
@@ -1210,6 +1307,17 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path) -> Result<(), S
                                 }
                             }
                         } else if m.is_dir() && !m.file_type().is_symlink() {
+                            let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
+                            let rel_str = rel_name.to_string_lossy().replace('\\', "/");
+                            let clean_rel = rel_str.trim_start_matches('/').to_string();
+                            if !clean_rel.is_empty() {
+                                let dir_name = format!("{}/", clean_rel);
+                                let dir_bytes = dir_name.as_bytes();
+                                let _ = encoder.write_all(&[2u8]);
+                                let _ = encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes());
+                                let _ = encoder.write_all(dir_bytes);
+                                let _ = encoder.write_all(&0u64.to_le_bytes());
+                            }
                             add_dir(&entry_path, base_parent, encoder, read_buf, depth + 1);
                         }
                     }
@@ -1324,12 +1432,36 @@ pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<()
                 builder.append_path_with_name(p, name)
                     .map_err(|e| format!("Tar append file error: {}", e))?;
             } else if p.is_dir() {
-                builder.append_dir_all(name, p)
-                    .map_err(|e| format!("Tar append dir error: {}", e))?;
+                fn add_dir_headless<W: Write>(dir: &Path, base: &Path, builder: &mut tar::Builder<W>, depth: usize) -> Result<(), String> {
+                    if depth > 32 { return Ok(()); }
+                    if let Ok(entries) = std::fs::read_dir(dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if let Ok(m) = std::fs::symlink_metadata(&path) {
+                                let rel = path.strip_prefix(base).unwrap_or(&path);
+                                let clean = rel.to_string_lossy().replace('\\', "/");
+                                let trimmed = clean.trim_start_matches('/');
+                                if trimmed.is_empty() { continue; }
+
+                                if m.is_dir() && !m.file_type().is_symlink() {
+                                    let _ = builder.append_dir(trimmed, &path);
+                                    add_dir_headless(&path, base, builder, depth + 1)?;
+                                } else if m.is_file() {
+                                    builder.append_path_with_name(&path, trimmed)
+                                        .map_err(|e| format!("Tar append file error: {}", e))?;
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+                let _ = builder.append_dir(name, p);
+                add_dir_headless(p, parent, &mut builder, 0)?;
             }
             builder.finish().map_err(|e| format!("Tar finalize error: {}", e))?;
         },
-        _ => headless_quick_compress_bay(p, &output_path)?,
+        "bayg" => headless_quick_compress_bay(p, &output_path, true)?,
+        _ => headless_quick_compress_bay(p, &output_path, false)?,
     }
 
     #[cfg(target_os = "windows")]
