@@ -13,9 +13,14 @@ use tauri::AppHandle;
 pub use types::*;
 pub use priority::ScopedPriorityGuard;
 pub use registry::register_context_menu_sync;
-pub use inspector::{detect_archive_type, inspect_archive, sanitize_archive_path, archive_stem_name};
+pub use inspector::{detect_archive_type, inspect_archive, sanitize_archive_path, archive_stem_name, has_instant_bay_toc};
 pub use compressor::{headless_quick_compress, compress_files_sync, compute_path_size};
 pub use extractor::{headless_extract_here, headless_extract_to_subfolder, universal_extract, extract_archive_sync};
+
+#[tauri::command]
+fn get_file_size(path: String) -> u64 {
+    std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+}
 
 #[tauri::command]
 fn get_system_specs() -> SystemSpecs {
@@ -218,6 +223,7 @@ pub fn run() {
             get_selected_items_info,
             extract_archive,
             get_archive_info,
+            get_file_size,
             preview_archive_entry,
             open_settings_window,
             close_settings_window,
