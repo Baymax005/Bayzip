@@ -119,16 +119,32 @@ Understanding real-world drive physical limits helps distinguish between softwar
 
 ---
 
-## ⚡ 8. High-Throughput Extraction I/O Architecture (v1.2.0)
+## ⚡ 8. Extraction Pipeline I/O & Memory Allocation Specs
 
-In `v1.2.0`, Bayzip's extraction pipelines across all formats (`.bay`, `.bayg`, `.zip`, `.7z`, `.tar`) were overhauled to eliminate Windows filesystem stalls, reduce SSD write wear, and maximize hardware saturation:
+| Pipeline Stage | Buffer Type | RAM Allocation | Chunk / Transfer Size | Purpose |
+| :--- | :--- | :---: | :---: | :--- |
+| **Archive Source Read** | `BufReader` | **16 MB** | 16 MB blocks | Minimizes disk read seeks on archive container |
+| **Stream Decompressor Pipe** | `io_buf` vector | **4 MB** | 4 MB transfer | Cuts Windows kernel syscall context switches (`NtWriteFile`) |
+| **Medium File Writer** | `BufWriter` | **2 MB** | 2 MB bursts | Smooth buffered writes for files $\le$ 16 MB |
+| **Large File Writer** | `BufWriter` | **16 MB** | 16 MB bursts | Saturates multi-channel NVMe flash / avoids HDD thrashing |
+| **Total Peak Extraction RAM** | Constant | **~36 MB** | Dynamic reuse | Fixed memory footprint regardless of archive size |
 
-### A. Elimination of Windows NTFS Synchronous Zero-Filling (`set_len` Removal)
-* **The Windows NTFS Trap**: In Unix/Linux systems, pre-allocating disk space (`posix_fallocate`) is instantaneous. On Windows NTFS, however, calling `SetEndOfFile()` (`File::set_len`) on an unprivileged handle forces the operating system kernel to **synchronously zero-fill every allocated cluster on disk** to satisfy Windows C2 security isolation requirements.
-* **The Penalty**: For a 44 GB game archive with large 2–4 GB package files, Windows was writing **44 GB of zeroes** to disk, and then writing the **44 GB of actual decompressed game files** — generating **88 GB of physical disk writes**! On a 35 MB/s external USB drive, zero-filling added 20+ minutes of pure waste; on PCIe Gen 4/5 NVMe SSDs, it burned twice as much drive write endurance (TBW).
-* **The Optimization**: Removed all pre-emptive `set_len` calls across all unpackers. Decompressed streams are written directly to disk in a single pass, cutting disk write volume **cleanly in half (50% reduction)**.
+### Write Staging & Buffer Allocation by File Size
 
-### B. Upgraded Sequential I/O Buffering
-* **16 MB Archive Read Buffer (`BufReader`)**: Reads compressed container streams in massive 16 MB blocks. On mechanical drives, this keeps the read head planted on the archive track far longer; on NVMe SSDs, it maximizes multi-channel flash read bandwidth.
-* **4 MB Decompressor Transfer Buffer (`io_buf`)**: Doubles the per-chunk read/write transfer size between the compression decoder and file writers, cutting Windows kernel context switches (`NtWriteFile`) in half.
-* **16 MB Large-File Write Buffer (`BufWriter`)**: Accumulates decompressed bytes for files larger than 16 MB into 16 MB sequential write bursts, maximizing disk cache coalescence and eliminating fragmented micro-writes.
+| File Category | File Size Threshold | Target File Mode | Write Buffer Capacity | Temporary Staging | Windows Zero-Fill Overhead |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Tiny Files** | $\le$ 64 KB | Direct File | **Unbuffered** (Direct write) | None | **0 bytes** |
+| **Medium Files** | 64 KB – 16 MB | Staged `.baypart` | **2 MB (`BufWriter`)** | `.baypart` $\to$ Atomic rename | **0 bytes** |
+| **Large Files** | > 16 MB | Staged `.baypart` | **16 MB (`BufWriter`)** | `.baypart` $\to$ Atomic rename | **0 bytes** |
+
+### Disk Write Volume & Multiplier Comparison
+
+| Metric / Scenario | Legacy Pre-1.2.0 | v1.2.0 Optimized | Efficiency Gain |
+| :--- | :---: | :---: | :---: |
+| **Windows NTFS Write Multiplier** | **2.0×** (Zero-fill + Data write) | **1.0×** (Single-pass direct write) | **50% I/O reduction** |
+| **44.3 GB Game Archive Extraction** | **88.6 GB** written to disk | **44.3 GB** written to disk | **-44.3 GB disk write load** |
+| **Archive Read Block Size** | 4 MB | **16 MB** | **4× larger sequential reads** |
+| **Decompressor I/O Pipe Block** | 2 MB | **4 MB** | **2× fewer system calls** |
+| **Large File Burst Write Buffer** | 8 MB | **16 MB** | **2× larger sequential writes** |
+| **SSD Write Wear (TBW Endurance)** | Double write wear | **Zero extra wear** | **100% standard SSD preservation** |
+
