@@ -116,3 +116,19 @@ Understanding real-world drive physical limits helps distinguish between softwar
 1. **Mechanical Seeking**: Mechanical hard drives have a single physical actuator arm. When reading game files and writing the `.bayg` file to the same drive, the mechanical head must physically jump between read and write tracks.
 2. **Bandwidth Splitting**: An external USB mechanical drive has a physical ceiling of ~100 MB/s. If reading at **74 MB/s**, only **~23 MB/s** physical bandwidth remains for writing.
 3. **The Benefit of Bayzip's 64 MB Buffer**: Without Bayzip's large write buffer, the drive head would thrash every few kilobytes, dropping speed to ~30 MB/s. With the 64 MB RAM buffer, writes occur in smooth sequential bursts, allowing the drive to sustain its maximum possible physical speed (~97 MB/s).
+
+---
+
+## ⚡ 8. High-Throughput Extraction I/O Architecture (v1.2.0)
+
+In `v1.2.0`, Bayzip's extraction pipelines across all formats (`.bay`, `.bayg`, `.zip`, `.7z`, `.tar`) were overhauled to eliminate Windows filesystem stalls, reduce SSD write wear, and maximize hardware saturation:
+
+### A. Elimination of Windows NTFS Synchronous Zero-Filling (`set_len` Removal)
+* **The Windows NTFS Trap**: In Unix/Linux systems, pre-allocating disk space (`posix_fallocate`) is instantaneous. On Windows NTFS, however, calling `SetEndOfFile()` (`File::set_len`) on an unprivileged handle forces the operating system kernel to **synchronously zero-fill every allocated cluster on disk** to satisfy Windows C2 security isolation requirements.
+* **The Penalty**: For a 44 GB game archive with large 2–4 GB package files, Windows was writing **44 GB of zeroes** to disk, and then writing the **44 GB of actual decompressed game files** — generating **88 GB of physical disk writes**! On a 35 MB/s external USB drive, zero-filling added 20+ minutes of pure waste; on PCIe Gen 4/5 NVMe SSDs, it burned twice as much drive write endurance (TBW).
+* **The Optimization**: Removed all pre-emptive `set_len` calls across all unpackers. Decompressed streams are written directly to disk in a single pass, cutting disk write volume **cleanly in half (50% reduction)**.
+
+### B. Upgraded Sequential I/O Buffering
+* **16 MB Archive Read Buffer (`BufReader`)**: Reads compressed container streams in massive 16 MB blocks. On mechanical drives, this keeps the read head planted on the archive track far longer; on NVMe SSDs, it maximizes multi-channel flash read bandwidth.
+* **4 MB Decompressor Transfer Buffer (`io_buf`)**: Doubles the per-chunk read/write transfer size between the compression decoder and file writers, cutting Windows kernel context switches (`NtWriteFile`) in half.
+* **16 MB Large-File Write Buffer (`BufWriter`)**: Accumulates decompressed bytes for files larger than 16 MB into 16 MB sequential write bursts, maximizing disk cache coalescence and eliminating fragmented micro-writes.
