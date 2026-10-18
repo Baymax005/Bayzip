@@ -53,26 +53,30 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay_gamer]\r\n\r\n"
             );
 
-            // 1. File Association for .bay and .bayg
+            // 1. File Association for .bay and .bayg (with clean DefaultIcon and ShellEx purging)
             reg_content.push_str(&format!(
-                "[HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
+                "[-HKEY_CURRENT_USER\\Software\\Classes\\.bay\\ShellEx]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\ShellEx]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\ShellEx]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\ShellEx]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay\\OpenWithList]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bayg\\OpenWithList]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\.bay\\OpenWithProgids]\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\OpenWithProgids]\r\n\r\n\
+                [HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
                 @=\"Bayzip.Archive\"\r\n\
                 \"Content Type\"=\"application/x-bayzip\"\r\n\
                 \"PerceivedType\"=\"compressed\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\DefaultIcon]\r\n\
-                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
+                @=\"{icon_path_str}\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\OpenWithProgids]\r\n\
                 \"Bayzip.Archive\"=\"\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\.bay\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
-                @=\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive]\r\n\
                 @=\"Bayzip Archive\"\r\n\
                 \"FriendlyTypeName\"=\"Bayzip Archive\"\r\n\
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\DefaultIcon]\r\n\
-                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
-                @=\"\"\r\n\r\n\
+                @=\"{icon_path_str}\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell]\r\n\
                 @=\"open\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\shell\\open]\r\n\
@@ -85,19 +89,15 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 \"Content Type\"=\"application/x-bayzip-gamer\"\r\n\
                 \"PerceivedType\"=\"compressed\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\DefaultIcon]\r\n\
-                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
+                @=\"{icon_path_str}\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\OpenWithProgids]\r\n\
                 \"Bayzip.GamerArchive\"=\"\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
-                @=\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive]\r\n\
                 @=\"Bayzip Gamer Mod Pack\"\r\n\
                 \"FriendlyTypeName\"=\"Bayzip Gamer Mod Pack\"\r\n\
                 \"Icon\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\DefaultIcon]\r\n\
-                @=\"\\\"{icon_path_str}\\\"\"\r\n\r\n\
-                [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\ShellEx\\{{e357fccd-a995-4576-b01f-234630154e96}}]\r\n\
-                @=\"\"\r\n\r\n\
+                @=\"{icon_path_str}\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell]\r\n\
                 @=\"open\"\r\n\r\n\
                 [HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\shell\\open]\r\n\
@@ -226,8 +226,8 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                         );
                     }
                     unsafe {
-                        // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_IDLIST = 0
-                        SHChangeNotify(0x0800_0000, 0, std::ptr::null(), std::ptr::null());
+                        // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_FLUSH = 0x1000
+                        SHChangeNotify(0x0800_0000, 0x1000, std::ptr::null(), std::ptr::null());
                     }
                 }
 

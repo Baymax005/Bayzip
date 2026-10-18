@@ -19,9 +19,11 @@ All notable changes, version milestones, security fixes, and performance enhance
   - Routed preview extraction through `preview_rar_entry_bytes` (`tar.exe -xf ... -O -- ...`), providing zero-disk streaming in-memory previews for images, text, and code files inside `.iso`, `.cab`, `.tar.bz2`, `.tar.xz`, and `.tar.zst`.
 - **Universal Single-Root Extraction ([extractor.rs](src-tauri/src/extractor.rs))**:
   - Unified extraction dispatch and single-root folder de-nesting for `Bzip2`, `Xz`, `Zstd`, `Iso`, and `Cab` using `extract_with_system_tar`, preventing redundant `Folder/Folder/` nested extraction.
-- **Windows Registry & Frontend Associations ([registry.rs](src-tauri/src/registry.rs), [App.tsx](src/App.tsx))**:
+- **Windows Registry & Frontend Associations ([registry.rs](src-tauri/src/registry.rs), [App.tsx](src/App.tsx), [tauri.conf.json](src-tauri/tauri.conf.json))**:
   - Registered `.bz2`, `.xz`, `.zst`, `.iso`, and `.cab` in Windows HKCU registry for default file associations and context menu options.
   - Added `.iso` and `.cab` to the UI file picker and drag-and-drop filters.
+  - **NSIS Setup Installer Icon**: Configured `bundle.windows.nsis.installerIcon` pointing to `icons/icon.ico` in `tauri.conf.json`, ensuring the generated installer executable displays the official Bayzip logo instead of the generic NSIS screen icon.
+  - **Windows Shell File Association & Logo Fix**: Purged conflicting empty `ShellEx` keys and stale `OpenWithList` entries from `HKCU\Software\Classes\.bay` and `FileExts\.bay` that previously triggered Windows Photo Viewer / RAW thumbnail handler fallbacks. Standardized `DefaultIcon` format and added `SHCNF_FLUSH` (`0x1000`) cache invalidation so `.bay` and `.bayg` archives reliably render the official glowing green cube logo across Windows Explorer.
 
 ---
 
