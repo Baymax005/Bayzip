@@ -33,34 +33,26 @@ export function SettingsWindow() {
 
   const handleClose = async () => {
     try {
-      await invoke("close_settings_window");
+      await getCurrentWindow().hide();
     } catch {
-      getCurrentWindow().hide().catch(() => {});
+      await invoke("close_settings_window").catch(() => {});
     }
   };
 
   const handleMinimize = async () => {
     try {
-      await invoke("minimize_settings_window");
+      await getCurrentWindow().minimize();
     } catch {
-      getCurrentWindow().minimize().catch(() => {});
+      await invoke("minimize_settings_window").catch(() => {});
     }
   };
 
   return (
     <div className="h-screen w-screen bg-[#1E1E1E] text-white flex flex-col font-sans select-none overflow-hidden border border-[#3E3E3E] rounded-xl shadow-2xl">
-      {/* Native Drag Region Titlebar */}
-      <div
-        data-tauri-drag-region
-        onMouseDown={(e) => {
-          if (e.buttons === 1) {
-            getCurrentWindow().startDragging().catch(() => {});
-          }
-        }}
-        className="h-11 w-full flex justify-between items-center bg-[#252525] border-b border-[#333333] cursor-default select-none shrink-0"
-      >
+      {/* Titlebar Header */}
+      <div className="h-11 w-full flex justify-between items-center bg-[#252525] border-b border-[#333333] cursor-default select-none shrink-0">
         {/* Left Branding Area - Fully Grabbable */}
-        <div data-tauri-drag-region className="flex items-center space-x-2.5 px-4 cursor-default">
+        <div data-tauri-drag-region className="flex items-center space-x-2.5 px-4 cursor-default h-full">
           <div data-tauri-drag-region className="w-5 h-5 flex items-center justify-center pointer-events-none">
             <img
               src="/bayzip-logo.png"
@@ -74,8 +66,8 @@ export function SettingsWindow() {
           <span data-tauri-drag-region className="text-xs font-semibold text-white tracking-wide pointer-events-none">
             Bayzip Preferences
           </span>
-          <span data-tauri-drag-region className="text-[10px] font-mono text-[#888888] bg-[#1A1A1A] px-2 py-0.5 rounded border border-[#333333]">
-            v1.1.5
+          <span data-tauri-drag-region className="text-[10px] font-mono text-[#888888] bg-[#1A1A1A] px-2 py-0.5 rounded border border-[#333333] pointer-events-none">
+            v{APP_VERSION}
           </span>
         </div>
 
@@ -83,10 +75,13 @@ export function SettingsWindow() {
         <div data-tauri-drag-region className="flex-1 h-full cursor-default" />
 
         {/* Window Controls */}
-        <div className="flex h-full" data-tauri-drag-region="false">
+        <div className="flex h-full pointer-events-auto z-10">
           <button
             type="button"
-            onClick={handleMinimize}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleMinimize();
+            }}
             className="h-full px-4 hover:bg-[#333333] flex items-center justify-center text-[#A8A8A8] hover:text-white transition-colors cursor-pointer"
             title="Minimize"
           >
@@ -96,7 +91,10 @@ export function SettingsWindow() {
           </button>
           <button
             type="button"
-            onClick={handleClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleClose();
+            }}
             className="h-full px-4 hover:bg-[#C42B1C] hover:text-white flex items-center justify-center text-[#A8A8A8] transition-colors cursor-pointer"
             title="Close (Esc)"
           >

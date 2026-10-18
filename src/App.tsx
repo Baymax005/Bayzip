@@ -435,13 +435,60 @@ function App() {
 
   const getEstimatedRam = () => {
     const fmt = isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat;
+    const algo = (isCompressing && activeCompressConfig ? activeCompressConfig.algorithm : selectedAlgorithm).toLowerCase();
     const val = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
-    if (fmt === ".tar") return "< 0.1";
-    if (fmt === ".zip") return val === 0 ? "< 0.1" : "0.3";
-    if (val === 0) return "0.1";
-    if (!specs) return "0.5";
-    const maxSafeRam = Math.max(0.5, specs.free_ram_gb - 1.5);
-    return ((val / 100) * maxSafeRam).toFixed(1);
+
+    // Direct packaging / Store / None (zero compression buffers)
+    if (fmt === ".tar" || algo.includes("store") || algo.includes("none")) {
+      return "< 0.1";
+    }
+
+    // LZ4 Ultra-Fast (extremely low memory overhead, ~64 KB per stream)
+    if (algo.includes("lz4")) {
+      return val <= 50 ? "< 0.1" : "0.1";
+    }
+
+    // Standard ZIP (Deflate) - single-threaded with 32 KB sliding window
+    if (fmt === ".zip" && !algo.includes("bzip2")) {
+      return val <= 50 ? "< 0.1" : "0.1";
+    }
+
+    // BZip2 (in .zip or .7z) - 900 KB block buffers
+    if (algo.includes("bzip2")) {
+      return val <= 50 ? "0.1" : "0.2";
+    }
+
+    // Brotli (in .bay) - 64 KB blocks with sliding window up to 4 MB
+    if (algo.includes("brotli")) {
+      if (val <= 25) return "0.1";
+      if (val <= 50) return "0.2";
+      if (val <= 75) return "0.3";
+      return "0.45";
+    }
+
+    // Gamer Preset (.bayg) - Zstandard Fast (Level 1-2, small sliding window)
+    if (fmt === ".bayg") {
+      if (val <= 25) return "< 0.1";
+      if (val <= 50) return "0.15";
+      if (val <= 75) return "0.2";
+      return "0.25";
+    }
+
+    // 7-Zip (.7z LZMA2 / LZMA) - includes dictionary + multi-thread chunks + peak headroom
+    if (fmt === ".7z") {
+      if (val <= 0) return "0.15";
+      if (val <= 25) return "0.25";
+      if (val <= 50) return "0.4";
+      if (val <= 75) return "0.6";
+      return "0.8"; // Peak with dictionary + 4MB chunks + OS buffer headroom
+    }
+
+    // Standard .bay (Zstandard) - scales up to Level 19 with 32 MB buffer + 8 threads + hash tables + headroom
+    if (val <= 0) return "0.15";
+    if (val <= 25) return "0.25";
+    if (val <= 50) return "0.35";
+    if (val <= 75) return "0.5";
+    return "0.75"; // Level 19 peak with safe OS headroom
   };
 
   const getEstimatedCores = () => {
@@ -1288,7 +1335,7 @@ function App() {
                         ? "Direct stream buffer"
                         : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".zip"
                           ? "Standard Deflate buffer"
-                          : `Dynamic safe cap (${specs ? specs.free_ram_gb.toFixed(1) : "?"} GB available)`}
+                          : `Working buffer & encoder RAM (${specs ? Math.round(specs.free_ram_gb) : "?"} GB free)`}
                     </p>
                   </div>
 
@@ -1318,6 +1365,23 @@ function App() {
                     </p>
                   </div>
                 </div>
+
+                {/* Ultra Archival Mode Warning for .bay at 100% */}
+                {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bay" &&
+                  (isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue) === 100 &&
+                  (isCompressing && activeCompressConfig ? activeCompressConfig.algorithm : selectedAlgorithm).toLowerCase().includes("zstandard") && (
+                    <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-xs text-amber-200 animate-fadeIn">
+                      <svg className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <div className="space-y-1">
+                        <p className="font-semibold text-amber-300">Ultra Archival Mode (Zstandard Level 19)</p>
+                        <p className="text-amber-200/90 leading-relaxed">
+                          Level 19 uses deep binary-tree matching for the smallest possible file size, which requires higher RAM usage and significantly longer compression time. For fast multi-core compression, use 75% (Level 9) or switch to <strong>.bayg</strong>.
+                        </p>
+                      </div>
+                    </div>
+                  )}
               </div>
 
               {/* Advanced Options Toggle */}

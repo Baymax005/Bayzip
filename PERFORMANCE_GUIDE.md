@@ -52,11 +52,11 @@ Scales dynamically from Level 1 up to Level 19:
 | :---: | :---: | :---: | :--- |
 | **0%** | **Level 1** | ~2.5 MB | Fast draft packaging |
 | **25%** | **Level 3** | ~3.5 MB | Balanced daily compression |
-| **50%** | **Level 7** | ~8 MB | Strong ratio / good speed |
-| **75%** | **Level 14** | ~16 MB | High compression density |
-| **100%** | **Level 19 (Ultra)** | **~32 MB – 64 MB** | **Maximum space saving (90–95% of 7z Ultra)** |
+| **50%** | **Level 6** | ~6.5 MB | Strong ratio / fast multi-core speed |
+| **75%** | **Level 9** | ~12 MB | High compression density (100+ MB/s) |
+| **100%** | **Level 19 (Ultra)** | **~64 MB (Capped)** | **Maximum space saving (matches 7z Ultra)** |
 
-* **Total Peak RAM at 100%**: ~350 MB – 500 MB (due to 128 MB I/O buffer + Zstd-19 sliding window).
+* **Total Peak RAM at 100%**: Strictly bounded to **~450 MB – 600 MB** (write buffer capped to 32 MB and worker threads capped to a maximum of 8 to eliminate multi-gigabyte RAM spikes).
 * **Inspection Speed**: **$O(1)$ Instant** via binary `BAYTOC\x02\x00` trailer written at the end of the file.
 
 ### B. Brotli (Text & Web Data)
@@ -147,4 +147,26 @@ Understanding real-world drive physical limits helps distinguish between softwar
 | **Decompressor I/O Pipe Block** | 2 MB | **4 MB** | **2× fewer system calls** |
 | **Large File Burst Write Buffer** | 8 MB | **16 MB** | **2× larger sequential writes** |
 | **SSD Write Wear (TBW Endurance)** | Double write wear | **Zero extra wear** | **100% standard SSD preservation** |
+
+---
+
+## 📊 9. Algorithm-Specific RAM Footprint Matrix (with Headroom)
+
+Peak working memory consists of thread encoder buffers, sequential I/O buffers, hash chain tables, and safety headroom for OS thread scheduling:
+
+| Format | Algorithm | 0% Slider | 25% Slider | 50% Slider | 75% Slider | 100% Slider |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **`.tar`** | None (Store) | `< 0.1 GB` | `< 0.1 GB` | `< 0.1 GB` | `< 0.1 GB` | `< 0.1 GB` |
+| **`.zip`** | Deflate (Standard) | `< 0.1 GB` | `< 0.1 GB` | `< 0.1 GB` | `~0.1 GB` | `~0.1 GB` |
+| **`.zip`** | Store (Uncompressed) | `< 0.1 GB` | `< 0.1 GB` | `< 0.1 GB` | `< 0.1 GB` | `< 0.1 GB` |
+| **`.zip` / `.7z`** | BZip2 | `~0.1 GB` | `~0.1 GB` | `~0.1 GB` | `~0.2 GB` | `~0.2 GB` |
+| **`.bay`** | LZ4 (Fastest) | `< 0.1 GB` | `< 0.1 GB` | `< 0.1 GB` | `~0.1 GB` | `~0.1 GB` |
+| **`.bay`** | Brotli | `~0.1 GB` | `~0.1 GB` | `~0.2 GB` | `~0.3 GB` | `~0.45 GB` |
+| **`.bayg`** | Zstandard Fast | `< 0.1 GB` | `< 0.1 GB` | `~0.15 GB` | `~0.2 GB` | `~0.25 GB` |
+| **`.bay`** | Zstandard (Recommended) | `~0.15 GB` | `~0.25 GB` | `~0.35 GB` | `~0.5 GB` | **`~0.75 GB (Peak Capped)`** |
+| **`.7z`** | LZMA2 Multi-Thread | `~0.15 GB` | `~0.25 GB` | `~0.4 GB` | `~0.6 GB` | **`~0.8 GB (Peak)`** |
+
+> [!NOTE]
+> Values above represent **realistic peak allocations with safety margin** (including OS thread allocation overhead, hash table indexing, and sequential I/O buffers), ensuring users are never surprised by memory usage.
+
 

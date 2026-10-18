@@ -4,6 +4,43 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ---
 
+## [v1.2.1] - 2026-10-18
+
+### 🐛 Bug Fixes & Stability Improvements
+- **Settings Window Dragging, Minimize & Close Controls ([SettingsWindow.tsx](src/components/SettingsWindow.tsx), [capabilities/default.json](src-tauri/capabilities/default.json))**:
+  - Added missing `core:window:allow-hide` capability permission so the secondary Preferences window can be dismissed cleanly without IPC errors.
+  - Resolved event conflict where parent titlebar `onMouseDown` was intercepting click and mouse-up events before they reached Minimize and Close buttons.
+  - Isolated `data-tauri-drag-region` to title and center header surfaces, ensuring window control buttons have full pointer event precedence.
+  - Updated Preferences window titlebar badge from static `v1.1.5` to dynamic application version (`v{APP_VERSION}`).
+
+- **7-Zip (`.7z`) Compression Progress & Output Writing ([compressor.rs](src-tauri/src/compressor.rs))**:
+  - Reduced multi-threaded LZMA2 chunk buffer from 32 MB down to 4 MB (`from_level_mt(..., 4 * 1024 * 1024)`), preventing multi-thread chunk buffering from delaying disk writes and fixing the 0% progress freeze.
+  - Wrapped 7z archive creation in a 16 MB sequential `BufWriter` for consistent write flushing.
+  - Mapped LZMA2 levels safely across hardware allocation tiers (Levels 1, 2, 3, 5, 6) to balance compression ratio with immediate desktop responsiveness.
+
+- **Zstandard `.bay` Memory Ceiling & High-Core Scaling ([compressor.rs](src-tauri/src/compressor.rs), [App.tsx](src/App.tsx))**:
+  - Bounded memory allocation on 100% Hardware Allocation (Level 19): capped write buffer to 32 MB and restricted maximum concurrent Level 19 threads to 8 (`threads.min(8)`), preventing memory spikes past 2 GB on high-core CPUs (e.g. 12–24 threads) while preserving maximum archival ratio.
+  - Scaled standard `.bay` levels across 0% (Level 1), 25% (Level 3), 50% (Level 6), and 75% (Level 9) for high real-time throughput.
+  - Added sleek amber "Ultra Archival Mode" informational notice in `App.tsx` when 100% slider is selected on `.bay` to inform users of the trade-off between maximum archival compression ratio and processing time/RAM usage.
+
+- **Eliminated Redundant Pre-Compression Disk Scan ([compressor.rs](src-tauri/src/compressor.rs))**:
+  - Removed preliminary `collect_bay_toc` directory tree traversal in `compress_bay` and `headless_quick_compress_bay`.
+  - Directory entries and file items are now collected dynamically on-the-fly during the single compression streaming pass, eliminating double-disk traversal and allowing large folder trees to begin compression immediately.
+
+- **`.zip` and `.tar` Streaming Throughput ([compressor.rs](src-tauri/src/compressor.rs))**:
+  - Capped `.zip` Deflate level to 6 across upper hardware tiers, eliminating excessive CPU cycles from Deflate level 9.
+  - Converted `.tar` file writes from small unbuffered reads to sequential streaming with `ProgressReader` into 32 MB write buffers, giving smooth incremental progress and higher disk throughput.
+
+- **Dynamic Per-Algorithm Estimated RAM UX ([App.tsx](src/App.tsx), [PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md))**:
+  - Replaced misleading system-wide free RAM subtraction in `getEstimatedRam()` with genuine, algorithm-aware peak memory calculations (LZ4, Store, Deflate, Brotli, Gamer, LZMA2, Zstandard).
+  - Included realistic safety headroom for OS thread scheduling, allocation overhead, and hash chain indexing.
+  - Added Section 9 (Algorithm-Specific RAM Footprint Matrix with Headroom) to `PERFORMANCE_GUIDE.md`.
+
+- **Development Build Speed & Compiler Optimizations ([src-tauri/Cargo.toml](src-tauri/Cargo.toml))**:
+  - Added `[profile.dev.package."*"] opt-level = 3` so compression dependencies run with full LLVM optimizations during local development and testing without slow debug crawl.
+
+---
+
 ## [v1.2.0] - 2026-10-18
 
 ### 🪟 Windows 11 Modern Context Menu & Shell Extension

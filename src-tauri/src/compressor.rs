@@ -127,7 +127,7 @@ pub fn calculate_target_threads(slider_value: i32, total_cores: usize) -> usize 
 
 /// Exact Zstd Level matrix:
 /// For .bayg: <= 25 -> Level -2 (fast acceleration), 50 -> Level 1, 75 & 100 -> Level 2
-/// For standard .bay: 0 -> Level 1, 25 -> Level 3, 50 -> Level 7, 75 -> Level 14, 100 -> Level 19.
+/// For standard .bay: 0 -> Level 1, 25 -> Level 3, 50 -> Level 6, 75 -> Level 9, 100 -> Level 19.
 pub fn calculate_zstd_level(slider_value: i32, is_gamer: bool) -> i32 {
     if is_gamer {
         match slider_value {
@@ -139,8 +139,8 @@ pub fn calculate_zstd_level(slider_value: i32, is_gamer: bool) -> i32 {
         match slider_value {
             s if s <= 0 => 1,
             s if s <= 25 => 3,
-            s if s <= 50 => 7,
-            s if s <= 75 => 14,
+            s if s <= 50 => 6,
+            s if s <= 75 => 9,
             _ => 19,
         }
     }
@@ -233,6 +233,7 @@ pub fn write_file_to_bay_archive<W: Write>(
     total_original: u64,
     app: &AppHandle,
     last_emit: &mut Instant,
+    toc_entries: &mut Vec<crate::types::ArchiveEntryItem>,
 ) -> Result<(), String> {
     // Open file first and check access BEFORE writing header to prevent framing corruption
     let mut f = match File::open(filepath) {
@@ -250,6 +251,12 @@ pub fn write_file_to_bay_archive<W: Write>(
     encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
     encoder.write_all(filename_bytes).map_err(|e| e.to_string())?;
     encoder.write_all(&file_size.to_le_bytes()).map_err(|e| e.to_string())?;
+
+    toc_entries.push(crate::types::ArchiveEntryItem {
+        name: rel_name.to_string(),
+        size: file_size,
+        is_dir: false,
+    });
 
     let mut written_bytes: u64 = 0;
     while written_bytes < file_size {
@@ -311,6 +318,7 @@ pub fn write_dir_to_bay_archive<W: Write>(
     app: &AppHandle,
     depth: usize,
     last_emit: &mut Instant,
+    toc_entries: &mut Vec<crate::types::ArchiveEntryItem>,
 ) -> Result<(), String> {
     if depth > 32 {
         return Ok(());
@@ -326,7 +334,7 @@ pub fn write_dir_to_bay_archive<W: Write>(
                     let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
                     let clean_rel = rel_str.trim_start_matches('/');
-                    write_file_to_bay_archive(&ep, clean_rel, encoder, read_buf, bytes_processed, total_original, app, last_emit)?;
+                    write_file_to_bay_archive(&ep, clean_rel, encoder, read_buf, bytes_processed, total_original, app, last_emit, toc_entries)?;
                 } else if m.is_dir() && !m.file_type().is_symlink() {
                     let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -338,8 +346,13 @@ pub fn write_dir_to_bay_archive<W: Write>(
                         encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
                         encoder.write_all(dir_bytes).map_err(|e| e.to_string())?;
                         encoder.write_all(&0u64.to_le_bytes()).map_err(|e| e.to_string())?;
+                        toc_entries.push(crate::types::ArchiveEntryItem {
+                            name: dir_name,
+                            size: 0,
+                            is_dir: true,
+                        });
                     }
-                    write_dir_to_bay_archive(&ep, base_parent, encoder, read_buf, bytes_processed, total_original, app, depth + 1, last_emit)?;
+                    write_dir_to_bay_archive(&ep, base_parent, encoder, read_buf, bytes_processed, total_original, app, depth + 1, last_emit, toc_entries)?;
                 }
             }
         }
@@ -455,10 +468,15 @@ pub fn compress_bay(
         let parent_dir = first_path.parent().unwrap_or_else(|| Path::new("."));
 
         let algo_lower = algorithm.to_lowercase();
+        let is_gamer = algo_lower.contains("gamer") || algo_lower.contains("bayg");
+        let zstd_level = calculate_zstd_level(slider_value, is_gamer);
         let mut bytes_processed: u64 = 0;
         let mut last_emit = Instant::now();
 
-        let (read_buf_size, write_buf_size) = get_io_buffers(slider_value);
+        let (read_buf_size, mut write_buf_size) = get_io_buffers(slider_value);
+        if zstd_level >= 19 {
+            write_buf_size = write_buf_size.min(32 * 1024 * 1024);
+        }
         let out_file = File::create(&temp_final)
             .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
         // Buffer capacity scaled by Hardware Allocation slider to maximize sequential throughput
@@ -475,21 +493,8 @@ pub fn compress_bay(
         // Allocate read buffer scaled by hardware allocation
         let mut read_buf = vec![0u8; read_buf_size];
 
+        // Dynamic TOC entries collected in-flight without double-scanning disk
         let mut toc_entries: Vec<crate::types::ArchiveEntryItem> = Vec::new();
-        for file_str in files {
-            let p = Path::new(file_str);
-            if p.is_file() {
-                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-                let sz = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-                toc_entries.push(crate::types::ArchiveEntryItem {
-                    name: filename.to_string(),
-                    size: sz,
-                    is_dir: false,
-                });
-            } else if p.is_dir() {
-                collect_bay_toc(p, parent_dir, &mut toc_entries, 0);
-            }
-        }
 
         if algo_lower.contains("brotli") {
             let mut out_sink = out_writer;
@@ -510,9 +515,25 @@ pub fn compress_bay(
                 let p = Path::new(file_str);
                 if p.is_file() {
                     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-                    write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit)?;
+                    write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit, &mut toc_entries)?;
                 } else if p.is_dir() {
-                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+                    let rel = p.strip_prefix(parent_dir).unwrap_or(p);
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    let clean_rel = rel_str.trim_start_matches('/').to_string();
+                    if !clean_rel.is_empty() {
+                        let dir_name = format!("{}/", clean_rel);
+                        let dir_bytes = dir_name.as_bytes();
+                        encoder.write_all(&[2u8]).map_err(|e| e.to_string())?;
+                        encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+                        encoder.write_all(dir_bytes).map_err(|e| e.to_string())?;
+                        encoder.write_all(&0u64.to_le_bytes()).map_err(|e| e.to_string())?;
+                        toc_entries.push(crate::types::ArchiveEntryItem {
+                            name: dir_name,
+                            size: 0,
+                            is_dir: true,
+                        });
+                    }
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries)?;
                 }
             }
             if is_compression_cancelled() {
@@ -536,9 +557,25 @@ pub fn compress_bay(
                 let p = Path::new(file_str);
                 if p.is_file() {
                     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-                    write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit)?;
+                    write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit, &mut toc_entries)?;
                 } else if p.is_dir() {
-                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+                    let rel = p.strip_prefix(parent_dir).unwrap_or(p);
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    let clean_rel = rel_str.trim_start_matches('/').to_string();
+                    if !clean_rel.is_empty() {
+                        let dir_name = format!("{}/", clean_rel);
+                        let dir_bytes = dir_name.as_bytes();
+                        encoder.write_all(&[2u8]).map_err(|e| e.to_string())?;
+                        encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+                        encoder.write_all(dir_bytes).map_err(|e| e.to_string())?;
+                        encoder.write_all(&0u64.to_le_bytes()).map_err(|e| e.to_string())?;
+                        toc_entries.push(crate::types::ArchiveEntryItem {
+                            name: dir_name,
+                            size: 0,
+                            is_dir: true,
+                        });
+                    }
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries)?;
                 }
             }
             if is_compression_cancelled() {
@@ -554,10 +591,11 @@ pub fn compress_bay(
             let mut out_sink = out_writer;
             out_sink.write_all(b"BAYZIP\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
-            let is_gamer = algo_lower.contains("gamer") || algo_lower.contains("bayg");
-            let zstd_level = calculate_zstd_level(slider_value, is_gamer);
             let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-            let threads = calculate_target_threads(slider_value, total_cores);
+            let mut threads = calculate_target_threads(slider_value, total_cores);
+            if zstd_level >= 19 {
+                threads = threads.min(8);
+            }
 
             let mut encoder = zstd::stream::Encoder::new(out_sink, zstd_level)
                 .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
@@ -572,9 +610,25 @@ pub fn compress_bay(
                 let p = Path::new(file_str);
                 if p.is_file() {
                     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-                    write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit)?;
+                    write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit, &mut toc_entries)?;
                 } else if p.is_dir() {
-                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit)?;
+                    let rel = p.strip_prefix(parent_dir).unwrap_or(p);
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    let clean_rel = rel_str.trim_start_matches('/').to_string();
+                    if !clean_rel.is_empty() {
+                        let dir_name = format!("{}/", clean_rel);
+                        let dir_bytes = dir_name.as_bytes();
+                        encoder.write_all(&[2u8]).map_err(|e| e.to_string())?;
+                        encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+                        encoder.write_all(dir_bytes).map_err(|e| e.to_string())?;
+                        encoder.write_all(&0u64.to_le_bytes()).map_err(|e| e.to_string())?;
+                        toc_entries.push(crate::types::ArchiveEntryItem {
+                            name: dir_name,
+                            size: 0,
+                            is_dir: true,
+                        });
+                    }
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries)?;
                 }
             }
             if is_compression_cancelled() {
@@ -654,11 +708,9 @@ pub fn compress_zip(
     let mut read_buf = vec![0u8; read_buf_size];
 
     let deflate_level = match slider_value {
-        0..=15 => 1,
-        16..=35 => 3,
-        36..=65 => 6,
-        66..=85 => 7,
-        _ => 9,
+        0..=25 => 1,
+        26..=60 => 4,
+        _ => 6,
     };
 
     for file_str in files {
@@ -899,22 +951,14 @@ pub fn compress_tar(
                             let _ = builder.append_dir(trimmed, &path);
                             add_dir_to_tar(&path, base, builder, bytes_processed, total_original, app, last_emit, depth + 1)?;
                         } else if m.is_file() {
-                            builder.append_path_with_name(&path, trimmed)
-                                .map_err(|e| format!("Tar append file error: {}", e))?;
-                            *bytes_processed += m.len();
-                            if last_emit.elapsed().as_millis() >= 50 {
-                                *last_emit = Instant::now();
-                                let pct = if total_original > 0 {
-                                    ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
-                                } else {
-                                    50.0
-                                };
-                                let _ = app.emit("compress_progress", CompressProgress {
-                                    percent: pct,
-                                    current_file: trimmed.to_string(),
-                                    bytes_processed: *bytes_processed,
-                                    total_bytes: total_original,
-                                });
+                            if let Ok(f) = File::open(&path) {
+                                let mut header = tar::Header::new_gnu();
+                                header.set_size(m.len());
+                                header.set_mode(0o644);
+                                header.set_cksum();
+                                let mut prog_reader = ProgressReader::new(f, bytes_processed, total_original, app, last_emit, trimmed);
+                                builder.append_data(&mut header, trimmed, &mut prog_reader)
+                                    .map_err(|e| format!("Tar append file error: {}", e))?;
                             }
                         }
                     }
@@ -933,22 +977,16 @@ pub fn compress_tar(
             let p = Path::new(file_str);
             let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
             if p.is_file() {
-                builder.append_path_with_name(p, name)
-                    .map_err(|e| format!("Tar append file error: {}", e))?;
-                if let Ok(m) = p.metadata() {
-                    bytes_processed += m.len();
+                if let Ok(f) = File::open(p) {
+                    let sz = p.metadata().map(|m| m.len()).unwrap_or(0);
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(sz);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    let mut prog_reader = ProgressReader::new(f, &mut bytes_processed, total_original, app, &mut last_emit, name);
+                    builder.append_data(&mut header, name, &mut prog_reader)
+                        .map_err(|e| format!("Tar append file error: {}", e))?;
                 }
-                let pct = if total_original > 0 {
-                    ((bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
-                } else {
-                    50.0
-                };
-                let _ = app.emit("compress_progress", CompressProgress {
-                    percent: pct,
-                    current_file: name.to_string(),
-                    bytes_processed,
-                    total_bytes: total_original,
-                });
             } else if p.is_dir() {
                 let parent = p.parent().unwrap_or(p);
                 let _ = builder.append_dir(name, p);
@@ -998,8 +1036,11 @@ pub fn compress_7z(
     ));
 
     let res = (|| -> Result<(), String> {
-        let mut sz = ArchiveWriter::create(&temp_output)
+        let out_file = File::create(&temp_output)
             .map_err(|e| format!("Failed to create 7z archive: {}", e))?;
+        let buf_writer = BufWriter::with_capacity(16 * 1024 * 1024, out_file);
+        let mut sz = ArchiveWriter::new(buf_writer)
+            .map_err(|e| format!("Failed to create 7z writer: {}", e))?;
 
         let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
         let mut methods: Vec<EncoderConfiguration> = Vec::new();
@@ -1014,14 +1055,14 @@ pub fn compress_7z(
         let threads = calculate_target_threads(slider_value, total_cores) as u32;
         let lzma_level = match slider_value {
             s if s <= 0 => 1,
-            25 => 3,
-            50 => 5,
-            75 => 7,
-            _ => 9,
+            25 => 2,
+            50 => 3,
+            75 => 5,
+            _ => 6,
         };
 
         let lzma2_opt = if threads > 1 {
-            sevenz_rust2::encoder_options::Lzma2Options::from_level_mt(lzma_level, threads, 32 * 1024 * 1024)
+            sevenz_rust2::encoder_options::Lzma2Options::from_level_mt(lzma_level, threads, 4 * 1024 * 1024)
         } else {
             sevenz_rust2::encoder_options::Lzma2Options::from_level(lzma_level)
         };
@@ -1197,17 +1238,6 @@ pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), S
 pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool) -> Result<(), String> {
     let parent = p.parent().unwrap_or(p);
     let mut toc_entries: Vec<crate::types::ArchiveEntryItem> = Vec::new();
-    if p.is_file() {
-        let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-        let sz = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-        toc_entries.push(crate::types::ArchiveEntryItem {
-            name: filename.to_string(),
-            size: sz,
-            is_dir: false,
-        });
-    } else if p.is_dir() {
-        collect_bay_toc(p, parent, &mut toc_entries, 0);
-    }
 
     let (read_buf_size, write_buf_size) = get_io_buffers(50);
     let out_file = File::create(output_path)
@@ -1240,6 +1270,11 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
             let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
             let _ = encoder.write_all(filename_bytes);
             let _ = encoder.write_all(&file_size.to_le_bytes());
+            toc_entries.push(crate::types::ArchiveEntryItem {
+                name: filename.to_string(),
+                size: file_size,
+                is_dir: false,
+            });
 
             let mut written: u64 = 0;
             while written < file_size {
@@ -1264,7 +1299,24 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
             }
         }
     } else if p.is_dir() {
-        fn add_dir<W: Write>(dir: &Path, base_parent: &Path, encoder: &mut zstd::stream::Encoder<W>, read_buf: &mut [u8], depth: usize) {
+        let rel_name = p.strip_prefix(parent).unwrap_or(p);
+        let rel_str = rel_name.to_string_lossy().replace('\\', "/");
+        let clean_rel = rel_str.trim_start_matches('/').to_string();
+        if !clean_rel.is_empty() {
+            let dir_name = format!("{}/", clean_rel);
+            let dir_bytes = dir_name.as_bytes();
+            let _ = encoder.write_all(&[2u8]);
+            let _ = encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes());
+            let _ = encoder.write_all(dir_bytes);
+            let _ = encoder.write_all(&0u64.to_le_bytes());
+            toc_entries.push(crate::types::ArchiveEntryItem {
+                name: dir_name,
+                size: 0,
+                is_dir: true,
+            });
+        }
+
+        fn add_dir<W: Write>(dir: &Path, base_parent: &Path, encoder: &mut zstd::stream::Encoder<W>, read_buf: &mut [u8], depth: usize, toc_entries: &mut Vec<crate::types::ArchiveEntryItem>) {
             if depth > 32 {
                 return;
             }
@@ -1283,6 +1335,11 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
                                 let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
                                 let _ = encoder.write_all(bytes);
                                 let _ = encoder.write_all(&file_size.to_le_bytes());
+                                toc_entries.push(crate::types::ArchiveEntryItem {
+                                    name: clean_rel,
+                                    size: file_size,
+                                    is_dir: false,
+                                });
 
                                 let mut written: u64 = 0;
                                 while written < file_size {
@@ -1317,14 +1374,19 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
                                 let _ = encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes());
                                 let _ = encoder.write_all(dir_bytes);
                                 let _ = encoder.write_all(&0u64.to_le_bytes());
+                                toc_entries.push(crate::types::ArchiveEntryItem {
+                                    name: dir_name,
+                                    size: 0,
+                                    is_dir: true,
+                                });
                             }
-                            add_dir(&entry_path, base_parent, encoder, read_buf, depth + 1);
+                            add_dir(&entry_path, base_parent, encoder, read_buf, depth + 1, toc_entries);
                         }
                     }
                 }
             }
         }
-        add_dir(p, parent, &mut encoder, &mut read_buf, 0);
+        add_dir(p, parent, &mut encoder, &mut read_buf, 0, &mut toc_entries);
     }
 
     let _ = encoder.write_all(&[0u8]); // 0 = EOF
@@ -1335,16 +1397,19 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
 }
 
 pub fn headless_quick_compress_7z(p: &Path, output_path: &Path) -> Result<(), String> {
-    let mut sz = ArchiveWriter::create(output_path)
+    let out_file = File::create(output_path)
+        .map_err(|e| format!("Failed to create 7z: {}", e))?;
+    let buf_writer = BufWriter::with_capacity(16 * 1024 * 1024, out_file);
+    let mut sz = ArchiveWriter::new(buf_writer)
         .map_err(|e| format!("Failed to create 7z: {}", e))?;
     sz.set_encrypt_header(false);
 
     let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
     let threads = calculate_target_threads(50, total_cores) as u32;
     let lzma2_opt = if threads > 1 {
-        sevenz_rust2::encoder_options::Lzma2Options::from_level_mt(5, threads, 32 * 1024 * 1024)
+        sevenz_rust2::encoder_options::Lzma2Options::from_level_mt(3, threads, 4 * 1024 * 1024)
     } else {
-        sevenz_rust2::encoder_options::Lzma2Options::from_level(5)
+        sevenz_rust2::encoder_options::Lzma2Options::from_level(3)
     };
     sz.set_content_methods(vec![lzma2_opt.into()]);
 
