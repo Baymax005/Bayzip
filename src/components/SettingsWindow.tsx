@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { APP_VERSION } from "../version";
 
 export function SettingsWindow() {
   const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
@@ -226,7 +227,7 @@ export function SettingsWindow() {
             </div>
             <div>
               <p className="text-xs font-semibold text-white">Application Updates</p>
-              <p className="text-[11px] text-[#888888]">Current version v1.2.0 • Up to date</p>
+              <p className="text-[11px] text-[#888888]">Current version v{APP_VERSION} • Up to date</p>
             </div>
           </div>
           <button
@@ -241,7 +242,7 @@ export function SettingsWindow() {
 
       {/* Footer */}
       <div className="bg-[#181818] px-6 py-2.5 border-t border-[#2A2A2A] flex items-center justify-between text-[11px] text-[#7A7A7A] shrink-0">
-        <span>Bayzip v1.2.0 • Native Settings Window</span>
+        <span>Bayzip v{APP_VERSION} • Native Settings Window</span>
         <span className="font-mono text-[#888888]">Press Esc to close</span>
       </div>
     </div>

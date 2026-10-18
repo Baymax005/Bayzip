@@ -1,6 +1,6 @@
 [package]
 name = "bayzip_shell"
-version = "1.2.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Muhammad Ali (Baymax)"]
 description = "Bayzip Windows 11 Modern Context Menu Shell Extension (IExplorerCommand)"

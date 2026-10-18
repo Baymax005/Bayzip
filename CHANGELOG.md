@@ -4,7 +4,7 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ---
 
-## [v1.2.0] - 2026-10-18
+## [v1.2.0] - 2026-10-19
 
 ### 🪟 Windows 11 Modern Context Menu & Shell Extension
 - **Native Windows 11 Top-Level Context Menu ([crates/bayzip_shell](src-tauri/crates/bayzip_shell))**:
@@ -18,7 +18,7 @@ All notable changes, version milestones, security fixes, and performance enhance
     - **Extract Here**: Instant headless multi-format extraction to the current working directory.
     - **Open in Bayzip**: Launches the modern Fluent GUI inspector.
 - **Sparse Package Identity Integration ([AppxManifest.xml](src-tauri/crates/bayzip_shell/AppxManifest.xml), [registry.rs](src-tauri/src/registry.rs))**:
-  - Authored standard Windows Sparse Package manifest (`PackageFullName: Bayzip.ShellExtension_1.2.0.0_x64__b5n7qtqag6tr4`) supporting external loose deployment via `uap10:AllowExternalContent` and `uap10:RuntimeBehavior="win32App"`.
+  - Authored standard Windows Sparse Package manifest (`Bayzip.ShellExtension_1.0.0.0_x64__...`) supporting external loose deployment via `uap10:AllowExternalContent` and `uap10:RuntimeBehavior="win32App"`.
   - Configured `desktop4:FileExplorerContextMenus` targeting `*` and `Directory` targets with alphanumeric verb IDs (`BayzipContextMenuAllFiles`, `BayzipContextMenuDirectory`).
   - Configured in-process STA COM activation via `com:SurrogateServer`.
   - Added automatic background registration on startup via `Add-AppxPackage -Register` when running on Windows 11 (`Build >= 22000`).

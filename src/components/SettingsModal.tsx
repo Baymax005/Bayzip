@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { APP_VERSION } from "../version";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -247,7 +248,7 @@ export function SettingsModal({
               </div>
               <div>
                 <p className="text-xs font-semibold text-white">Application Updates</p>
-                <p className="text-[11px] text-[#888888]">Current version v1.2.0 • Up to date</p>
+                <p className="text-[11px] text-[#888888]">Current version v{APP_VERSION} • Up to date</p>
               </div>
             </div>
             <button
