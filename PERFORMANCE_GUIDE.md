@@ -19,7 +19,27 @@ The **Hardware Allocation** slider controls three core parameters simultaneously
 | **75% (Performance)**| `max(1, (Total * 3) / 4)` | **16 MB** | **96 MB** | Below Normal | Fast compression when idle or web browsing |
 | **100% (Maximum)** | **All Cores (100%)** | **16 MB** | **128 MB** | Below Normal | Dedicated maximum hardware throughput |
 
+### 🔄 Two-Tier Sequential I/O Architecture (v1.2.3)
+
+Bayzip decouples memory allocation from physical disk reads to guarantee zero freezes on slow drives and line-rate speed on fast drives:
+
+1. **RAM Allocation Capacity (`read_buf` & `write_buf`)**:
+   - Governed by the slider table above (2 MB – 16 MB read, 16 MB – 128 MB write).
+   - Pre-allocated in RAM to hold streaming chunks and batch write bursts.
+2. **Physical Storage Read Slicing (`slice_size`)**:
+   - The exact maximum byte count requested per `f.read()` system call from the Windows kernel storage driver (`usbstor.sys`, `storahci.sys`, `stornvme.sys`).
+   - Automatically detected via Win32 `IOCTL_STORAGE_QUERY_PROPERTY` and cached atomically:
+     - **External USB / Flash Thumb Drives / Ext HDDs**: **Fixed 1 MB** (safe against controller retries/bad sectors)
+     - **Internal SATA SSD / HDD**: **Fixed 4 MB** (aligns with AHCI PRD tables & read-ahead buffers)
+     - **Internal PCIe NVMe SSD**: **Fixed 8 MB** (saturates multi-gigabyte PCIe line rate)
+     - **Network / UNC Share**: **Fixed 2 MB** (safe fallback)
+
+$$\text{Effective Syscall Read Chunk} = \min(\text{Slider RAM Buffer}, \text{Hardware Slice Size})$$
+
+*Example:* At 100% Slider (16 MB RAM buffer), reading from an **External USB HDD** reads in safe **1 MB slices** (preventing OS freezes), while reading from an **Internal NVMe SSD** reads in full **8 MB bursts** (maximum line speed). In both cases, the **128 MB write buffer** ensures compressed output is written in smooth sequential bursts.
+
 ---
+
 
 ## 🏎️ 2. Format: `.bayg` (Fast Gaming & Modpack Preset)
 
