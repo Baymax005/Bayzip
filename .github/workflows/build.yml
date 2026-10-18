@@ -29,7 +29,12 @@ jobs:
         run: npm install
 
       - name: Build Windows 11 Shell Extension DLL
-        run: cargo build --release --package bayzip_shell
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path src-tauri/Cargo.toml --package bayzip_shell
+          New-Item -ItemType Directory -Force -Path src-tauri/crates/bayzip_shell/target/release
+          Copy-Item src-tauri/target/release/bayzip_shell.dll -Destination src-tauri/crates/bayzip_shell/target/release/bayzip_shell.dll -Force
+
 
       - name: Clean up stale draft releases
         shell: bash

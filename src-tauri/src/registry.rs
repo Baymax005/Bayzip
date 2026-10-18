@@ -40,8 +40,11 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             // Deploy bayzip_shell.dll to %LOCALAPPDATA%\Bayzip\bayzip_shell.dll (Embedded directly in binary)
             let dest_dll = app_dir.join("bayzip_shell.dll");
-            let _ = std::fs::write(&dest_dll, include_bytes!("../crates/bayzip_shell/target/release/bayzip_shell.dll"));
-            if !dest_dll.exists() {
+            let embedded_dll = include_bytes!("../crates/bayzip_shell/target/release/bayzip_shell.dll");
+            if embedded_dll.len() > 1024 {
+                let _ = std::fs::write(&dest_dll, embedded_dll);
+            }
+            if !dest_dll.exists() || dest_dll.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
                 if let Some(exe_parent) = exe_path.parent() {
                     let candidate_dll = exe_parent.join("bayzip_shell.dll");
                     if candidate_dll.exists() {
