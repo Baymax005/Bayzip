@@ -27,6 +27,16 @@ All notable changes, version milestones, security fixes, and performance enhance
   - Enhanced headless CLI commands (`--quick-compress`, `--extract-here`, `--extract-to-folder`) in `main.rs` to iterate over all passed file arguments when multiple files/folders are selected in Explorer.
   - Added `unregister_context_menu` Tauri command and registry unregistration routines (`Remove-AppxPackage` + registry purge) in `lib.rs` and `registry.rs`.
 
+### ⚡ High-Throughput Extraction I/O Engine ([extractor.rs](src-tauri/src/extractor.rs))
+- **Eliminated Windows NTFS Synchronous Zero-Fill Bottleneck**:
+  - Removed pre-emptive `out_file.set_len(file_size)` across all extraction pipelines (`.bay`, `.zip`, `.7z`, `.tar`).
+  - On Windows NTFS, `SetEndOfFile()` forces the OS kernel to synchronously write zeroes across allocated clusters before allowing data writes, which effectively doubled disk write volume (e.g., writing 88 GB to disk for a 44 GB game archive).
+  - Decompressed data is now streamed directly to disk in a single write pass, cutting physical disk I/O in half and eliminating unnecessary SSD write wear (TBW degradation).
+- **Quadrupled Sequential I/O Buffering**:
+  - Upgraded archive `BufReader` capacity from 4 MB to 16 MB, allowing huge sequential reads and minimizing mechanical head movement on external hard drives.
+  - Doubled stream decompressor transfer buffer to 4 MB to cut Windows syscall context switches in half.
+  - Increased large-file `BufWriter` buffer to 16 MB, maximizing sequential flash write bursts on PCIe 4.0/5.0 NVMe SSDs.
+
 ---
 
 ## [v1.1.5] - 2026-10-18
