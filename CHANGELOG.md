@@ -4,6 +4,27 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ---
 
+## [v1.1.5] - 2026-10-18
+
+### 🔍 Extended Magic Byte Signatures & Universal Inspection
+- **Extended Container Formats ([types.rs](src-tauri/src/types.rs), [inspector.rs](src-tauri/src/inspector.rs))**:
+  - Added enum variants `Bzip2`, `Xz`, `Zstd`, `Iso`, and `Cab` to `ArchiveFormat`.
+  - Added binary magic-byte detection for:
+    - **BZip2 (`.bz2`, `.tar.bz2`)**: `42 5A 68` (`BZh`)
+    - **XZ (`.xz`, `.tar.xz`)**: `FD 37 7A 58 5A 00` (`\xFD7zXZ\x00`)
+    - **Zstandard (`.zst`, `.tar.zst`)**: `28 B5 2F FD` (Little-endian `0xFD2FB528`)
+    - **Microsoft Cabinet (`.cab`)**: `4D 53 43 46` (`MSCF`)
+    - **ISO 9660 Disc Images (`.iso`)**: Sector 16 header at byte offset `32768 + 1` (`0x8001`) checking for standard identifier `CD001`.
+  - Routed archive listing and table of contents generation through `list_tar_entries` (`tar.exe -tvf`).
+  - Routed preview extraction through `preview_rar_entry_bytes` (`tar.exe -xf ... -O -- ...`), providing zero-disk streaming in-memory previews for images, text, and code files inside `.iso`, `.cab`, `.tar.bz2`, `.tar.xz`, and `.tar.zst`.
+- **Universal Single-Root Extraction ([extractor.rs](src-tauri/src/extractor.rs))**:
+  - Unified extraction dispatch and single-root folder de-nesting for `Bzip2`, `Xz`, `Zstd`, `Iso`, and `Cab` using `extract_with_system_tar`, preventing redundant `Folder/Folder/` nested extraction.
+- **Windows Registry & Frontend Associations ([registry.rs](src-tauri/src/registry.rs), [App.tsx](src/App.tsx))**:
+  - Registered `.bz2`, `.xz`, `.zst`, `.iso`, and `.cab` in Windows HKCU registry for default file associations and context menu options.
+  - Added `.iso` and `.cab` to the UI file picker and drag-and-drop filters.
+
+---
+
 ## [v1.1.4] - 2026-10-18
 
 ### 🛡️ Format Hardening & Container Audit

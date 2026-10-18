@@ -1366,7 +1366,7 @@ pub fn universal_extract(
                     extract_with_system_tar(archive_path, dest_dir, app, excluded)
                 })
         },
-        ArchiveFormat::Tar | ArchiveFormat::TarGz => {
+        ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd | ArchiveFormat::Iso | ArchiveFormat::Cab => {
             extract_with_system_tar(archive_path, dest_dir, app, excluded)
                 .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app, excluded))
         },
@@ -1405,10 +1405,10 @@ pub fn extract_archive_sync(
     let stem = archive_stem_name(path);
 
     let format = detect_archive_type(path);
-    let is_tar_or_rar = matches!(format, ArchiveFormat::Rar | ArchiveFormat::Tar | ArchiveFormat::TarGz)
+    let is_tar_or_rar = matches!(format, ArchiveFormat::Rar | ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd | ArchiveFormat::Iso | ArchiveFormat::Cab)
         || path.extension().and_then(|s| s.to_str()).map(|ext| {
             let l = ext.to_lowercase();
-            l == "rar" || l == "tar" || l == "gz" || l == "tgz"
+            l == "rar" || l == "tar" || l == "gz" || l == "tgz" || l == "bz2" || l == "xz" || l == "zst" || l == "iso" || l == "cab"
         }).unwrap_or(false);
 
     let rar_single_root_match = if is_tar_or_rar && extract_to_subfolder.unwrap_or(true) {

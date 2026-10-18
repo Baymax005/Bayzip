@@ -172,11 +172,36 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
     if bytes_read >= 2 && magic[0] == 0x1F && magic[1] == 0x8B {
         return ArchiveFormat::TarGz;
     }
+    // BZip2: 0x42 0x5A 0x68 ("BZh")
+    if bytes_read >= 3 && &magic[0..3] == b"BZh" {
+        return ArchiveFormat::Bzip2;
+    }
+    // XZ: 0xFD 0x37 0x7A 0x58 0x5A 0x00 ("\xFD7zXZ\x00")
+    if bytes_read >= 6 && &magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] {
+        return ArchiveFormat::Xz;
+    }
+    // Zstandard: 0x28 0xB5 0x2F 0xFD (0xFD2FB528 Little Endian)
+    if bytes_read >= 4 && &magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
+        return ArchiveFormat::Zstd;
+    }
+    // Microsoft Cabinet: 0x4D 0x53 0x43 0x46 ("MSCF")
+    if bytes_read >= 4 && &magic[0..4] == b"MSCF" {
+        return ArchiveFormat::Cab;
+    }
 
+    // POSIX TAR (ustar at offset 257)
     if let Ok(_) = file.seek(std::io::SeekFrom::Start(257)) {
         let mut ustar = [0u8; 5];
         if file.read_exact(&mut ustar).is_ok() && &ustar == b"ustar" {
             return ArchiveFormat::Tar;
+        }
+    }
+
+    // ISO 9660 Disc Image: Sector 16 starts at 32768 (0x8000). Byte 0 is descriptor type, bytes 1..6 are "CD001"
+    if let Ok(_) = file.seek(std::io::SeekFrom::Start(0x8000 + 1)) {
+        let mut cd001 = [0u8; 5];
+        if file.read_exact(&mut cd001).is_ok() && &cd001 == b"CD001" {
+            return ArchiveFormat::Iso;
         }
     }
 
@@ -188,6 +213,11 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
         "rar" => ArchiveFormat::Rar,
         "tar" => ArchiveFormat::Tar,
         "gz" | "tgz" => ArchiveFormat::TarGz,
+        "bz2" => ArchiveFormat::Bzip2,
+        "xz" => ArchiveFormat::Xz,
+        "zst" => ArchiveFormat::Zstd,
+        "iso" => ArchiveFormat::Iso,
+        "cab" => ArchiveFormat::Cab,
         _ => ArchiveFormat::Unknown,
     }
 }
@@ -896,7 +926,7 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
     let (entries, file_count, total_uncompressed_size) = match detected {
         ArchiveFormat::Zip => list_zip_entries(p, pwd_ref),
         ArchiveFormat::SevenZip => list_7z_entries(p, pwd_ref),
-        ArchiveFormat::Tar | ArchiveFormat::TarGz => list_tar_entries(p),
+        ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd | ArchiveFormat::Iso | ArchiveFormat::Cab => list_tar_entries(p),
         ArchiveFormat::Rar => list_rar_entries(p),
         ArchiveFormat::Bay => list_bay_entries(p, pwd_ref),
         _ => {
@@ -905,7 +935,7 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
                 list_zip_entries(p, pwd_ref)
             } else if lower.ends_with(".7z") {
                 list_7z_entries(p, pwd_ref)
-            } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+            } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".tar.bz2") || lower.ends_with(".bz2") || lower.ends_with(".tar.xz") || lower.ends_with(".xz") || lower.ends_with(".tar.zst") || lower.ends_with(".zst") || lower.ends_with(".iso") || lower.ends_with(".cab") {
                 list_tar_entries(p)
             } else if lower.ends_with(".rar") {
                 list_rar_entries(p)
@@ -929,7 +959,13 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
         ArchiveFormat::Zip => ("ZIP Archive (.zip)".to_string(), true),
         ArchiveFormat::SevenZip => ("7-Zip Archive (.7z)".to_string(), true),
         ArchiveFormat::Rar => ("RAR Archive (.rar)".to_string(), true),
-        ArchiveFormat::Tar | ArchiveFormat::TarGz => ("TAR Archive (.tar)".to_string(), true),
+        ArchiveFormat::Tar => ("TAR Archive (.tar)".to_string(), true),
+        ArchiveFormat::TarGz => ("GZip Archive (.gz / .tgz)".to_string(), true),
+        ArchiveFormat::Bzip2 => ("BZip2 Archive (.bz2)".to_string(), true),
+        ArchiveFormat::Xz => ("XZ Archive (.xz)".to_string(), true),
+        ArchiveFormat::Zstd => ("Zstandard Archive (.zst)".to_string(), true),
+        ArchiveFormat::Iso => ("ISO Disc Image (.iso)".to_string(), true),
+        ArchiveFormat::Cab => ("Microsoft Cabinet (.cab)".to_string(), true),
         ArchiveFormat::Unknown => {
             let lower = path.to_lowercase();
             if lower.ends_with(".bayg") {
@@ -942,8 +978,20 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
                 ("7-Zip Archive (.7z)".to_string(), true)
             } else if lower.ends_with(".rar") {
                 ("RAR Archive (.rar)".to_string(), true)
-            } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+            } else if lower.ends_with(".tar") {
                 ("TAR Archive (.tar)".to_string(), true)
+            } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".gz") {
+                ("GZip Archive (.gz / .tgz)".to_string(), true)
+            } else if lower.ends_with(".tar.bz2") || lower.ends_with(".bz2") {
+                ("BZip2 Archive (.bz2)".to_string(), true)
+            } else if lower.ends_with(".tar.xz") || lower.ends_with(".xz") {
+                ("XZ Archive (.xz)".to_string(), true)
+            } else if lower.ends_with(".tar.zst") || lower.ends_with(".zst") {
+                ("Zstandard Archive (.zst)".to_string(), true)
+            } else if lower.ends_with(".iso") {
+                ("ISO Disc Image (.iso)".to_string(), true)
+            } else if lower.ends_with(".cab") {
+                ("Microsoft Cabinet (.cab)".to_string(), true)
             } else {
                 ("Unknown".to_string(), false)
             }
@@ -1404,7 +1452,7 @@ pub fn preview_archive_entry_sync(
         ArchiveFormat::Zip => preview_zip_entry_bytes(p, entry_name, password)?,
         ArchiveFormat::SevenZip => preview_7z_entry_bytes(p, entry_name, password)?,
         ArchiveFormat::Tar | ArchiveFormat::TarGz => preview_tar_entry_bytes(p, entry_name)?,
-        ArchiveFormat::Rar => preview_rar_entry_bytes(p, entry_name)?,
+        ArchiveFormat::Rar | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd | ArchiveFormat::Iso | ArchiveFormat::Cab => preview_rar_entry_bytes(p, entry_name)?,
         ArchiveFormat::Unknown => {
             let lower = archive_path.to_lowercase();
             if lower.ends_with(".bay") || lower.ends_with(".bayg") {
@@ -1415,7 +1463,7 @@ pub fn preview_archive_entry_sync(
                 preview_7z_entry_bytes(p, entry_name, password)?
             } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
                 preview_tar_entry_bytes(p, entry_name)?
-            } else if lower.ends_with(".rar") {
+            } else if lower.ends_with(".rar") || lower.ends_with(".tar.bz2") || lower.ends_with(".bz2") || lower.ends_with(".tar.xz") || lower.ends_with(".xz") || lower.ends_with(".tar.zst") || lower.ends_with(".zst") || lower.ends_with(".iso") || lower.ends_with(".cab") {
                 preview_rar_entry_bytes(p, entry_name)?
             } else {
                 return Err("Unsupported archive format for preview".into());

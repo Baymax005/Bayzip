@@ -31,6 +31,11 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 ".tar",
                 ".gz",
                 ".tgz",
+                ".bz2",
+                ".xz",
+                ".zst",
+                ".iso",
+                ".cab",
             ];
 
             let mut reg_content = String::from("Windows Registry Editor Version 5.00\r\n\r\n");

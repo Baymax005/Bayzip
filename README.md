@@ -1,4 +1,4 @@
-# 📦 Bayzip (v1.1.4)
+# 📦 Bayzip (v1.1.5)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, and seamless Windows File Explorer shell integration.
 
@@ -93,6 +93,11 @@
 | **7-Zip** | `.7z` | ✅ | ✅ | ✅ | LZMA2 Multi-Threaded |
 | **TAR** | `.tar` | ✅ | ✅ | ✅ | Uncompressed (Store) |
 | **GZip / TarGz** | `.gz`, `.tgz` | — | ✅ | ✅ | Deflate / Tar |
+| **BZip2 / TarBz2** | `.bz2`, `.tar.bz2` | — | ✅ | ✅ | BZip2 / Tar |
+| **XZ / TarXz** | `.xz`, `.tar.xz` | — | ✅ | ✅ | LZMA2 / Tar |
+| **Zstandard Tar** | `.zst`, `.tar.zst` | — | ✅ | ✅ | Zstandard / Tar |
+| **ISO Image** | `.iso` | — | ✅ | ✅ | ISO 9660 Disc Image |
+| **Cabinet** | `.cab` | — | ✅ | ✅ | Microsoft Cabinet |
 | **RAR** | `.rar` | — | ✅ | ✅ | Decompress / Preview only |
 
 ---
@@ -101,7 +106,19 @@
 
 > 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases, see [CHANGELOG.md](CHANGELOG.md).
 
-### v1.1.4 (Latest)
+### v1.1.5 (Latest)
+- **Extended Magic Byte Signatures & Universal Format Detection**:
+  - Implemented raw byte inspection for 5 additional archive and container standards:
+    - **BZip2 (`.bz2`, `.tar.bz2`)**: `42 5A 68` (`BZh`)
+    - **XZ (`.xz`, `.tar.xz`)**: `FD 37 7A 58 5A 00` (`\xFD7zXZ\x00`)
+    - **Zstandard (`.zst`, `.tar.zst`)**: `28 B5 2F FD` (`(\xB5/\xFD`)
+    - **ISO 9660 Disc Image (`.iso`)**: `43 44 30 30 31` (`CD001` at sector 16 / offset `32768`)
+    - **Microsoft Cabinet (`.cab`)**: `4D 53 43 46` (`MSCF`)
+  - Enables Bayzip to detect, inspect, and extract renamed, corrupted-extension, or extensionless archives via `tar.exe` and native decoders.
+  - Added in-memory file previewing via system tar stdout streaming (`-O`) for `.bz2`, `.xz`, `.zst`, `.iso`, and `.cab`.
+  - Added Windows File Explorer context menu and open dialog associations for `.bz2`, `.xz`, `.zst`, `.iso`, and `.cab`.
+
+### v1.1.4
 - **Format Hardening & Audit Across All Containers**:
   - **RAR Encryption & Parsing**: Added detection for encrypted RAR4 and RAR5 archives in `is_archive_encrypted`. Revamped `list_rar_entries` to support both 2-column ISO/locale and 3-column dates while strictly preserving multi-space filenames. Corrected empty-buffer preview handling.
   - **ZIP Deflate Level & Locked File Safety**: Integrated hardware slider scaling into Deflate compression levels (1, 3, 6, 7, 9) and prevented 0-byte ghost entries on locked or inaccessible files by pre-validating file read handles before starting ZIP entry headers.

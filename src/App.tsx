@@ -46,6 +46,8 @@ const ARCHIVE_EXTS = [
   ".zst",
   ".bz2",
   ".xz",
+  ".iso",
+  ".cab",
 ];
 
 function getArchiveStemName(filename: string): string {
@@ -494,7 +496,7 @@ function App() {
         filters: [
           {
             name: "Supported Archives",
-            extensions: ["bay", "bayg", "zip", "7z", "tar", "gz", "tgz", "rar"],
+            extensions: ["bay", "bayg", "zip", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "iso", "cab", "rar"],
           },
           {
             name: "Bayzip Archives (*.bay, *.bayg)",
@@ -513,8 +515,12 @@ function App() {
             extensions: ["rar"],
           },
           {
-            name: "TAR Archives (*.tar, *.tar.gz)",
-            extensions: ["tar", "gz", "tgz"],
+            name: "TAR Archives (*.tar, *.gz, *.bz2, *.xz, *.zst)",
+            extensions: ["tar", "gz", "tgz", "bz2", "xz", "zst"],
+          },
+          {
+            name: "ISO & Cabinet (*.iso, *.cab)",
+            extensions: ["iso", "cab"],
           },
           {
             name: "All Files (*.*)",

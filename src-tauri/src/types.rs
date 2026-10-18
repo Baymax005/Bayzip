@@ -8,6 +8,11 @@ pub enum ArchiveFormat {
     Tar,
     TarGz,
     Rar,
+    Bzip2,
+    Xz,
+    Zstd,
+    Iso,
+    Cab,
     Unknown,
 }
 
