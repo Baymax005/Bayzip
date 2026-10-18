@@ -1,6 +1,6 @@
-# 📦 Bayzip (v1.2.0)
+# 📦 Bayzip (v1.2.4)
 
-**Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, and seamless Windows File Explorer shell integration.
+**Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, and seamless Windows File Explorer shell integration.
 
 
 ---
@@ -51,7 +51,9 @@
 - **Hardware-Aware Performance Allocation**:
   - Live hardware specs detection (CPU cores and free RAM).
   - Slider controls compression intensity and core allocation (`0%` -> 1 core, `50%` -> half cores, `100%` -> full multi-threading).
-  - Dynamic I/O sizing tied to allocation slider: read buffers scale from 2 MB to 16 MB; write buffers scale from 16 MB up to 128 MB for maximum NVMe burst throughput and reduced system call overhead.
+  - **Source & Destination Hardware-Aware I/O Architecture**:
+    - **Physical Read Slicing**: Queries underlying drive bus via Win32 `IOCTL_STORAGE_QUERY_PROPERTY` to slice reads safely (1 MB for USB, 4 MB for SATA, 8 MB for NVMe).
+    - **Destination-Aware Write Capping**: Automatically caps output write buffers (16 MB for USB thumb drives under Windows Quick-Removal policy, 64 MB for SATA HDD/SSD, up to 128 MB for PCIe NVMe line rate), eliminating 20-second thread hangs on external flash while keeping progress bars at 20 FPS with instant cancellation.
   - OS priority scheduling (`ScopedPriorityGuard`) sets background compression threads to below-normal priority to maintain 100% system and game responsiveness.
 - **Format Support**:
   - **`.bay`**: High-performance custom format supporting **Zstandard** (Levels 1–19), **Brotli**, and **LZ4**.
@@ -118,7 +120,28 @@
 
 > 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases, see [CHANGELOG.md](CHANGELOG.md).
 
-### v1.2.0 (Latest)
+### v1.2.4 (Latest)
+- **Destination-Aware Write Buffer Capping**:
+  - Implemented dynamic target drive bus classification and write buffer capping to address Windows 10/11 "Quick Removal" default policy on external USB devices.
+  - Capped write buffers at 16 MB for USB thumb drives (preventing 15–25s thread stalls), 64 MB for SATA SSD/HDD, and up to 128 MB for PCIe NVMe SSDs.
+  - Unified storage bus classification (`DriveBusKind`) with atomic 1-clock-cycle caching (`DRIVE_BUS_CACHE`).
+- **100% Offline Core Guarantee**: Pure zero-network architecture with zero telemetry, zero analytics, and zero background network calls.
+
+### v1.2.3
+- **Hardware-Aware Physical Storage Read Slicing**:
+  - Deterministic drive bus detection via Win32 `IOCTL_STORAGE_QUERY_PROPERTY`: 1 MB for external USB drives, 4 MB for SATA SSD/HDD, 8 MB for PCIe NVMe SSDs, and 2 MB for network/UNC.
+  - Decoupled pre-allocated RAM buffers from low-level storage driver syscall chunk sizes to eliminate OS freezes and controller deadlocks.
+
+### v1.2.2
+- **Embedded Shell Extension DLL**: Embedded `bayzip_shell.dll` directly inside `bayzip.exe` via `include_bytes!`, ensuring Windows 11 context menu components deploy automatically without external companion files.
+- **Shell Icon Cache Flush**: Integrated `SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_FLUSH)` and `ie4uinit.exe` to force instant icon association refresh without rebooting Explorer.
+- **Responsive I/O Cancellation**: Added 1 MB sliced reading in compressor routines to ensure clicking "Cancel" halts immediately on external USB drives.
+
+### v1.2.1
+- **Settings Window Controls**: Fixed window dragging, minimize, and close controls via `core:window:allow-hide` capability.
+- **7-Zip Progress & Streaming**: Reduced LZMA2 chunk buffer from 32 MB to 4 MB to eliminate 0% progress reporting stalls.
+
+### v1.2.0
 - **Windows 11 Modern Context Menu & Shell Extension**:
   - Implemented companion native Windows shell extension sub-crate `bayzip_shell` compiling to a high-performance in-process COM dynamic-link library (`bayzip_shell.dll`).
   - Appears directly at the top level of the Windows 11 File Explorer context menu (no need to click "Show more options" / Shift+F10).
