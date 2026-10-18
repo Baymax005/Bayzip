@@ -106,7 +106,7 @@ impl<'a, R: Read + Seek> Seek for ProgressReader<'a, R> {
 
 use crate::types::{CompressPayload, CompressResponse, CompressProgress};
 use crate::priority::ScopedPriorityGuard;
-use crate::inspector::{archive_stem_name, safe_atomic_rename, get_optimal_read_slice};
+use crate::inspector::{archive_stem_name, safe_atomic_rename, get_optimal_read_slice, get_optimal_write_buffer};
 use crate::crypto::ChunkedAesWriter;
 
 /// Exact CPU Cores scaling matrix for both .bay and .bayg:
@@ -484,9 +484,10 @@ pub fn compress_bay(
         if zstd_level >= 19 {
             write_buf_size = write_buf_size.min(32 * 1024 * 1024);
         }
+        write_buf_size = get_optimal_write_buffer(&temp_final, write_buf_size);
         let out_file = File::create(&temp_final)
             .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
-        // Buffer capacity scaled by Hardware Allocation slider to maximize sequential throughput
+        // Buffer capacity scaled by Hardware Allocation slider & destination drive bus
         let buf_out = BufWriter::with_capacity(write_buf_size, out_file);
 
         let out_writer = if let Some(pwd) = pwd_trimmed {
@@ -686,10 +687,11 @@ pub fn compress_zip(
     ));
 
     let res = (|| -> Result<(), String> {
-        let (read_buf_size, write_buf_size) = get_io_buffers(slider_value);
+        let (read_buf_size, mut write_buf_size) = get_io_buffers(slider_value);
+        write_buf_size = get_optimal_write_buffer(&temp_output, write_buf_size);
         let out_file = File::create(&temp_output)
             .map_err(|e| format!("Failed to create zip file: {}", e))?;
-        // Buffer capacity scaled by Hardware Allocation slider to maximize sequential throughput
+        // Buffer capacity scaled by Hardware Allocation slider & destination drive bus
         let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);
         let mut writer = zip::ZipWriter::new(buf_writer);
     
@@ -931,9 +933,10 @@ pub fn compress_tar(
     ));
 
     let res = (|| -> Result<(), String> {
+        let write_buf_size = get_optimal_write_buffer(&temp_output, 32 * 1024 * 1024);
         let out_file = File::create(&temp_output)
             .map_err(|e| format!("Failed to create tar file: {}", e))?;
-        let mut builder = tar::Builder::new(BufWriter::with_capacity(32 * 1024 * 1024, out_file));
+        let mut builder = tar::Builder::new(BufWriter::with_capacity(write_buf_size, out_file));
 
         fn add_dir_to_tar<W: Write>(
             dir: &Path,
@@ -1049,9 +1052,10 @@ pub fn compress_7z(
     ));
 
     let res = (|| -> Result<(), String> {
+        let write_buf_size = get_optimal_write_buffer(&temp_output, 16 * 1024 * 1024);
         let out_file = File::create(&temp_output)
             .map_err(|e| format!("Failed to create 7z archive: {}", e))?;
-        let buf_writer = BufWriter::with_capacity(16 * 1024 * 1024, out_file);
+        let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);
         let mut sz = ArchiveWriter::new(buf_writer)
             .map_err(|e| format!("Failed to create 7z writer: {}", e))?;
 
@@ -1184,10 +1188,11 @@ pub fn compress_7z(
 }
 
 pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), String> {
+    let write_buf_size = get_optimal_write_buffer(output_path, 32 * 1024 * 1024);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create zip file: {}", e))?;
-    // 32 MB buffer to prevent disk thrashing and maximize sequential write speeds
-    let buf_writer = BufWriter::with_capacity(32 * 1024 * 1024, out_file);
+    // Buffer scaled by destination bus to prevent disk thrashing and maximize sequential write speeds
+    let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);
     let mut writer = zip::ZipWriter::new(buf_writer);
     let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     let options = SimpleFileOptions::default()
@@ -1254,7 +1259,8 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
     let parent = p.parent().unwrap_or(p);
     let mut toc_entries: Vec<crate::types::ArchiveEntryItem> = Vec::new();
 
-    let (read_buf_size, write_buf_size) = get_io_buffers(50);
+    let (read_buf_size, mut write_buf_size) = get_io_buffers(50);
+    write_buf_size = get_optimal_write_buffer(output_path, write_buf_size);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create output file: {}", e))?;
     let mut buf_out = BufWriter::with_capacity(write_buf_size, out_file);
@@ -1414,9 +1420,10 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
 }
 
 pub fn headless_quick_compress_7z(p: &Path, output_path: &Path) -> Result<(), String> {
+    let write_buf_size = get_optimal_write_buffer(output_path, 16 * 1024 * 1024);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create 7z: {}", e))?;
-    let buf_writer = BufWriter::with_capacity(16 * 1024 * 1024, out_file);
+    let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);
     let mut sz = ArchiveWriter::new(buf_writer)
         .map_err(|e| format!("Failed to create 7z: {}", e))?;
     sz.set_encrypt_header(false);
@@ -1506,9 +1513,10 @@ pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<()
         "zip" => headless_quick_compress_zip(p, &output_path)?,
         "7z" => headless_quick_compress_7z(p, &output_path)?,
         "tar" => {
+            let write_buf_size = get_optimal_write_buffer(&output_path, 32 * 1024 * 1024);
             let out_file = File::create(&output_path)
                 .map_err(|e| format!("Failed to create tar file: {}", e))?;
-            let mut builder = tar::Builder::new(BufWriter::with_capacity(32 * 1024 * 1024, out_file));
+            let mut builder = tar::Builder::new(BufWriter::with_capacity(write_buf_size, out_file));
             let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
             if p.is_file() {
                 builder.append_path_with_name(p, name)

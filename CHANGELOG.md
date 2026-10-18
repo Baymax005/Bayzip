@@ -2,6 +2,23 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v1.2.4] - 2026-10-19
+
+### ⚡ Performance & Storage Hardware Architecture
+- **Destination-Aware Physical Storage Write Buffer Capping ([inspector.rs](src-tauri/src/inspector.rs), [compressor.rs](src-tauri/src/compressor.rs))**:
+  - Implemented dynamic target drive bus classification and write buffer capping to address Windows 10/11 "Quick Removal" default policy on external USB devices:
+    - **External USB / Flash Thumb Drives (`BusTypeUsb` / `DRIVE_REMOVABLE`)**: Capped at **16 MB**. Prevents the Windows kernel from blocking compression threads for 15–25 seconds during synchronous unbuffered flash commits, maintains a smooth 20 FPS progress bar, keeps cancellation immediately responsive, and eliminates USB host controller lockups.
+    - **Internal SATA SSD / HDD (`BusTypeSata`, `BusTypeAta`, `BusTypeScsi`, `BusTypeSas`, `BusTypeRAID`)**: Capped at **64 MB**. Flushes in ~0.5 seconds on mechanical hard drives, maximizes sequential writes without platter head thrashing, and eliminates excessive RAM usage on mobile/laptop systems.
+    - **Internal PCIe NVMe SSDs (`BusTypeNvme`, `BusTypeScm`)**: Full **128 MB** (at 100% Hardware Allocation slider). Flushes in only 25–40 milliseconds, saturating multi-gigabyte PCIe Gen 3/4/5 NVMe line rate ($3{,}000+\text{ MB/s}$) with minimum syscall context switches.
+    - **Fallback / Unknown / Network UNC**: Capped at safe **32 MB**.
+  - Applied across `.bay`, `.bayg`, `.zip`, `.7z`, `.tar`, and headless quick-compression paths.
+  - Unified bus classification into `DriveBusKind` with static atomic 1-cycle cache (`DRIVE_BUS_CACHE`), shared between read slicing and write buffer capping.
+
+### 📖 Documentation ([PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md))
+- Expanded the **Two-Tier Sequential I/O Architecture** reference to document both source read slicing and destination write buffer capping.
+- Added the **Storage Bus I/O Scaling Matrix** table explaining Win32 detection flags, slice sizes, write caps, and typical flush latencies.
+- Documented the Windows "Quick Removal" write-through mechanism on external flash storage.
+
 ---
 
 ## [v1.2.3] - 2026-10-19

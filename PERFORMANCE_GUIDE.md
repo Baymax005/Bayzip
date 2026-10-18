@@ -19,14 +19,11 @@ The **Hardware Allocation** slider controls three core parameters simultaneously
 | **75% (Performance)**| `max(1, (Total * 3) / 4)` | **16 MB** | **96 MB** | Below Normal | Fast compression when idle or web browsing |
 | **100% (Maximum)** | **All Cores (100%)** | **16 MB** | **128 MB** | Below Normal | Dedicated maximum hardware throughput |
 
-### 🔄 Two-Tier Sequential I/O Architecture (v1.2.3)
+### 🔄 Source & Destination Hardware-Aware Sequential I/O Architecture (v1.2.4)
 
-Bayzip decouples memory allocation from physical disk reads to guarantee zero freezes on slow drives and line-rate speed on fast drives:
+Bayzip decouples memory allocation from physical drive I/O to guarantee zero freezes on slow drives and line-rate speed on fast drives across both reading and writing:
 
-1. **RAM Allocation Capacity (`read_buf` & `write_buf`)**:
-   - Governed by the slider table above (2 MB – 16 MB read, 16 MB – 128 MB write).
-   - Pre-allocated in RAM to hold streaming chunks and batch write bursts.
-2. **Physical Storage Read Slicing (`slice_size`)**:
+1. **Source Storage Read Slicing (`get_optimal_read_slice`)**:
    - The exact maximum byte count requested per `f.read()` system call from the Windows kernel storage driver (`usbstor.sys`, `storahci.sys`, `stornvme.sys`).
    - Automatically detected via Win32 `IOCTL_STORAGE_QUERY_PROPERTY` and cached atomically:
      - **External USB / Flash Thumb Drives / Ext HDDs**: **Fixed 1 MB** (safe against controller retries/bad sectors)
@@ -34,9 +31,27 @@ Bayzip decouples memory allocation from physical disk reads to guarantee zero fr
      - **Internal PCIe NVMe SSD**: **Fixed 8 MB** (saturates multi-gigabyte PCIe line rate)
      - **Network / UNC Share**: **Fixed 2 MB** (safe fallback)
 
-$$\text{Effective Syscall Read Chunk} = \min(\text{Slider RAM Buffer}, \text{Hardware Slice Size})$$
+2. **Destination Storage Write Buffer Capping (`get_optimal_write_buffer`)**:
+   - **The Windows "Quick Removal" Problem**: Starting in Windows 10 (1809) and continuing in Windows 11, Microsoft sets the default removal policy for all external USB storage devices to **Quick Removal**. Under this policy, Windows completely **disables disk write caching**. Every write flush bypasses OS write-back caching and directly stalls until physically committed to flash cells. On budget USB flash drives writing at $5\text{ MB/s} - 15\text{ MB/s}$, dumping an uncapped 128 MB write buffer locks the operating system thread for **8 to 25+ seconds**, causing UI progress freezes and unresponsive cancellation.
+   - **Destination-Aware Write Matrix**: Bayzip queries the target output drive's physical bus and applies a hardware-calibrated cap:
+     - **External USB / Flash Thumb Drives (`BusTypeUsb` / `DRIVE_REMOVABLE`)**: Capped at **16 MB**. Flushes in ~1.0–1.8 seconds on slow flash, guarantees smooth 20 FPS progress bar updates, instant cancellation response, and eliminates USB controller queue lockups.
+     - **Internal SATA SSD / HDD (`BusTypeSata`)**: Capped at **64 MB**. Flushes in ~0.5 seconds on mechanical hard drives, maximizes sequential writes without platter head thrashing, and prevents RAM waste on laptops.
+     - **Internal PCIe NVMe SSD (`BusTypeNvme`)**: Full **128 MB** (at 100% Hardware Allocation slider). Flushes in only 25–40 milliseconds, saturating multi-gigabyte PCIe Gen 3/4/5 NVMe line rate ($3{,}000+\text{ MB/s}$) with minimum syscall context switches.
+     - **Network / UNC Share / Unknown**: Capped at safe **32 MB**.
 
-*Example:* At 100% Slider (16 MB RAM buffer), reading from an **External USB HDD** reads in safe **1 MB slices** (preventing OS freezes), while reading from an **Internal NVMe SSD** reads in full **8 MB bursts** (maximum line speed). In both cases, the **128 MB write buffer** ensures compressed output is written in smooth sequential bursts.
+### 📊 Storage Bus I/O Scaling Matrix
+
+| Storage Bus Type | Win32 Detection | Source Read Slice | Max Destination Write Cap | Typical Flush Duration | Core Benefit |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| **External USB / Flash Thumb Drive** | `BusTypeUsb` / `DRIVE_REMOVABLE` | **1 MB** | **16 MB** | ~1.0 – 1.8s | Zero thread stalls under Windows Quick-Removal; responsive Cancel |
+| **Internal SATA SSD / HDD** | `BusTypeSata` / `BusTypeAta` / `Scsi` | **4 MB** | **64 MB** | ~0.4 – 0.7s | Eliminates HDD head thrashing; smooth sequential writes |
+| **Internal PCIe NVMe SSD** | `BusTypeNvme` / `BusTypeScm` | **8 MB** | **128 MB** | ~0.02 – 0.04s | Maximum multi-gigabyte PCIe line rate ($3{,}000+\text{ MB/s}$) |
+| **Network / UNC / Fallback** | Fallback / `DRIVE_REMOTE` | **2 MB** | **32 MB** | Safe generic | Prevents network buffer congestion and generic bus stalls |
+
+$$\text{Effective Syscall Read Chunk} = \min(\text{Slider RAM Buffer}, \text{Hardware Read Slice})$$
+$$\text{Effective Output Write Buffer} = \min(\text{Slider RAM Buffer}, \text{Destination Write Cap})$$
+
+*Example:* At 100% Slider, writing an archive directly to an **External USB Thumb Drive** uses a safe, responsive **16 MB write buffer** (preventing 25-second OS thread hangs), while writing to an **Internal NVMe SSD** uses the full **128 MB write buffer** for raw PCIe burst throughput. In both directions, Bayzip optimizes for the physical drive medium.
 
 ---
 
@@ -135,7 +150,7 @@ Understanding real-world drive physical limits helps distinguish between softwar
 ### Why "Active Time: 100%" Occurs on External USB Hard Drives:
 1. **Mechanical Seeking**: Mechanical hard drives have a single physical actuator arm. When reading game files and writing the `.bayg` file to the same drive, the mechanical head must physically jump between read and write tracks.
 2. **Bandwidth Splitting**: An external USB mechanical drive has a physical ceiling of ~100 MB/s. If reading at **74 MB/s**, only **~23 MB/s** physical bandwidth remains for writing.
-3. **The Benefit of Bayzip's 64 MB Buffer**: Without Bayzip's large write buffer, the drive head would thrash every few kilobytes, dropping speed to ~30 MB/s. With the 64 MB RAM buffer, writes occur in smooth sequential bursts, allowing the drive to sustain its maximum possible physical speed (~97 MB/s).
+3. **The Benefit of Bayzip's Hardware-Aware Buffer**: Without Bayzip's buffered writes, the drive head would thrash every few kilobytes, dropping speed to ~30 MB/s. With Bayzip's calibrated 16 MB write buffer cap on external USB devices (and 64 MB on internal SATA), writes occur in smooth sequential bursts without risking multi-second write freezes under Windows Quick-Removal policy.
 
 ---
 

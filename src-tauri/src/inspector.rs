@@ -1544,25 +1544,31 @@ pub fn preview_archive_entry_sync(
     })
 }
 
-/// Query the optimal sequential read slice size for a given file path based on the underlying physical drive bus.
-/// - External USB / Flash Thumb Drives / Ext HDDs: Fixed 1 MB (safe against controller timeouts/retries)
-/// - Internal SATA (SSD / HDD): Fixed 4 MB (smooth OS throughput)
-/// - Internal PCIe NVMe SSD: Fixed 8 MB (maximum multi-gigabyte line speed)
-/// - Fallback / Unknown / Network share: Fixed 2 MB
+/// Hardware bus classification of a storage volume
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriveBusKind {
+    UsbRemovable, // External USB / Flash Thumb Drives / SD Cards / Removable Media
+    Sata,         // Internal SATA SSD / HDD / SCSI / SAS / RAID
+    Nvme,         // Internal PCIe NVMe SSD / SCM
+    Unknown,      // Network / UNC / Virtual / Unknown
+}
+
+/// Query the physical drive bus kind for a given path.
+/// Automatically detects and caches drive letters A through Z via Win32 IOCTL_STORAGE_QUERY_PROPERTY.
 #[cfg(target_os = "windows")]
-pub fn get_optimal_read_slice(path: &Path) -> usize {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+pub fn get_drive_bus_kind(path: &Path) -> DriveBusKind {
+    use std::sync::atomic::{AtomicU8, Ordering};
 
     // Fast static cache for drive letters A through Z (26 slots)
-    // 0 = unqueried, otherwise holds the slice size in bytes
-    static DRIVE_SLICE_CACHE: [AtomicUsize; 26] = [
-        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-        AtomicUsize::new(0), AtomicUsize::new(0),
+    // 0 = unqueried, 1 = UsbRemovable, 2 = Sata, 3 = Nvme, 4 = Unknown
+    static DRIVE_BUS_CACHE: [AtomicU8; 26] = [
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0),
     ];
 
     let path_str = path.to_string_lossy();
@@ -1578,8 +1584,17 @@ pub fn get_optimal_read_slice(path: &Path) -> usize {
     let drive_letter = match drive_letter_opt {
         Some(dl) => dl,
         None => {
-            if let Ok(canon) = path.canonicalize() {
-                let canon_str = canon.to_string_lossy();
+            let canon = path.canonicalize()
+                .or_else(|_| {
+                    if let Some(parent) = path.parent() {
+                        parent.canonicalize()
+                    } else {
+                        Err(std::io::Error::new(std::io::ErrorKind::NotFound, ""))
+                    }
+                })
+                .or_else(|_| std::env::current_dir());
+            if let Ok(canon_path) = canon {
+                let canon_str = canon_path.to_string_lossy();
                 let c_chars: Vec<char> = canon_str.chars().collect();
                 let mut found = None;
                 for i in 0..c_chars.len() {
@@ -1590,33 +1605,43 @@ pub fn get_optimal_read_slice(path: &Path) -> usize {
                 }
                 match found {
                     Some(dl) => dl,
-                    None => return 2 * 1024 * 1024,
+                    None => return DriveBusKind::Unknown,
                 }
             } else {
-                return 2 * 1024 * 1024;
+                return DriveBusKind::Unknown;
             }
         }
     };
 
     let cache_idx = (drive_letter as u8).saturating_sub(b'A') as usize;
     if cache_idx < 26 {
-        let cached = DRIVE_SLICE_CACHE[cache_idx].load(Ordering::Relaxed);
-        if cached > 0 {
-            return cached;
+        let cached = DRIVE_BUS_CACHE[cache_idx].load(Ordering::Relaxed);
+        match cached {
+            1 => return DriveBusKind::UsbRemovable,
+            2 => return DriveBusKind::Sata,
+            3 => return DriveBusKind::Nvme,
+            4 => return DriveBusKind::Unknown,
+            _ => {}
         }
     }
 
-    let slice_size = detect_drive_slice(drive_letter);
+    let bus_kind = detect_drive_bus(drive_letter);
 
     if cache_idx < 26 {
-        DRIVE_SLICE_CACHE[cache_idx].store(slice_size, Ordering::Relaxed);
+        let val = match bus_kind {
+            DriveBusKind::UsbRemovable => 1,
+            DriveBusKind::Sata => 2,
+            DriveBusKind::Nvme => 3,
+            DriveBusKind::Unknown => 4,
+        };
+        DRIVE_BUS_CACHE[cache_idx].store(val, Ordering::Relaxed);
     }
 
-    slice_size
+    bus_kind
 }
 
 #[cfg(target_os = "windows")]
-fn detect_drive_slice(drive_letter: char) -> usize {
+fn detect_drive_bus(drive_letter: char) -> DriveBusKind {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
@@ -1656,7 +1681,7 @@ fn detect_drive_slice(drive_letter: char) -> usize {
     let root_wide = to_wide(&root_path);
     let drive_type = unsafe { GetDriveTypeW(root_wide.as_ptr()) };
     if drive_type == DRIVE_REMOVABLE || drive_type == DRIVE_CDROM {
-        return 1024 * 1024; // 1 MB: External / Removable / Thumb drive
+        return DriveBusKind::UsbRemovable;
     }
 
     let volume_path = format!("\\\\.\\{}:", drive_letter);
@@ -1682,7 +1707,7 @@ fn detect_drive_slice(drive_letter: char) -> usize {
     };
 
     if handle as isize == INVALID_HANDLE_VALUE || handle.is_null() {
-        return 2 * 1024 * 1024;
+        return DriveBusKind::Unknown;
     }
 
     let query: [u8; 12] = [0u8; 12];
@@ -1715,27 +1740,78 @@ fn detect_drive_slice(drive_letter: char) -> usize {
             out_buf[31],
         ]);
 
-        // BusTypeUsb = 7, or marked RemovableMedia
-        if bus_type == 7 || removable_media {
-            return 1024 * 1024; // 1 MB: External USB / Flash Thumb Drives / Ext HDDs
+        // BusTypeUsb = 7, BusTypeSd = 12 (0x0C), BusTypeMmc = 13 (0x0D), or marked RemovableMedia
+        if bus_type == 7 || bus_type == 12 || bus_type == 13 || removable_media {
+            return DriveBusKind::UsbRemovable;
         }
 
-        // BusTypeNvme = 17 (0x11)
-        if bus_type == 17 {
-            return 8 * 1024 * 1024; // 8 MB: Internal PCIe NVMe SSD
+        // BusTypeNvme = 17 (0x11), BusTypeScm = 18 (0x12)
+        if bus_type == 17 || bus_type == 18 {
+            return DriveBusKind::Nvme;
         }
 
-        // BusTypeSata = 11, BusTypeAta = 3, BusTypeScsi = 1, BusTypeSas = 10, BusTypeRAID = 8
-        if bus_type == 11 || bus_type == 3 || bus_type == 1 || bus_type == 10 || bus_type == 8 {
-            return 4 * 1024 * 1024; // 4 MB: Internal SATA (SSD / HDD)
+        // BusTypeSata = 11, BusTypeAta = 3, BusTypeAtapi = 2, BusTypeScsi = 1, BusTypeSas = 10, BusTypeRAID = 8
+        if bus_type == 11 || bus_type == 3 || bus_type == 2 || bus_type == 1 || bus_type == 10 || bus_type == 8 {
+            return DriveBusKind::Sata;
         }
     }
 
-    2 * 1024 * 1024
+    DriveBusKind::Unknown
+}
+
+/// Query the optimal sequential read slice size for a given file path based on the underlying physical drive bus.
+/// - External USB / Flash Thumb Drives / Ext HDDs: Fixed 1 MB (safe against controller timeouts/retries)
+/// - Internal SATA (SSD / HDD): Fixed 4 MB (smooth OS throughput)
+/// - Internal PCIe NVMe SSD: Fixed 8 MB (maximum multi-gigabyte line speed)
+/// - Fallback / Unknown / Network share: Fixed 2 MB
+#[cfg(target_os = "windows")]
+pub fn get_optimal_read_slice(path: &Path) -> usize {
+    match get_drive_bus_kind(path) {
+        DriveBusKind::UsbRemovable => 1024 * 1024,       // 1 MB: External USB / Flash Thumb Drives
+        DriveBusKind::Sata => 4 * 1024 * 1024,          // 4 MB: Internal SATA (SSD / HDD)
+        DriveBusKind::Nvme => 8 * 1024 * 1024,          // 8 MB: Internal PCIe NVMe SSD
+        DriveBusKind::Unknown => 2 * 1024 * 1024,       // 2 MB: Network / UNC / Fallback
+    }
+}
+
+/// Query the optimal sequential write buffer size for a target output archive based on the destination drive bus.
+/// Prevents slow USB thumb drives from locking in multi-second synchronous write stalls under Windows Quick-Removal policy.
+/// - External USB / Flash Thumb Drives: Capped at 16 MB max (instant cancellation response & smooth progress bar)
+/// - Internal SATA SSD / HDD: Capped at 64 MB max (smooth sequential flushing without head thrashing)
+/// - Internal PCIe NVMe SSD: Full requested buffer up to 128 MB (unleashes multi-gigabyte PCIe burst line rate)
+/// - Fallback / Unknown / Network share: Capped at 32 MB max
+#[cfg(target_os = "windows")]
+pub fn get_optimal_write_buffer(output_path: &Path, requested_buffer: usize) -> usize {
+    let cap = match get_drive_bus_kind(output_path) {
+        DriveBusKind::UsbRemovable => 16 * 1024 * 1024, // 16 MB max
+        DriveBusKind::Sata => 64 * 1024 * 1024,         // 64 MB max
+        DriveBusKind::Nvme => 128 * 1024 * 1024,        // 128 MB max
+        DriveBusKind::Unknown => 32 * 1024 * 1024,      // 32 MB max
+    };
+    requested_buffer.min(cap).max(1024 * 1024)
+}
+
+#[cfg(not(target_os = "windows"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriveBusKind {
+    UsbRemovable,
+    Sata,
+    Nvme,
+    Unknown,
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_drive_bus_kind(_path: &Path) -> DriveBusKind {
+    DriveBusKind::Unknown
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn get_optimal_read_slice(_path: &Path) -> usize {
     4 * 1024 * 1024
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_optimal_write_buffer(_output_path: &Path, requested_buffer: usize) -> usize {
+    requested_buffer.min(64 * 1024 * 1024).max(1024 * 1024)
 }
 
