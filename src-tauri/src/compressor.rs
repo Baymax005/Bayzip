@@ -39,6 +39,7 @@ pub struct ProgressReader<'a, R: Read> {
     app: &'a AppHandle,
     last_emit: &'a mut Instant,
     current_file: &'a str,
+    slice_size: usize,
 }
 
 impl<'a, R: Read> ProgressReader<'a, R> {
@@ -49,6 +50,7 @@ impl<'a, R: Read> ProgressReader<'a, R> {
         app: &'a AppHandle,
         last_emit: &'a mut Instant,
         current_file: &'a str,
+        slice_size: usize,
     ) -> Self {
         Self {
             inner,
@@ -57,6 +59,7 @@ impl<'a, R: Read> ProgressReader<'a, R> {
             app,
             last_emit,
             current_file,
+            slice_size: if slice_size == 0 { 2 * 1024 * 1024 } else { slice_size },
         }
     }
 }
@@ -69,7 +72,7 @@ impl<'a, R: Read> Read for ProgressReader<'a, R> {
                 "Compression cancelled by user",
             ));
         }
-        let to_read = buf.len().min(1024 * 1024);
+        let to_read = buf.len().min(self.slice_size);
         let n = self.inner.read(&mut buf[..to_read])?;
         if n > 0 {
             *self.bytes_processed += n as u64;
@@ -103,7 +106,7 @@ impl<'a, R: Read + Seek> Seek for ProgressReader<'a, R> {
 
 use crate::types::{CompressPayload, CompressResponse, CompressProgress};
 use crate::priority::ScopedPriorityGuard;
-use crate::inspector::{archive_stem_name, safe_atomic_rename};
+use crate::inspector::{archive_stem_name, safe_atomic_rename, get_optimal_read_slice};
 use crate::crypto::ChunkedAesWriter;
 
 /// Exact CPU Cores scaling matrix for both .bay and .bayg:
@@ -259,6 +262,7 @@ pub fn write_file_to_bay_archive<W: Write>(
         is_dir: false,
     });
 
+    let slice_size = get_optimal_read_slice(filepath);
     let mut written_bytes: u64 = 0;
     while written_bytes < file_size {
         if is_compression_cancelled() {
@@ -266,7 +270,7 @@ pub fn write_file_to_bay_archive<W: Write>(
         }
         let to_read = ((file_size - written_bytes) as usize)
             .min(read_buf.len())
-            .min(1024 * 1024);
+            .min(slice_size);
         match f.read(&mut read_buf[..to_read]) {
             Ok(0) => break,
             Ok(n) => {
@@ -729,6 +733,7 @@ pub fn compress_zip(
             .large_file(file_len >= 0xFFFF_FFFF);
 
         if p.is_file() {
+            let slice_size = get_optimal_read_slice(p);
             let mut f = File::open(p).map_err(|e| format!("Failed to open file '{}': {}", p.display(), e))?;
             let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
             if let Some(pwd) = has_pwd {
@@ -743,7 +748,7 @@ pub fn compress_zip(
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
                 }
-                let to_read = read_buf.len().min(1024 * 1024);
+                let to_read = read_buf.len().min(slice_size);
                 match f.read(&mut read_buf[..to_read]) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -842,11 +847,12 @@ pub fn compress_zip(
                                     writer.start_file(clean_rel, options)
                                         .map_err(|e| format!("Zip start file error: {}", e))?;
                                 }
+                                let slice_size = get_optimal_read_slice(&path);
                                 loop {
                                     if is_compression_cancelled() {
                                         return Err("Compression cancelled by user".to_string());
                                     }
-                                    let to_read = read_buf.len().min(1024 * 1024);
+                                    let to_read = read_buf.len().min(slice_size);
                                     match f.read(&mut read_buf[..to_read]) {
                                         Ok(0) => break,
                                         Ok(n) => {
@@ -961,7 +967,8 @@ pub fn compress_tar(
                                 header.set_size(m.len());
                                 header.set_mode(0o644);
                                 header.set_cksum();
-                                let mut prog_reader = ProgressReader::new(f, bytes_processed, total_original, app, last_emit, trimmed);
+                                let slice_size = get_optimal_read_slice(&path);
+                                let mut prog_reader = ProgressReader::new(f, bytes_processed, total_original, app, last_emit, trimmed, slice_size);
                                 builder.append_data(&mut header, trimmed, &mut prog_reader)
                                     .map_err(|e| format!("Tar append file error: {}", e))?;
                             }
@@ -988,7 +995,8 @@ pub fn compress_tar(
                     header.set_size(sz);
                     header.set_mode(0o644);
                     header.set_cksum();
-                    let mut prog_reader = ProgressReader::new(f, &mut bytes_processed, total_original, app, &mut last_emit, name);
+                    let slice_size = get_optimal_read_slice(p);
+                    let mut prog_reader = ProgressReader::new(f, &mut bytes_processed, total_original, app, &mut last_emit, name, slice_size);
                     builder.append_data(&mut header, name, &mut prog_reader)
                         .map_err(|e| format!("Tar append file error: {}", e))?;
                 }
@@ -1093,7 +1101,8 @@ pub fn compress_7z(
                 entry.is_directory = false;
                 entry.has_stream = true;
                 let f = File::open(p).map_err(|e| format!("Failed to open file {:?}: {}", p, e))?;
-                let prog_reader = ProgressReader::new(f, &mut bytes_processed, total_original, app, &mut last_emit, name);
+                let slice_size = get_optimal_read_slice(p);
+                let prog_reader = ProgressReader::new(f, &mut bytes_processed, total_original, app, &mut last_emit, name, slice_size);
                 sz.push_archive_entry(entry, Some(prog_reader))
                     .map_err(|e| format!("7z entry error: {}", e))?;
             } else if p.is_dir() {
@@ -1140,7 +1149,8 @@ pub fn compress_7z(
                                     f_entry.is_directory = false;
                                     f_entry.has_stream = true;
                                     let f = File::open(&path).map_err(|e| format!("Failed to open file: {}", e))?;
-                                    let prog_reader = ProgressReader::new(f, bytes_processed, total_original, app, last_emit, trimmed);
+                                    let slice_size = get_optimal_read_slice(&path);
+                                    let prog_reader = ProgressReader::new(f, bytes_processed, total_original, app, last_emit, trimmed, slice_size);
                                     sz.push_archive_entry(f_entry, Some(prog_reader))
                                         .map_err(|e| format!("7z entry error: {}", e))?;
                                 }
@@ -1281,9 +1291,10 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
                 is_dir: false,
             });
 
+            let slice_size = get_optimal_read_slice(p);
             let mut written: u64 = 0;
             while written < file_size {
-                let to_read = ((file_size - written) as usize).min(read_buf.len()).min(1024 * 1024);
+                let to_read = ((file_size - written) as usize).min(read_buf.len()).min(slice_size);
                 match f.read(&mut read_buf[..to_read]) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -1346,9 +1357,10 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
                                     is_dir: false,
                                 });
 
+                                let slice_size = get_optimal_read_slice(&entry_path);
                                 let mut written: u64 = 0;
                                 while written < file_size {
-                                    let to_read = ((file_size - written) as usize).min(read_buf.len()).min(1024 * 1024);
+                                    let to_read = ((file_size - written) as usize).min(read_buf.len()).min(slice_size);
                                     match f.read(&mut read_buf[..to_read]) {
                                         Ok(0) => break,
                                         Ok(n) => { 

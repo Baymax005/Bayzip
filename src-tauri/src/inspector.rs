@@ -1543,3 +1543,199 @@ pub fn preview_archive_entry_sync(
         warning: Some("Preview unavailable: Binary files require full extraction to view.".to_string()),
     })
 }
+
+/// Query the optimal sequential read slice size for a given file path based on the underlying physical drive bus.
+/// - External USB / Flash Thumb Drives / Ext HDDs: Fixed 1 MB (safe against controller timeouts/retries)
+/// - Internal SATA (SSD / HDD): Fixed 4 MB (smooth OS throughput)
+/// - Internal PCIe NVMe SSD: Fixed 8 MB (maximum multi-gigabyte line speed)
+/// - Fallback / Unknown / Network share: Fixed 2 MB
+#[cfg(target_os = "windows")]
+pub fn get_optimal_read_slice(path: &Path) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Fast static cache for drive letters A through Z (26 slots)
+    // 0 = unqueried, otherwise holds the slice size in bytes
+    static DRIVE_SLICE_CACHE: [AtomicUsize; 26] = [
+        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
+        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
+        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
+        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
+        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
+        AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
+        AtomicUsize::new(0), AtomicUsize::new(0),
+    ];
+
+    let path_str = path.to_string_lossy();
+    let mut drive_letter_opt = None;
+    let chars: Vec<char> = path_str.chars().collect();
+    for i in 0..chars.len() {
+        if chars[i] == ':' && i > 0 && chars[i - 1].is_ascii_alphabetic() {
+            drive_letter_opt = Some(chars[i - 1].to_ascii_uppercase());
+            break;
+        }
+    }
+
+    let drive_letter = match drive_letter_opt {
+        Some(dl) => dl,
+        None => {
+            if let Ok(canon) = path.canonicalize() {
+                let canon_str = canon.to_string_lossy();
+                let c_chars: Vec<char> = canon_str.chars().collect();
+                let mut found = None;
+                for i in 0..c_chars.len() {
+                    if c_chars[i] == ':' && i > 0 && c_chars[i - 1].is_ascii_alphabetic() {
+                        found = Some(c_chars[i - 1].to_ascii_uppercase());
+                        break;
+                    }
+                }
+                match found {
+                    Some(dl) => dl,
+                    None => return 2 * 1024 * 1024,
+                }
+            } else {
+                return 2 * 1024 * 1024;
+            }
+        }
+    };
+
+    let cache_idx = (drive_letter as u8).saturating_sub(b'A') as usize;
+    if cache_idx < 26 {
+        let cached = DRIVE_SLICE_CACHE[cache_idx].load(Ordering::Relaxed);
+        if cached > 0 {
+            return cached;
+        }
+    }
+
+    let slice_size = detect_drive_slice(drive_letter);
+
+    if cache_idx < 26 {
+        DRIVE_SLICE_CACHE[cache_idx].store(slice_size, Ordering::Relaxed);
+    }
+
+    slice_size
+}
+
+#[cfg(target_os = "windows")]
+fn detect_drive_slice(drive_letter: char) -> usize {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    fn to_wide(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDriveTypeW(lpRootPathName: *const u16) -> u32;
+        fn CreateFileW(
+            lpFileName: *const u16,
+            dwDesiredAccess: u32,
+            dwShareMode: u32,
+            lpSecurityAttributes: *const std::ffi::c_void,
+            dwCreationDisposition: u32,
+            dwFlagsAndAttributes: u32,
+            hTemplateFile: *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+        fn DeviceIoControl(
+            hDevice: *mut std::ffi::c_void,
+            dwIoControlCode: u32,
+            lpInBuffer: *const std::ffi::c_void,
+            nInBufferSize: u32,
+            lpOutBuffer: *mut std::ffi::c_void,
+            nOutBufferSize: u32,
+            lpBytesReturned: *mut u32,
+            lpOverlapped: *mut std::ffi::c_void,
+        ) -> i32;
+        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+    }
+
+    const DRIVE_REMOVABLE: u32 = 2;
+    const DRIVE_CDROM: u32 = 5;
+
+    let root_path = format!("{}:\\", drive_letter);
+    let root_wide = to_wide(&root_path);
+    let drive_type = unsafe { GetDriveTypeW(root_wide.as_ptr()) };
+    if drive_type == DRIVE_REMOVABLE || drive_type == DRIVE_CDROM {
+        return 1024 * 1024; // 1 MB: External / Removable / Thumb drive
+    }
+
+    let volume_path = format!("\\\\.\\{}:", drive_letter);
+    let volume_wide = to_wide(&volume_path);
+
+    const FILE_SHARE_READ: u32 = 0x00000001;
+    const FILE_SHARE_WRITE: u32 = 0x00000002;
+    const FILE_SHARE_DELETE: u32 = 0x00000004;
+    const OPEN_EXISTING: u32 = 3;
+    const INVALID_HANDLE_VALUE: isize = -1;
+    const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D1400;
+
+    let handle = unsafe {
+        CreateFileW(
+            volume_wide.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if handle as isize == INVALID_HANDLE_VALUE || handle.is_null() {
+        return 2 * 1024 * 1024;
+    }
+
+    let query: [u8; 12] = [0u8; 12];
+    let mut out_buf: [u8; 1024] = [0u8; 1024];
+    let mut bytes_returned: u32 = 0;
+
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            query.as_ptr() as *const _,
+            query.len() as u32,
+            out_buf.as_mut_ptr() as *mut _,
+            out_buf.len() as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        )
+    };
+
+    unsafe {
+        CloseHandle(handle);
+    }
+
+    if ok != 0 && bytes_returned >= 32 {
+        let removable_media = out_buf[10] != 0;
+        let bus_type = u32::from_le_bytes([
+            out_buf[28],
+            out_buf[29],
+            out_buf[30],
+            out_buf[31],
+        ]);
+
+        // BusTypeUsb = 7, or marked RemovableMedia
+        if bus_type == 7 || removable_media {
+            return 1024 * 1024; // 1 MB: External USB / Flash Thumb Drives / Ext HDDs
+        }
+
+        // BusTypeNvme = 17 (0x11)
+        if bus_type == 17 {
+            return 8 * 1024 * 1024; // 8 MB: Internal PCIe NVMe SSD
+        }
+
+        // BusTypeSata = 11, BusTypeAta = 3, BusTypeScsi = 1, BusTypeSas = 10, BusTypeRAID = 8
+        if bus_type == 11 || bus_type == 3 || bus_type == 1 || bus_type == 10 || bus_type == 8 {
+            return 4 * 1024 * 1024; // 4 MB: Internal SATA (SSD / HDD)
+        }
+    }
+
+    2 * 1024 * 1024
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_optimal_read_slice(_path: &Path) -> usize {
+    4 * 1024 * 1024
+}
+
