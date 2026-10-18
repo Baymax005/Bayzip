@@ -4,6 +4,25 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ---
 
+## [v1.2.2] - 2026-10-18
+
+### 🐛 Bug Fixes & Reliability Improvements
+- **Embedded Windows 11 Shell Extension DLL ([registry.rs](src-tauri/src/registry.rs), [build.yml](.github/workflows/build.yml))**:
+  - Embedded `bayzip_shell.dll` directly inside `bayzip.exe` via `include_bytes!`, ensuring the Windows 11 modern context menu companion DLL is deployed automatically on every PC without requiring external DLL files.
+  - Added `cargo build --release --package bayzip_shell` step to GitHub Actions build workflow so release artifacts always compile and carry the shell extension.
+  - Added fallback discovery logic across application parent directory, resources subfolder, and workspace build targets.
+
+- **Shell Icon Cache Flush & File Association Notification ([registry.rs](src-tauri/src/registry.rs))**:
+  - Added `SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_FLUSH)` and `ie4uinit.exe -show` to `register_context_menu_sync`.
+  - Fixes Windows File Explorer ignoring `.bay` and `.bayg` file icons after installation by forcing an immediate shell icon cache refresh without needing to restart Explorer or reboot.
+
+- **1 MB Sliced Reading & Responsive Cancel during I/O Stalls ([compressor.rs](src-tauri/src/compressor.rs))**:
+  - Capped single kernel read operations to 1 MB slices across `write_file_to_bay_archive`, `compress_zip`, and `ProgressReader`.
+  - Prevents external USB hard drives and mechanical drives with bad/weak sectors from locking the application in multi-second OS driver timeouts.
+  - Ensures clicking "Cancel" is detected and handled immediately on the next 1 MB boundary without hanging.
+
+---
+
 ## [v1.2.1] - 2026-10-18
 
 ### 🐛 Bug Fixes & Stability Improvements

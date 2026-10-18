@@ -28,6 +28,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      - name: Build Windows 11 Shell Extension DLL
+        run: cargo build --release --package bayzip_shell
+
       - name: Clean up stale draft releases
         shell: bash
         env:

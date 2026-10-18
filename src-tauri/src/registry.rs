@@ -38,16 +38,19 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 let _ = std::fs::copy(&exe_path, &dest_exe);
             }
 
-            // Deploy bayzip_shell.dll to %LOCALAPPDATA%\Bayzip\bayzip_shell.dll
+            // Deploy bayzip_shell.dll to %LOCALAPPDATA%\Bayzip\bayzip_shell.dll (Embedded directly in binary)
             let dest_dll = app_dir.join("bayzip_shell.dll");
-            if let Some(exe_parent) = exe_path.parent() {
-                let candidate_dll = exe_parent.join("bayzip_shell.dll");
-                if candidate_dll.exists() {
-                    let _ = std::fs::copy(&candidate_dll, &dest_dll);
-                } else {
-                    let build_dll = exe_parent.join("crates").join("bayzip_shell").join("target").join("release").join("bayzip_shell.dll");
-                    if build_dll.exists() {
-                        let _ = std::fs::copy(&build_dll, &dest_dll);
+            let _ = std::fs::write(&dest_dll, include_bytes!("../crates/bayzip_shell/target/release/bayzip_shell.dll"));
+            if !dest_dll.exists() {
+                if let Some(exe_parent) = exe_path.parent() {
+                    let candidate_dll = exe_parent.join("bayzip_shell.dll");
+                    if candidate_dll.exists() {
+                        let _ = std::fs::copy(&candidate_dll, &dest_dll);
+                    } else {
+                        let build_dll = exe_parent.join("crates").join("bayzip_shell").join("target").join("release").join("bayzip_shell.dll");
+                        if build_dll.exists() {
+                            let _ = std::fs::copy(&build_dll, &dest_dll);
+                        }
                     }
                 }
             }
@@ -288,6 +291,24 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                     ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
                     ps_cmd.creation_flags(CREATE_NO_WINDOW);
                     let _ = ps_cmd.output();
+                }
+
+                // Force Windows Shell and File Explorer to flush icon cache and reload associations
+                #[cfg(target_os = "windows")]
+                {
+                    #[link(name = "shell32")]
+                    extern "system" {
+                        fn SHChangeNotify(w_event_id: i32, u_flags: u32, dw_item1: *const std::ffi::c_void, dw_item2: *const std::ffi::c_void);
+                    }
+                    unsafe {
+                        // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_FLUSH = 0x1000
+                        SHChangeNotify(0x0800_0000, 0x1000, std::ptr::null(), std::ptr::null());
+                    }
+
+                    let mut refresh_cmd = Command::new("cmd");
+                    refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+                    refresh_cmd.creation_flags(CREATE_NO_WINDOW);
+                    let _ = refresh_cmd.output();
                 }
 
                 return Ok("Context menu registered successfully!".into());

@@ -69,7 +69,8 @@ impl<'a, R: Read> Read for ProgressReader<'a, R> {
                 "Compression cancelled by user",
             ));
         }
-        let n = self.inner.read(buf)?;
+        let to_read = buf.len().min(1024 * 1024);
+        let n = self.inner.read(&mut buf[..to_read])?;
         if n > 0 {
             *self.bytes_processed += n as u64;
             if self.last_emit.elapsed().as_millis() >= 50 {
@@ -263,7 +264,9 @@ pub fn write_file_to_bay_archive<W: Write>(
         if is_compression_cancelled() {
             return Err("Compression cancelled by user".to_string());
         }
-        let to_read = ((file_size - written_bytes) as usize).min(read_buf.len());
+        let to_read = ((file_size - written_bytes) as usize)
+            .min(read_buf.len())
+            .min(1024 * 1024);
         match f.read(&mut read_buf[..to_read]) {
             Ok(0) => break,
             Ok(n) => {
@@ -740,7 +743,8 @@ pub fn compress_zip(
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
                 }
-                match f.read(&mut read_buf) {
+                let to_read = read_buf.len().min(1024 * 1024);
+                match f.read(&mut read_buf[..to_read]) {
                     Ok(0) => break,
                     Ok(n) => {
                         if is_compression_cancelled() {
@@ -842,7 +846,8 @@ pub fn compress_zip(
                                     if is_compression_cancelled() {
                                         return Err("Compression cancelled by user".to_string());
                                     }
-                                    match f.read(read_buf) {
+                                    let to_read = read_buf.len().min(1024 * 1024);
+                                    match f.read(&mut read_buf[..to_read]) {
                                         Ok(0) => break,
                                         Ok(n) => {
                                             if is_compression_cancelled() {
@@ -1278,7 +1283,7 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
 
             let mut written: u64 = 0;
             while written < file_size {
-                let to_read = ((file_size - written) as usize).min(read_buf.len());
+                let to_read = ((file_size - written) as usize).min(read_buf.len()).min(1024 * 1024);
                 match f.read(&mut read_buf[..to_read]) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -1343,7 +1348,7 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
 
                                 let mut written: u64 = 0;
                                 while written < file_size {
-                                    let to_read = ((file_size - written) as usize).min(read_buf.len());
+                                    let to_read = ((file_size - written) as usize).min(read_buf.len()).min(1024 * 1024);
                                     match f.read(&mut read_buf[..to_read]) {
                                         Ok(0) => break,
                                         Ok(n) => { 
