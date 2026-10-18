@@ -4,7 +4,7 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ---
 
-## [v1.2.0] - 2026-10-19
+## [v1.2.0] - 2026-10-18
 
 ### 🪟 Windows 11 Modern Context Menu & Shell Extension
 - **Native Windows 11 Top-Level Context Menu ([crates/bayzip_shell](src-tauri/crates/bayzip_shell))**:
