@@ -78,6 +78,7 @@ pub struct CompressPayload {
     pub encryption: Option<String>,
     pub password: Option<String>,
     pub output_dir: Option<String>,
+    pub smart_bypass: Option<bool>,
 }
 
 #[derive(Serialize, Clone, Debug)]

@@ -108,6 +108,7 @@ function App() {
   const [archiveToOriginalPath, setArchiveToOriginalPath] = useState(true);
   const [compressDestDir, setCompressDestDir] = useState<string>("");
   const [separateArchives, setSeparateArchives] = useState(false);
+  const [smartMediaBypass, setSmartMediaBypass] = useState(true);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [itemsInfo, setItemsInfo] = useState<Record<string, { size: number; is_dir: boolean }>>({});
   const [isAboutOpen, setIsAboutOpen] = useState(false);
@@ -696,6 +697,7 @@ function App() {
               encryption: selectedEncryption,
               password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
               output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
+              smart_bypass: smartMediaBypass,
             },
           });
           totalOrig += res.original_size;
@@ -723,6 +725,7 @@ function App() {
             encryption: selectedEncryption,
             password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
             output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
+            smart_bypass: smartMediaBypass,
           },
         });
         setCompressResult(res);
@@ -1602,6 +1605,35 @@ function App() {
                       </div>
                       <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
                         Add to separate archives
+                      </div>
+                    </label>
+
+                    <label className="flex items-center cursor-pointer group">
+                      <div className="relative">
+                        <input
+                          type="checkbox"
+                          disabled={isCompressing}
+                          className="sr-only"
+                          checked={smartMediaBypass}
+                          onChange={() => setSmartMediaBypass(!smartMediaBypass)}
+                        />
+                        <div
+                          className={`block w-10 h-6 rounded-full transition-colors ${smartMediaBypass ? "bg-[#60CDFF]" : "bg-[#3E3E3E]"
+                            }`}
+                        ></div>
+                        <div
+                          className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${smartMediaBypass ? "transform translate-x-4" : ""
+                            }`}
+                        ></div>
+                      </div>
+                      <div className="ml-3">
+                        <div className="text-sm text-[#A8A8A8] group-hover:text-white transition-colors flex items-center space-x-1.5">
+                          <span>Smart media bypass</span>
+                          <span className="text-[10px] font-mono bg-[#2C2C2C] text-[#60CDFF] px-1.5 py-0.5 rounded border border-[#3E3E3E]">Fast Store</span>
+                        </div>
+                        <div className="text-[11px] text-[#7A7A7A]">
+                          Store pre-compressed video, audio, and archives directly without CPU re-compression
+                        </div>
                       </div>
                     </label>
                   </div>

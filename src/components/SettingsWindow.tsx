@@ -215,6 +215,33 @@ export function SettingsWindow() {
           </div>
         </div>
 
+        {/* Smart Media Bypass Card */}
+        <div className="bg-[#222222] rounded-xl p-4 border border-[#333333] space-y-3 shadow-sm">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center space-x-2">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-[#60CDFF]">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              <span className="text-xs font-semibold text-white">Smart Pre-Compressed Media Bypass</span>
+            </div>
+            <span className="text-[10px] text-[#60CDFF] bg-[#22394A]/60 px-2 py-0.5 rounded-full border border-[#60CDFF]/40 font-medium">
+              Enabled (Default)
+            </span>
+          </div>
+
+          <p className="text-xs text-[#9E9E9E] leading-relaxed">
+            Automatically switches pre-compressed video, audio, image, and archive formats directly to high-throughput Store mode. Prevents 100% CPU lockups on incompressible streams and achieves full sequential drive read/write saturation.
+          </p>
+
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {["mp4", "mkv", "avi", "mov", "mp3", "flac", "ogg", "jpg", "png", "webp", "zip", "7z", "rar", "zst", "docx"].map((ext) => (
+              <span key={ext} className="font-mono text-[10px] text-[#A8A8A8] bg-[#181818] px-2 py-0.5 rounded border border-[#333333]">
+                .{ext}
+              </span>
+            ))}
+          </div>
+        </div>
+
         {/* Software Updates Card */}
         <div className="bg-[#222222] rounded-xl p-4 border border-[#333333] flex items-center justify-between shadow-sm">
           <div className="flex items-center space-x-3">

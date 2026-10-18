@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Bayzip",
-  "version": "1.2.4",
+  "version": "2.0.0",
   "identifier": "com.baymax.bayzip",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -49,7 +49,10 @@
     ],
     "windows": {
       "nsis": {
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "compression": "lzma"
       }
     },
     "fileAssociations": [
@@ -63,6 +66,30 @@
         "ext": ["bayg"],
         "name": "Bayzip Gamer Mod Pack",
         "description": "Bayzip Gamer Compressed Archive",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["zip"],
+        "name": "ZIP Archive",
+        "description": "Compressed ZIP Archive",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["7z"],
+        "name": "7-Zip Archive",
+        "description": "7-Zip Compressed Archive",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["tar"],
+        "name": "TAR Archive",
+        "description": "TAR Tape Archive",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["rar"],
+        "name": "RAR Archive",
+        "description": "WinRAR Compressed Archive",
         "role": "Viewer"
       }
     ]

@@ -166,6 +166,108 @@ pub fn get_io_buffers(slider_value: i32) -> (usize, usize) {
     }
 }
 
+/// Smart Pre-Compressed Media Bypass:
+/// Detects formats that are already compressed with specialized lossless or lossy codecs
+/// (e.g. H.264/HEVC/AV1 video, AAC/MP3/FLAC audio, JPEG/PNG/WebP images, and existing archives).
+/// Re-compressing these files burns 100% CPU for negligible space savings (0.0% - 0.5%).
+/// Bypassing compression and storing them uncompressed allows full saturation of NVMe/SSD speeds.
+pub fn is_precompressed_extension(path: &Path) -> bool {
+    let ext = match path.extension().and_then(|s| s.to_str()) {
+        Some(e) => e.to_ascii_lowercase(),
+        None => return false,
+    };
+    matches!(
+        ext.as_str(),
+        // Video
+        "mp4" | "m4v" | "mkv" | "webm" | "avi" | "mov" | "wmv" | "flv" | "bik" |
+        // Audio
+        "mp3" | "m4a" | "flac" | "ogg" | "opus" | "aac" | "wma" | "ape" |
+        // Images
+        "jpg" | "jpeg" | "png" | "webp" | "avif" | "gif" | "heif" | "heic" | "jxl" | "tif" | "tiff" |
+        // Archives & Packages
+        "zip" | "zipx" | "7z" | "rar" | "gz" | "bz2" | "tbz2" | "xz" | "txz" | "zst" | "tzst" | "cab" | "iso" | "jar" | "apk" | "vpk" | "pak" |
+        // Office compressed containers
+        "docx" | "xlsx" | "pptx"
+    )
+}
+
+/// Smart Pre-Compressed Media & Archive Detection:
+/// 1. Fast Tier: In-memory file extension check (O(1), zero disk I/O).
+/// 2. Deep Tier: For extensionless or generic extensions (.dat, .bin, .pak, .res, .asset),
+///    peeks the first 16 bytes for compressed container magic signatures
+///    (ZIP PK\x03\x04, 7-Zip, RAR, GZIP, BZIP2, XZ, Zstd, JPEG, PNG, WebP, Matroska, MP4 ftyp).
+/// Only reads 16 bytes — NEVER reads or scans the entire file.
+pub fn is_precompressed_file(path: &Path) -> bool {
+    // 1. Instant extension check
+    if is_precompressed_extension(path) {
+        return true;
+    }
+
+    // 2. Lightweight 16-byte magic number inspection for custom/missing extensions
+    if let Ok(mut f) = File::open(path) {
+        let mut header = [0u8; 16];
+        if let Ok(n) = f.read(&mut header) {
+            if n >= 2 && &header[0..2] == b"\x1f\x8b" {
+                return true; // GZIP
+            }
+            if n >= 3 && &header[0..3] == b"BZh" {
+                return true; // BZip2
+            }
+            if n >= 3 && &header[0..3] == b"\xff\xd8\xff" {
+                return true; // JPEG
+            }
+            if n >= 3 && &header[0..3] == b"ID3" {
+                return true; // MP3 with ID3 tag
+            }
+            if n >= 4 {
+                if &header[0..4] == b"PK\x03\x04" || &header[0..4] == b"PK\x05\x06" {
+                    return true; // ZIP, APK, JAR, DOCX, XLSX, PPTX
+                }
+                if &header[0..4] == b"Rar!" {
+                    return true; // RAR 4 / RAR 5
+                }
+                if &header[0..4] == b"\x28\xb5\x2f\xfd" {
+                    return true; // Zstandard
+                }
+                if &header[0..4] == b"\x89PNG" {
+                    return true; // PNG
+                }
+                if &header[0..4] == b"GIF8" {
+                    return true; // GIF
+                }
+                if &header[0..4] == b"\x1a\x45\xdf\xa3" {
+                    return true; // Matroska / WebM
+                }
+                if &header[0..4] == b"OggS" {
+                    return true; // OGG / Opus
+                }
+                if &header[0..4] == b"fLaC" {
+                    return true; // FLAC
+                }
+                if &header[0..4] == b"MSCF" {
+                    return true; // Microsoft CAB
+                }
+            }
+            if n >= 6 {
+                if &header[0..6] == b"7z\xbc\xaf'\x1c" {
+                    return true; // 7-Zip
+                }
+                if &header[0..6] == b"\xfd7zXZ\x00" {
+                    return true; // XZ
+                }
+            }
+            if n >= 8 && &header[4..8] == b"ftyp" {
+                return true; // MP4, M4A, MOV, AVIF, HEIC container
+            }
+            if n >= 12 && &header[0..4] == b"RIFF" && &header[8..12] == b"WEBP" {
+                return true; // WebP
+            }
+        }
+    }
+
+    false
+}
+
 pub fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<crate::types::ArchiveEntryItem>, depth: usize) {
     if depth > 32 { return; }
     if let Ok(m) = std::fs::symlink_metadata(dir) {
@@ -330,8 +432,12 @@ pub fn write_dir_to_bay_archive<W: Write>(
     if depth > 32 {
         return Ok(());
     }
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
+    if let Ok(read_dir) = std::fs::read_dir(dir) {
+        let mut entries: Vec<_> = read_dir.flatten().collect();
+        // Solid archiving heuristic (Eugene Roshal / RarFiles.lst principle):
+        // Group compressible files together before high-entropy pre-compressed media.
+        entries.sort_by_key(|e| is_precompressed_file(&e.path()));
+        for entry in entries {
             if is_compression_cancelled() {
                 return Err("Compression cancelled by user".to_string());
             }
@@ -504,6 +610,11 @@ pub fn compress_bay(
         // Dynamic TOC entries collected in-flight without double-scanning disk
         let mut toc_entries: Vec<crate::types::ArchiveEntryItem> = Vec::new();
 
+        // Solid archiving heuristic: group compressible text/code/binaries together first,
+        // placing high-entropy pre-compressed media at the end.
+        let mut ordered_files = files.to_vec();
+        ordered_files.sort_by_key(|f| is_precompressed_file(Path::new(f)));
+
         if algo_lower.contains("brotli") {
             let mut out_sink = out_writer;
             out_sink.write_all(b"BAYBRO\x02\x00")
@@ -516,7 +627,7 @@ pub fn compress_bay(
                 _ => 11,
             };
             let mut encoder = brotli::CompressorWriter::new(out_sink, 64 * 1024, quality, 22);
-            for file_str in files {
+            for file_str in &ordered_files {
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
                 }
@@ -558,7 +669,7 @@ pub fn compress_bay(
             out_sink.write_all(b"BAYLZ4\x02\x00")
                 .map_err(|e| format!("Header write error: {}", e))?;
             let mut encoder = lz4_flex::frame::FrameEncoder::new(out_sink);
-            for file_str in files {
+            for file_str in &ordered_files {
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
                 }
@@ -611,7 +722,7 @@ pub fn compress_bay(
             if is_gamer {
                 let _ = encoder.include_checksum(false);
             }
-            for file_str in files {
+            for file_str in &ordered_files {
                 if is_compression_cancelled() {
                     return Err("Compression cancelled by user".to_string());
                 }
@@ -672,6 +783,7 @@ pub fn compress_zip(
     encryption: Option<&str>,
     app: &AppHandle,
     total_original: u64,
+    smart_bypass: bool,
 ) -> Result<(), String> {
     if is_compression_cancelled() {
         return Err("Compression cancelled by user".to_string());
@@ -729,9 +841,15 @@ pub fn compress_zip(
         let p = Path::new(file_str);
         
         let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let is_precomp = smart_bypass && is_precompressed_file(p);
+        let entry_method = if is_precomp {
+            zip::CompressionMethod::Stored
+        } else {
+            method
+        };
         let options = SimpleFileOptions::default()
-            .compression_method(method)
-            .compression_level(Some(deflate_level))
+            .compression_method(entry_method)
+            .compression_level(if entry_method == zip::CompressionMethod::Stored { None } else { Some(deflate_level) })
             .large_file(file_len >= 0xFFFF_FFFF);
 
         if p.is_file() {
@@ -809,6 +927,7 @@ pub fn compress_zip(
                 app: &AppHandle,
                 last_emit: &mut Instant,
                 depth: usize,
+                smart_bypass: bool,
             ) -> Result<(), String> {
                 if depth > 32 { return Ok(()); }
                 if let Ok(entries) = std::fs::read_dir(dir) {
@@ -824,9 +943,15 @@ pub fn compress_zip(
                             if clean_rel.is_empty() { continue; }
                             
                             let is_large = m.len() >= 0xFFFF_FFFF;
+                            let is_precomp = smart_bypass && is_precompressed_file(&path);
+                            let entry_method = if is_precomp {
+                                zip::CompressionMethod::Stored
+                            } else {
+                                method
+                            };
                             let options = SimpleFileOptions::default()
-                                .compression_method(method)
-                                .compression_level(Some(deflate_level))
+                                .compression_method(entry_method)
+                                .compression_level(if entry_method == zip::CompressionMethod::Stored { None } else { Some(deflate_level) })
                                 .large_file(is_large);
 
                             if m.is_dir() && !m.file_type().is_symlink() {
@@ -836,7 +961,7 @@ pub fn compress_zip(
                                 } else {
                                     let _ = writer.add_directory(&dir_name, options);
                                 }
-                                add_dir_to_zip(&path, base, writer, read_buf, method, deflate_level, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1)?;
+                                add_dir_to_zip(&path, base, writer, read_buf, method, deflate_level, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1, smart_bypass)?;
                             } else if m.is_file() {
                                 let mut f = match File::open(&path) {
                                     Ok(file) => file,
@@ -888,7 +1013,7 @@ pub fn compress_zip(
                 }
                 Ok(())
             }
-            add_dir_to_zip(p, parent_dir, &mut writer, &mut read_buf, method, deflate_level, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
+            add_dir_to_zip(p, parent_dir, &mut writer, &mut read_buf, method, deflate_level, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0, smart_bypass)?;
         }
     }
 
@@ -1089,7 +1214,12 @@ pub fn compress_7z(
         let mut bytes_processed: u64 = 0;
         let mut last_emit = Instant::now();
 
-        for file_str in files {
+        // Solid archiving heuristic: group compressible text/code/binaries together first,
+        // placing high-entropy pre-compressed media at the end.
+        let mut ordered_files = files.to_vec();
+        ordered_files.sort_by_key(|f| is_precompressed_file(Path::new(f)));
+
+        for file_str in &ordered_files {
             if is_compression_cancelled() {
                 return Err("Compression cancelled by user".to_string());
             }
@@ -1130,8 +1260,10 @@ pub fn compress_7z(
                     depth: usize,
                 ) -> Result<(), String> {
                     if depth > 32 { return Ok(()); }
-                    if let Ok(entries) = std::fs::read_dir(dir) {
-                        for entry in entries.flatten() {
+                    if let Ok(read_dir) = std::fs::read_dir(dir) {
+                        let mut entries: Vec<_> = read_dir.flatten().collect();
+                        entries.sort_by_key(|e| is_precompressed_file(&e.path()));
+                        for entry in entries {
                             if is_compression_cancelled() {
                                 return Err("Compression cancelled by user".to_string());
                             }
@@ -1194,18 +1326,23 @@ pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), S
     // Buffer scaled by destination bus to prevent disk thrashing and maximize sequential write speeds
     let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);
     let mut writer = zip::ZipWriter::new(buf_writer);
-    let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-    let options = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated)
-        .compression_level(Some(6))
-        .large_file(file_len >= 0xFFFF_FFFF);
-
     let parent = p.parent().unwrap_or(p);
 
     if p.is_file() {
         if let Ok(mut f) = File::open(p) {
+            let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
             let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            writer.start_file(file_name, options)
+            let is_precomp = is_precompressed_file(p);
+            let entry_method = if is_precomp {
+                zip::CompressionMethod::Stored
+            } else {
+                zip::CompressionMethod::Deflated
+            };
+            let file_opt = SimpleFileOptions::default()
+                .compression_method(entry_method)
+                .compression_level(if is_precomp { None } else { Some(6) })
+                .large_file(file_len >= 0xFFFF_FFFF);
+            writer.start_file(file_name, file_opt)
                 .map_err(|e| format!("Zip start error: {}", e))?;
             std::io::copy(&mut f, &mut writer)
                 .map_err(|e| format!("Zip copy error: {}", e))?;
@@ -1233,9 +1370,15 @@ pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), S
                             add_dir(&path, base, writer, depth + 1)?;
                         } else if m.is_file() {
                             if let Ok(mut f) = File::open(&path) {
+                                let is_precomp = is_precompressed_file(&path);
+                                let entry_method = if is_precomp {
+                                    zip::CompressionMethod::Stored
+                                } else {
+                                    zip::CompressionMethod::Deflated
+                                };
                                 let file_opt = SimpleFileOptions::default()
-                                    .compression_method(zip::CompressionMethod::Deflated)
-                                    .compression_level(Some(6))
+                                    .compression_method(entry_method)
+                                    .compression_level(if is_precomp { None } else { Some(6) })
                                     .large_file(m.len() >= 0xFFFF_FFFF);
                                 writer.start_file(&rel_str, file_opt)
                                     .map_err(|e| format!("Zip start error: {}", e))?;
@@ -1342,8 +1485,10 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
             if depth > 32 {
                 return;
             }
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
+            if let Ok(read_dir) = std::fs::read_dir(dir) {
+                let mut entries: Vec<_> = read_dir.flatten().collect();
+                entries.sort_by_key(|e| is_precompressed_file(&e.path()));
+                for entry in entries {
                     let entry_path = entry.path();
                     if let Ok(m) = std::fs::symlink_metadata(&entry_path) {
                         if m.is_file() {
@@ -1629,6 +1774,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
     let pwd_ref = payload.password.as_deref();
     let enc_ref = payload.encryption.as_deref();
     let fmt_clean = payload.format.trim_start_matches('.').to_lowercase();
+    let smart_bypass = payload.smart_bypass.unwrap_or(true);
     let compress_res = match fmt_clean.as_str() {
         "zip" => {
             compress_zip(
@@ -1640,6 +1786,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
                 enc_ref,
                 &app,
                 total_original,
+                smart_bypass,
             )
         },
         "tar" => {
