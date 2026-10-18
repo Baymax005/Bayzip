@@ -12,7 +12,7 @@ use tauri::AppHandle;
 
 pub use types::*;
 pub use priority::ScopedPriorityGuard;
-pub use registry::register_context_menu_sync;
+pub use registry::{register_context_menu_sync, unregister_context_menu_sync};
 pub use inspector::{detect_archive_type, inspect_archive, sanitize_archive_path, archive_stem_name, has_instant_bay_toc, safe_atomic_rename, get_single_root_dir, clear_readonly};
 pub use compressor::{headless_quick_compress, compress_files_sync, compute_path_size};
 pub use extractor::{headless_extract_here, headless_extract_to_subfolder, universal_extract, extract_archive_sync};
@@ -65,6 +65,15 @@ fn get_cli_args() -> StartupCommand {
 async fn register_context_menu() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
         register_context_menu_sync()
+    })
+    .await
+    .map_err(|e| format!("Registry sync error: {}", e))?
+}
+
+#[tauri::command]
+async fn unregister_context_menu() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        unregister_context_menu_sync()
     })
     .await
     .map_err(|e| format!("Registry sync error: {}", e))?
@@ -217,6 +226,7 @@ pub fn run() {
             get_system_specs, 
             get_cli_args, 
             register_context_menu,
+            unregister_context_menu,
             compress_files,
             cancel_compression,
             cancel_extraction,

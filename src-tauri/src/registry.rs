@@ -20,7 +20,37 @@ pub fn register_context_menu_sync() -> Result<String, String> {
             let _ = std::fs::create_dir_all(&app_dir);
             let icon_file = app_dir.join("bayzip.ico");
             let _ = std::fs::write(&icon_file, include_bytes!("../icons/icon.ico"));
-            let icon_path_str = icon_file.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+            let icon_path_str = icon_file.to_string_lossy().replace('\\', "\\\\");
+
+            // Deploy Modern Windows 11 sparse package files
+            let manifest_file = app_dir.join("AppxManifest.xml");
+            let _ = std::fs::write(&manifest_file, include_str!("../crates/bayzip_shell/AppxManifest.xml"));
+            let icons_dir = app_dir.join("icons");
+            let _ = std::fs::create_dir_all(&icons_dir);
+            let _ = std::fs::write(icons_dir.join("StoreLogo.png"), include_bytes!("../icons/StoreLogo.png"));
+            let _ = std::fs::write(icons_dir.join("Square150x150Logo.png"), include_bytes!("../icons/Square150x150Logo.png"));
+            let _ = std::fs::write(icons_dir.join("Square44x44Logo.png"), include_bytes!("../icons/Square44x44Logo.png"));
+
+            // Write executable path for modern shell extension and copy binary if separate
+            let _ = std::fs::write(app_dir.join("bayzip_path.txt"), exe_str.as_bytes());
+            let dest_exe = app_dir.join("bayzip.exe");
+            if exe_path != dest_exe {
+                let _ = std::fs::copy(&exe_path, &dest_exe);
+            }
+
+            // Deploy bayzip_shell.dll to %LOCALAPPDATA%\Bayzip\bayzip_shell.dll
+            let dest_dll = app_dir.join("bayzip_shell.dll");
+            if let Some(exe_parent) = exe_path.parent() {
+                let candidate_dll = exe_parent.join("bayzip_shell.dll");
+                if candidate_dll.exists() {
+                    let _ = std::fs::copy(&candidate_dll, &dest_dll);
+                } else {
+                    let build_dll = exe_parent.join("crates").join("bayzip_shell").join("target").join("release").join("bayzip_shell.dll");
+                    if build_dll.exists() {
+                        let _ = std::fs::copy(&build_dll, &dest_dll);
+                    }
+                }
+            }
 
             let archive_exts = [
                 ".bay",
@@ -55,7 +85,9 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             // 1. File Association for .bay and .bayg (with clean DefaultIcon and ShellEx purging)
             reg_content.push_str(&format!(
-                "[-HKEY_CURRENT_USER\\Software\\Classes\\.bay\\ShellEx]\r\n\
+                "[HKEY_CURRENT_USER\\Software\\Bayzip]\r\n\
+                \"ExePath\"=\"\\\"{escaped_exe}\\\"\"\r\n\r\n\
+                [-HKEY_CURRENT_USER\\Software\\Classes\\.bay\\ShellEx]\r\n\
                 [-HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive\\ShellEx]\r\n\
                 [-HKEY_CURRENT_USER\\Software\\Classes\\.bayg\\ShellEx]\r\n\
                 [-HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive\\ShellEx]\r\n\
@@ -231,10 +263,103 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                     }
                 }
 
+                // Register Windows 11 Modern Context Menu (Sparse Package Identity)
+                let mut is_win11 = false;
+                let mut ver_cmd = Command::new("powershell");
+                ver_cmd.args(["-NoProfile", "-NonInteractive", "-Command", "[System.Environment]::OSVersion.Version.Build"]);
+                ver_cmd.creation_flags(CREATE_NO_WINDOW);
+                if let Ok(output) = ver_cmd.output() {
+                    if let Ok(s) = String::from_utf8(output.stdout) {
+                        if let Ok(build) = s.trim().parse::<u64>() {
+                            if build >= 22000 {
+                                is_win11 = true;
+                            }
+                        }
+                    }
+                }
+
+                if is_win11 && dest_dll.exists() && manifest_file.exists() {
+                    let mut ps_cmd = Command::new("powershell");
+                    let ps_script = format!(
+                        "Add-AppxPackage -Register '{}\\AppxManifest.xml' -ExternalLocation '{}' -ErrorAction SilentlyContinue",
+                        app_dir.to_string_lossy(),
+                        app_dir.to_string_lossy()
+                    );
+                    ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
+                    ps_cmd.creation_flags(CREATE_NO_WINDOW);
+                    let _ = ps_cmd.output();
+                }
+
                 return Ok("Context menu registered successfully!".into());
             }
         }
         Err("Could not determine executable path.".into())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok("Context menu not applicable on non-Windows OS".into())
+    }
+}
+
+pub fn unregister_context_menu_sync() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // 1. Unregister Windows 11 Modern Context Menu Sparse Package
+        let mut ps_cmd = Command::new("powershell");
+        ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", "Get-AppxPackage -Name 'Bayzip.ShellExtension' | Remove-AppxPackage -ErrorAction SilentlyContinue"]);
+        ps_cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = ps_cmd.output();
+
+        // 2. Unregister Classic Registry Shell Integration
+        let mut reg_content = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
+        reg_content.push_str(
+            "[-HKEY_CURRENT_USER\\Software\\Bayzip]\r\n\
+            [-HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\BayzipCompress]\r\n\
+            [-HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\BayzipCompress]\r\n\
+            [-HKEY_CURRENT_USER\\Software\\Classes\\.bay]\r\n\
+            [-HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.Archive]\r\n\
+            [-HKEY_CURRENT_USER\\Software\\Classes\\.bayg]\r\n\
+            [-HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive]\r\n\
+            [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay]\r\n\
+            [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bayg]\r\n"
+        );
+
+        let archive_exts = [
+            ".bay", ".bayg", ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".iso", ".cab",
+        ];
+        for ext in &archive_exts {
+            reg_content.push_str(&format!(
+                "[-HKEY_CURRENT_USER\\Software\\Classes\\SystemFileAssociations\\{ext}\\shell\\BayzipExtract]\r\n"
+            ));
+        }
+
+        let temp_reg = std::env::temp_dir().join("bayzip_unreg.reg");
+        let mut utf16_bytes: Vec<u8> = vec![0xFF, 0xFE];
+        for u in reg_content.encode_utf16() {
+            utf16_bytes.extend_from_slice(&u.to_le_bytes());
+        }
+
+        if std::fs::write(&temp_reg, utf16_bytes).is_ok() {
+            let mut cmd = Command::new("reg");
+            cmd.args(["import", &temp_reg.to_string_lossy()]);
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            let _ = cmd.output();
+            let _ = std::fs::remove_file(temp_reg);
+
+            #[cfg(target_os = "windows")]
+            {
+                #[link(name = "shell32")]
+                extern "system" {
+                    fn SHChangeNotify(w_event_id: i32, u_flags: u32, dw_item1: *const std::ffi::c_void, dw_item2: *const std::ffi::c_void);
+                }
+                unsafe {
+                    SHChangeNotify(0x0800_0000, 0x1000, std::ptr::null(), std::ptr::null());
+                }
+            }
+
+            return Ok("Context menu unregistered successfully!".into());
+        }
+        Err("Could not unregister context menu.".into())
     }
     #[cfg(not(target_os = "windows"))]
     {

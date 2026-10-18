@@ -1,0 +1,21 @@
+[package]
+name = "bayzip_shell"
+version = "1.2.0"
+edition = "2021"
+authors = ["Muhammad Ali (Baymax)"]
+description = "Bayzip Windows 11 Modern Context Menu Shell Extension (IExplorerCommand)"
+
+[lib]
+name = "bayzip_shell"
+crate-type = ["cdylib"]
+
+[dependencies]
+windows-core = "0.58"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "implement",
+] }

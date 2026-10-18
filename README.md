@@ -1,4 +1,4 @@
-# 📦 Bayzip (v1.1.5)
+# 📦 Bayzip (v1.2.0)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, and seamless Windows File Explorer shell integration.
 
@@ -77,9 +77,21 @@
 - Seamless password prompt with in-place archive unlocking for inspection and previewing.
 
 ### 🪟 Windows File Explorer Integration
-- **Context Menus**: Right-click files or folders to quickly compress to `.bay`, `.zip`, `.7z`, or `.tar` (including headless background compression with instant TOC generation).
-- **Quick Extract**: Right-click archives to *"Extract to dedicated folder"*, *"Extract Here"*, or *"Open in Bayzip"*.
-- **Branded File Associations**: Displays Bayzip icons on `.bay` and `.bayg` files in Windows File Explorer.
+- **Native Windows 11 Top-Level Context Menu (`IExplorerCommand`)**:
+  - Implements Microsoft's modern Windows 11 shell extension standard via in-process COM companion DLL (`bayzip_shell.dll`).
+  - Appears directly at the top level of the Windows 11 right-click menu without needing "Show more options" (`Shift+F10`).
+  - Features cascading sub-commands with native Fluent icons:
+    - *"Compress to .bayg (Gamer Preset)"*
+    - *"Compress to .bay (Ultra-Fast)"*
+    - *"Extract Here"*
+    - *"Open in Bayzip"*
+  - Multi-selection support: processes all selected files and folders in batch.
+- **Sparse Package Identity (`AppxManifest.xml`)**:
+  - Automatically deploys and registers a Windows Sparse Package on Windows 11 (`Build >= 22000`) for seamless modern shell integration.
+- **Classic Windows 10 & Legacy Fallback**:
+  - Dual-mode support maintains standard `HKCU\Software\Classes` shell registry keys for Windows 10 and classic Explorer contexts.
+- **Branded File Associations**:
+  - Displays official Bayzip glowing cube icons on `.bay` and `.bayg` files across File Explorer.
 
 ---
 
@@ -106,7 +118,15 @@
 
 > 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases, see [CHANGELOG.md](CHANGELOG.md).
 
-### v1.1.5 (Latest)
+### v1.2.0 (Latest)
+- **Windows 11 Modern Context Menu & Shell Extension**:
+  - Implemented companion native Windows shell extension sub-crate `bayzip_shell` compiling to a high-performance in-process COM dynamic-link library (`bayzip_shell.dll`).
+  - Appears directly at the top level of the Windows 11 File Explorer context menu (no need to click "Show more options" / Shift+F10).
+  - Integrated Sparse Package manifest (`AppxManifest.xml`) with automatic registration on Windows 11 (`Build >= 22000`).
+  - Multi-selection support for `--quick-compress`, `--extract-here`, and `--extract-to-folder`.
+  - Added clean context menu re-sync and unregistration capabilities.
+
+### v1.1.5
 - **Extended Magic Byte Signatures & Universal Format Detection**:
   - Implemented raw byte inspection for 5 additional archive and container standards:
     - **BZip2 (`.bz2`, `.tar.bz2`)**: `42 5A 68` (`BZh`)
@@ -117,6 +137,7 @@
   - Enables Bayzip to detect, inspect, and extract renamed, corrupted-extension, or extensionless archives via `tar.exe` and native decoders.
   - Added in-memory file previewing via system tar stdout streaming (`-O`) for `.bz2`, `.xz`, `.zst`, `.iso`, and `.cab`.
   - Added Windows File Explorer context menu and open dialog associations for `.bz2`, `.xz`, `.zst`, `.iso`, and `.cab`.
+  - Configured custom NSIS setup installer logo and cleaned Windows `.bay` icon registry handlers.
 
 ### v1.1.4
 - **Format Hardening & Audit Across All Containers**:

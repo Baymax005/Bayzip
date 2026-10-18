@@ -4,6 +4,31 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ---
 
+## [v1.2.0] - 2026-10-18
+
+### 🪟 Windows 11 Modern Context Menu & Shell Extension
+- **Native Windows 11 Top-Level Context Menu ([crates/bayzip_shell](src-tauri/crates/bayzip_shell))**:
+  - Implemented companion native Windows shell extension sub-crate `bayzip_shell` compiling to a high-performance in-process COM dynamic-link library (`bayzip_shell.dll`).
+  - Implemented Windows Shell `IExplorerCommand`, `IEnumExplorerCommand`, and `IClassFactory` interfaces using `windows-core` and Windows SDK traits.
+  - Registered under dedicated CLSID `{44E23C12-5883-4903-9DA9-33D72120C19A}`.
+  - Appears directly at the top level of the Windows 11 File Explorer context menu (no need to click "Show more options" / Shift+F10).
+  - Features dedicated cascading sub-commands with native icons:
+    - **Compress to .bayg (Gamer Preset)**: Rapid multi-core compression capped at Zstd Level 3 with zero-overhead streaming.
+    - **Compress to .bay (Ultra-Fast)**: High-performance standard compression.
+    - **Extract Here**: Instant headless multi-format extraction to the current working directory.
+    - **Open in Bayzip**: Launches the modern Fluent GUI inspector.
+- **Sparse Package Identity Integration ([AppxManifest.xml](src-tauri/crates/bayzip_shell/AppxManifest.xml), [registry.rs](src-tauri/src/registry.rs))**:
+  - Authored standard Windows Sparse Package manifest (`PackageFullName: Bayzip.ShellExtension_1.2.0.0_x64__b5n7qtqag6tr4`) supporting external loose deployment via `uap10:AllowExternalContent` and `uap10:RuntimeBehavior="win32App"`.
+  - Configured `desktop4:FileExplorerContextMenus` targeting `*` and `Directory` targets with alphanumeric verb IDs (`BayzipContextMenuAllFiles`, `BayzipContextMenuDirectory`).
+  - Configured in-process STA COM activation via `com:SurrogateServer`.
+  - Added automatic background registration on startup via `Add-AppxPackage -Register` when running on Windows 11 (`Build >= 22000`).
+  - Preserved dual-mode support: automatically maintains classic Windows 10 registry integration (`HKCU\Software\Classes`) alongside modern Windows 11 Sparse Package identity.
+- **Multi-Selection Shell Command Dispatch ([main.rs](src-tauri/src/main.rs), [lib.rs](src-tauri/src/lib.rs))**:
+  - Enhanced headless CLI commands (`--quick-compress`, `--extract-here`, `--extract-to-folder`) in `main.rs` to iterate over all passed file arguments when multiple files/folders are selected in Explorer.
+  - Added `unregister_context_menu` Tauri command and registry unregistration routines (`Remove-AppxPackage` + registry purge) in `lib.rs` and `registry.rs`.
+
+---
+
 ## [v1.1.5] - 2026-10-18
 
 ### 🔍 Extended Magic Byte Signatures & Universal Inspection
