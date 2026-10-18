@@ -4,7 +4,7 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ---
 
-## [v1.2.3] - 2026-10-18
+## [v1.2.3] - 2026-10-19
 
 ### ⚡ Performance & Storage Hardware Architecture
 - **Hardware-Aware Physical Storage Read Slicing ([inspector.rs](src-tauri/src/inspector.rs), [compressor.rs](src-tauri/src/compressor.rs))**:
