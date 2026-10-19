@@ -106,13 +106,13 @@ pub fn is_precompressed_file(path: &Path) -> bool {
 
 pub fn is_path_excluded(clean_rel: &str, excluded: Option<&std::collections::HashSet<String>>) -> bool {
     if let Some(set) = excluded {
-        let clean = clean_rel.replace('\\', "/").trim_start_matches('/').to_lowercase();
+        let clean = clean_rel.replace('\\', "/").trim_start_matches('/').trim_end_matches('/').to_lowercase();
         if set.contains(&clean) {
             return true;
         }
         for exc in set {
-            let prefix = if exc.ends_with('/') { exc.clone() } else { format!("{}/", exc) };
-            if clean.starts_with(&prefix) {
+            let exc_clean = exc.trim_end_matches('/');
+            if clean.starts_with(&format!("{}/", exc_clean)) || clean == exc_clean {
                 return true;
             }
         }

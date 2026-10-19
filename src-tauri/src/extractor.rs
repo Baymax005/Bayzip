@@ -374,14 +374,7 @@ pub fn extract_bay_archive(
 
     let single_root_prefix = if crate::inspector::has_instant_bay_toc(archive_path) {
         let (entries, _, _) = crate::inspector::list_bay_entries(archive_path, password);
-        if !entries.is_empty() && has_single_root_dir(&entries) {
-            entries[0].name.trim_start_matches(|c| c == '/' || c == '\\')
-                .split(['/', '\\'])
-                .next()
-                .map(|s| s.to_string())
-        } else {
-            None
-        }
+        get_single_root_dir(&entries)
     } else {
         None
     };
@@ -489,8 +482,12 @@ pub fn extract_zip_archive(
             let mut candidate_root: Option<String> = None;
             let mut is_single = true;
             for name in archive.file_names() {
-                let clean = name.trim().trim_start_matches(|c| c == '/' || c == '\\');
+                let clean = name.trim().trim_start_matches(|c| c == '/' || c == '\\').trim_start_matches("./");
                 if clean.is_empty() || clean == "." { continue; }
+                if !clean.contains('/') && !clean.contains('\\') && !name.ends_with('/') {
+                    is_single = false;
+                    break;
+                }
                 let first = clean.split(['/', '\\']).next().unwrap_or("");
                 if first.is_empty() { continue; }
                 match &candidate_root {
@@ -902,8 +899,12 @@ pub fn extract_7z_archive(
             let mut candidate_root: Option<String> = None;
             let mut is_single = true;
             for f in &sz_reader.archive().files {
-                let clean = f.name().trim().trim_start_matches(|c| c == '/' || c == '\\');
+                let clean = f.name().trim().trim_start_matches(|c| c == '/' || c == '\\').trim_start_matches("./");
                 if clean.is_empty() || clean == "." { continue; }
+                if !clean.contains('/') && !clean.contains('\\') && !f.is_directory() && !f.name().ends_with('/') {
+                    is_single = false;
+                    break;
+                }
                 let first = clean.split(['/', '\\']).next().unwrap_or("");
                 if first.is_empty() { continue; }
                 match &candidate_root {

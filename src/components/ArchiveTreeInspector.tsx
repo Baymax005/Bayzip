@@ -14,7 +14,7 @@ interface ArchiveTreeInspectorProps {
 }
 
 export function normalizeArchiveEntryPath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+  return p.replace(/\\/g, "/").replace(/^\.?\/+/, "").toLowerCase();
 }
 
 export interface TreeNode {
@@ -276,8 +276,8 @@ export function ArchiveTreeInspector({
     };
 
     for (const entry of archiveInfo.entries) {
-      const clean = entry.name.replace(/\\/g, "/").trim().replace(/^\/+/, "");
-      if (!clean) continue;
+      const clean = entry.name.replace(/\\/g, "/").trim().replace(/^\.?\/+/, "");
+      if (!clean || clean === ".") continue;
 
       if (entry.is_dir || clean.endsWith("/")) {
         const folderPath = clean.replace(/\/+$/, "");

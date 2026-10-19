@@ -845,14 +845,26 @@ function App() {
         const entries = archiveInfo?.entries || [];
         let hasSingleRoot = false;
         if (entries.length > 0) {
-          const firstPath = entries[0].name.replace(/\\/g, "/");
-          const firstSlash = firstPath.indexOf("/");
-          if (firstSlash !== -1) {
-            const rootPrefix = firstPath.substring(0, firstSlash);
-            hasSingleRoot = entries.every((e) => {
-              const clean = e.name.replace(/\\/g, "/");
-              return clean === rootPrefix || clean.startsWith(rootPrefix + "/");
-            });
+          let rootPrefix: string | null = null;
+          let isSingle = true;
+          for (const e of entries) {
+            const clean = e.name.replace(/\\/g, "/").replace(/^\.?\/+/, "").trim();
+            if (!clean || clean === ".") continue;
+            if (!clean.includes("/") && !e.is_dir) {
+              isSingle = false;
+              break;
+            }
+            const firstSegment = clean.split("/")[0];
+            if (!firstSegment) continue;
+            if (rootPrefix === null) {
+              rootPrefix = firstSegment;
+            } else if (rootPrefix.toLowerCase() !== firstSegment.toLowerCase()) {
+              isSingle = false;
+              break;
+            }
+          }
+          if (isSingle && rootPrefix !== null) {
+            hasSingleRoot = true;
           }
         }
 

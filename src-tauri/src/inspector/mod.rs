@@ -30,11 +30,12 @@ const DOS_RESERVED_NAMES: &[&str] = &[
 
 pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
     let clean = raw.replace('\\', "/");
-    let trimmed = clean.trim_start_matches('/');
-    if trimmed.is_empty() {
+    let trimmed = clean.trim_start_matches('/').trim_start_matches("./");
+    if trimmed.is_empty() || trimmed == "." {
         return None;
     }
     let p = Path::new(trimmed);
+    let mut normalized = PathBuf::new();
     for component in p.components() {
         match component {
             std::path::Component::ParentDir
@@ -51,11 +52,17 @@ pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
                 if DOS_RESERVED_NAMES.iter().any(|&r| stem.eq_ignore_ascii_case(r)) {
                     return None;
                 }
+                normalized.push(os_str);
             }
-            _ => {}
+            std::path::Component::CurDir => {
+                // Safely skip redundant '.' components
+            }
         }
     }
-    Some(PathBuf::from(trimmed))
+    if normalized.as_os_str().is_empty() {
+        return None;
+    }
+    Some(normalized)
 }
 
 pub fn archive_stem_name(p: &Path) -> String {
@@ -91,7 +98,7 @@ pub fn get_single_root_dir(entries: &[ArchiveEntryItem]) -> Option<String> {
     let mut non_empty_count = 0;
 
     for entry in entries {
-        let clean = entry.name.trim().trim_start_matches(|c| c == '/' || c == '\\');
+        let clean = entry.name.trim().trim_start_matches(|c| c == '/' || c == '\\').trim_start_matches("./");
         if clean.is_empty() || clean == "." {
             continue;
         }

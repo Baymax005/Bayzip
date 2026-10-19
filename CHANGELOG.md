@@ -2,6 +2,27 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.0.6] - 2026-10-20
+
+### 🛡️ Path Hardening, Directory Traversal Security & Heuristic Fixes
+- **CurDir & Leading `./` Component Normalization (`inspector/mod.rs`)**:
+  - Enhanced `sanitize_archive_path` to strip leading `./` and `/` without altering relative subfolder hierarchies.
+  - Filtered out `Component::CurDir` (`.`) during path normalization so archives created with relative dot-prefixes (common in TAR and Linux tools) resolve cleanly into normal paths rather than breaking single-root directory detection.
+  - Returns `None` for entries consisting solely of `.` or `./` to prevent invalid directory node creation.
+- **Single-Root Directory Deduplication Hardening (`extractor.rs`)**:
+  - Upgraded `.bay` extraction single-root prefix resolution to use `get_single_root_dir` instead of naive `entries[0]` indexing.
+  - Added loose top-level file verification to ZIP and 7-Zip candidate root loops: archives containing loose top-level files are never misidentified as wrapped single-folder containers, preventing erroneous folder-stripping.
+- **Folder Exclusion Trailing Slash Normalization (`compressor/utils.rs`)**:
+  - Fixed a pattern-matching mismatch in `is_path_excluded` where folder exclusions with trailing slashes failed to match directory entries without trailing slashes.
+  - Both path and exclusions are normalized via `trim_end_matches('/')` with prefix and exact matching.
+- **Frontend Path Alignment (`App.tsx` & `ArchiveTreeInspector.tsx`)**:
+  - Replaced naive slash-indexing in `hasSingleRoot` with a multi-entry scan matching the backend's `get_single_root_dir` logic.
+  - Cleaned `normalizeArchiveEntryPath` and tree building loops to strip leading `./` and prevent ghost `.` folders.
+- **Documentation Modernization (`README.md`)**:
+  - Cleaned up legacy historical release notes from `README.md` to highlight only the latest version while directing users to `CHANGELOG.md` for complete release history.
+
+---
+
 ## [v2.0.5] - 2026-10-20
 
 ### ⚙️ Backend Architecture Modularization & Engine Separation
