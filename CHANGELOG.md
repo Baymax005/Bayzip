@@ -2,6 +2,25 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.0.1] - 2026-10-19
+
+### 🛡️ Security, Robustness & OS Scheduling Hardening
+- **Strict Content Security Policy (CSP)**:
+  - Enabled restrictive CSP in `tauri.conf.json` (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:`), hardening the webview against untrusted script execution.
+- **64 KB Archive Entry Name Bounds Check**:
+  - Added defensive 64 KB bounds check on `name_len` across streaming extraction ([extractor.rs](src-tauri/src/extractor.rs)) and archive inspection ([inspector.rs](src-tauri/src/inspector.rs)). Prevents process memory exhaustion (OOM) when handling corrupted, fuzzed, or malformed archive headers.
+- **100% Streaming Encryption Enforcement**:
+  - Deprecated legacy single-buffer v1/v2 decryption blocks in favor of constant-memory Streaming Chunked AEAD (`BAYENC\x03\x00`), permanently eliminating whole-file RAM allocations during extraction.
+- **Atomic Reference-Counted Background Priority Shield**:
+  - Upgraded `ScopedPriorityGuard` ([priority.rs](src-tauri/src/priority.rs)) with atomic reference counting (`ACTIVE_GUARD_COUNT`) to ensure OS thread priority is never prematurely restored to Normal when multiple operations run concurrently.
+  - Added interactive preference toggle in `SettingsWindow` allowing power users to switch between **Smooth Mode (Shield ON / Below Normal Priority)** for stutter-free gaming and **Max Power (Normal Priority)** for aggressive foreground throughput.
+- **Tauri Async Architecture & Gamer Level Alignment**:
+  - Converted `get_file_size` IPC command to `async fn` with `spawn_blocking` (Architecture Rule 1 compliance).
+  - Aligned `.bayg` gamer preset Zstandard compression level to Level 3 at 75% and 100% hardware allocation (Architecture Rule 4 compliance).
+  - Removed unreferenced `shell_integration.rs` prototype file.
+
+---
+
 ## [v2.0.0] - 2026-10-19
 
 ### ⚡ Smart Pre-Compressed Media Bypass (High-Throughput Store Mode)

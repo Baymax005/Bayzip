@@ -652,6 +652,7 @@ pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem
         let mut len_bytes = [0u8; 4];
         if decoder.read_exact(&mut len_bytes).is_err() { break; }
         let name_len = u32::from_le_bytes(len_bytes) as usize;
+        if name_len > 65536 { break; }
         let mut name_buf = vec![0u8; name_len];
         if decoder.read_exact(&mut name_buf).is_err() { break; }
         let rel_path_str = String::from_utf8_lossy(&name_buf).to_string();
@@ -803,51 +804,8 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
         return (Vec::new(), 0, 0);
     }
 
-    // Legacy encrypted .bay v1 & v2 (single buffer fallback)
+    // Legacy encrypted .bay v1 & v2 (deprecated in v2.0+)
     if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
-        let pwd = match password {
-            Some(p) if !p.trim().is_empty() => p.trim(),
-            _ => return (Vec::new(), 0, 0),
-        };
-
-        let header_len = if magic.starts_with(b"BAYENC\x02") { 8 } else { 7 };
-        let _ = file.seek(std::io::SeekFrom::Start(header_len));
-        let mut salt = [0u8; 16];
-        if file.read_exact(&mut salt).is_err() { return (Vec::new(), 0, 0); }
-        let mut nonce_bytes = [0u8; 12];
-        if file.read_exact(&mut nonce_bytes).is_err() { return (Vec::new(), 0, 0); }
-
-        let mut ciphertext = Vec::new();
-        if file.read_to_end(&mut ciphertext).is_err() { return (Vec::new(), 0, 0); }
-
-        let key_bytes = derive_bay_key(pwd, &salt);
-        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let Ok(plaintext) = cipher.decrypt(nonce, ciphertext.as_ref()) else {
-            return (Vec::new(), 0, 0);
-        };
-
-        if plaintext.starts_with(b"BAYBRO\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
-            return list_bay_stream_entries(decoder);
-        } else if plaintext.starts_with(b"BAYLZ4\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
-            return list_bay_stream_entries(decoder);
-        } else if plaintext.starts_with(b"BAYZIP\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            if let Ok(decoder) = zstd::stream::Decoder::new(&plaintext[offset..]) {
-                return list_bay_stream_entries(decoder);
-            }
-        } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
-            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
-            return list_bay_stream_entries(decoder);
-        } else if let Ok(decoder) = zstd::stream::Decoder::new(&plaintext[..]) {
-            return list_bay_stream_entries(decoder);
-        }
         return (Vec::new(), 0, 0);
     }
 
@@ -1090,6 +1048,7 @@ fn read_bay_entry_from_stream<R: Read>(mut decoder: R, target_entry: &str) -> Re
         let mut len_bytes = [0u8; 4];
         if decoder.read_exact(&mut len_bytes).is_err() { break; }
         let name_len = u32::from_le_bytes(len_bytes) as usize;
+        if name_len > 65536 { break; }
         let mut name_buf = vec![0u8; name_len];
         if decoder.read_exact(&mut name_buf).is_err() { break; }
         let rel_path_str = String::from_utf8_lossy(&name_buf).to_string();
@@ -1162,52 +1121,9 @@ fn preview_bay_entry_bytes(path: &Path, entry_name: &str, password: Option<&str>
         }
     }
 
-    // Legacy encrypted .bay v1 & v2 (single buffer fallback)
+    // Legacy encrypted .bay v1 & v2 (deprecated in v2.0+)
     if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
-        let pwd = match password {
-            Some(p) if !p.trim().is_empty() => p.trim(),
-            _ => return Err("Password required for encrypted .bay archive".into()),
-        };
-
-        let header_len = if magic.starts_with(b"BAYENC\x02") { 8 } else { 7 };
-        let _ = file.seek(std::io::SeekFrom::Start(header_len));
-        let mut salt = [0u8; 16];
-        if file.read_exact(&mut salt).is_err() { return Err("Corrupted encrypted archive salt".into()); }
-        let mut nonce_bytes = [0u8; 12];
-        if file.read_exact(&mut nonce_bytes).is_err() { return Err("Corrupted encrypted archive nonce".into()); }
-
-        let mut ciphertext = Vec::new();
-        if file.read_to_end(&mut ciphertext).is_err() { return Err("Failed to read encrypted archive".into()); }
-
-        let key_bytes = derive_bay_key(pwd, &salt);
-        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let plaintext = match cipher.decrypt(nonce, ciphertext.as_ref()) {
-            Ok(pt) => pt,
-            Err(_) => return Err("Incorrect password for .bay archive".into()),
-        };
-
-        if plaintext.starts_with(b"BAYBRO\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
-            return read_bay_entry_from_stream(decoder, entry_name);
-        } else if plaintext.starts_with(b"BAYLZ4\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
-            return read_bay_entry_from_stream(decoder, entry_name);
-        } else if plaintext.starts_with(b"BAYZIP\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            let decoder = zstd::stream::Decoder::new(&plaintext[offset..]).map_err(|e| e.to_string())?;
-            return read_bay_entry_from_stream(decoder, entry_name);
-        } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
-            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
-            return read_bay_entry_from_stream(decoder, entry_name);
-        } else {
-            let decoder = zstd::stream::Decoder::new(&plaintext[..]).map_err(|e| e.to_string())?;
-            return read_bay_entry_from_stream(decoder, entry_name);
-        }
+        return Err("Deprecated archive: Legacy v1/v2 encryption format is no longer supported. Please re-encrypt using modern Bayzip v2.0+ streaming encryption.".to_string());
     }
 
     let _ = file.seek(std::io::SeekFrom::Start(0));

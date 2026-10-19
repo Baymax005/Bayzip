@@ -3,10 +3,6 @@ use std::io::{Read, Write, Seek, BufReader, BufWriter, BufRead};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce, Key
-};
 use crate::crypto::ChunkedAesReader;
 use sevenz_rust2::Password;
 
@@ -44,7 +40,6 @@ use crate::inspector::{
     get_single_root_dir,
     safe_atomic_rename,
     clear_readonly,
-    derive_bay_key,
 };
 
 pub fn base_folder_stem(name: &str) -> &str {
@@ -174,6 +169,9 @@ pub fn extract_bay_stream<R: Read>(
         decoder.read_exact(&mut len_bytes)
             .map_err(|e| format!("Failed to read entry name length: {}", e))?;
         let name_len = u32::from_le_bytes(len_bytes) as usize;
+        if name_len > 65536 {
+            return Err("Malformed archive: entry name length exceeds 64 KB safety limit".to_string());
+        }
         let mut name_buf = vec![0u8; name_len];
         decoder.read_exact(&mut name_buf)
             .map_err(|e| format!("Failed to read entry name: {}", e))?;
@@ -430,60 +428,9 @@ pub fn extract_bay_archive(
         }
     }
 
-    // Legacy encrypted .bay v1 & v2 (single buffer fallback)
+    // Legacy encrypted .bay v1 & v2 (deprecated in v2.0+)
     if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
-        let pwd = match password {
-            Some(p) if !p.trim().is_empty() => p.trim(),
-            _ => return Err("Password required: This .bay archive is encrypted with AES-256-GCM.".into()),
-        };
-
-        // Determine offset after BAYENC signature
-        let header_len = if magic.starts_with(b"BAYENC\x02") { 8 } else { 7 };
-        file.seek(std::io::SeekFrom::Start(header_len)).map_err(|e| e.to_string())?;
-
-        let mut salt = [0u8; 16];
-        file.read_exact(&mut salt)
-            .map_err(|e| format!("Failed to read encryption salt: {}", e))?;
-        let mut nonce_bytes = [0u8; 12];
-        file.read_exact(&mut nonce_bytes)
-            .map_err(|e| format!("Failed to read encryption nonce: {}", e))?;
-
-        let mut ciphertext = Vec::new();
-        file.read_to_end(&mut ciphertext)
-            .map_err(|e| format!("Failed to read ciphertext: {}", e))?;
-
-        let key_bytes = derive_bay_key(pwd, &salt);
-        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())
-            .map_err(|_| "Incorrect password: Failed to decrypt AES-256-GCM archive.".to_string())?;
-
-        // Detect container compression inside decrypted plaintext
-        if plaintext.starts_with(b"BAYBRO\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            let decoder = brotli::Decompressor::new(&plaintext[offset..], 64 * 1024);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
-        } else if plaintext.starts_with(b"BAYLZ4\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[offset..]);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
-        } else if plaintext.starts_with(b"BAYZIP\x02") {
-            let offset = if plaintext.len() >= 8 && plaintext[6] == 2 && plaintext[7] == 0 { 8 } else { 7 };
-            let decoder = zstd::stream::Decoder::new(&plaintext[offset..])
-                .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
-        } else if plaintext.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
-            // Raw LZ4 frame
-            let decoder = lz4_flex::frame::FrameDecoder::new(&plaintext[..]);
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
-        } else {
-            // Raw Zstandard fallback
-            let decoder = zstd::stream::Decoder::new(&plaintext[..])
-                .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(decoder, dest_dir, total_expected_bytes, app, s_prefix, excluded);
-        }
+        return Err("Deprecated archive: Legacy v1/v2 encryption is no longer supported. Please re-encrypt using modern Bayzip v2.0+ streaming encryption.".to_string());
     }
 
     // Unencrypted .bay

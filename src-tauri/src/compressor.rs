@@ -137,7 +137,7 @@ pub fn calculate_zstd_level(slider_value: i32, is_gamer: bool) -> i32 {
         match slider_value {
             s if s <= 25 => -2,
             s if s <= 50 => 1,
-            _ => 2,
+            _ => 3,
         }
     } else {
         match slider_value {

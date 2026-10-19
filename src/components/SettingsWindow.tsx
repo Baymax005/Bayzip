@@ -6,6 +6,23 @@ import { APP_VERSION } from "../version";
 export function SettingsWindow() {
   const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
+  const [backgroundShield, setBackgroundShield] = useState<boolean>(true);
+
+  useEffect(() => {
+    invoke<boolean>("get_background_priority_shield")
+      .then((val) => setBackgroundShield(val))
+      .catch((err) => console.error("Error reading priority shield:", err));
+  }, []);
+
+  const handleToggleBackgroundShield = async () => {
+    const newVal = !backgroundShield;
+    setBackgroundShield(newVal);
+    try {
+      await invoke("set_background_priority_shield", { enabled: newVal });
+    } catch (err) {
+      console.error("Error updating priority shield:", err);
+    }
+  };
 
   // Close on Escape key
   useEffect(() => {
@@ -240,6 +257,35 @@ export function SettingsWindow() {
               </span>
             ))}
           </div>
+        </div>
+
+        {/* Background Priority Shield Card */}
+        <div className="bg-[#222222] rounded-xl p-4 border border-[#333333] space-y-3 shadow-sm">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center space-x-2">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-[#60CDFF]">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              <span className="text-xs font-semibold text-white">Background Priority Shield</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleBackgroundShield}
+              className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors cursor-pointer border ${
+                backgroundShield
+                  ? "bg-emerald-950/60 text-emerald-400 border-emerald-800/70"
+                  : "bg-amber-950/60 text-amber-300 border-amber-800/70"
+              }`}
+            >
+              {backgroundShield ? "Smooth Mode (Shield ON)" : "Max Power (Normal Priority)"}
+            </button>
+          </div>
+
+          <p className="text-xs text-[#9E9E9E] leading-relaxed">
+            {backgroundShield
+              ? "Lowers OS thread scheduling priority during compression so foreground games, 3D apps, and mouse movement remain 100% stutter-free."
+              : "Bayzip runs at full Normal OS priority, aggressively competing for CPU cycles. Recommended when waiting on urgent archives."}
+          </p>
         </div>
 
         {/* Software Updates Card */}

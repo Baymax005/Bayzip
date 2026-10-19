@@ -18,8 +18,22 @@ pub use compressor::{headless_quick_compress, compress_files_sync, compute_path_
 pub use extractor::{headless_extract_here, headless_extract_to_subfolder, universal_extract, extract_archive_sync};
 
 #[tauri::command]
-fn get_file_size(path: String) -> u64 {
-    std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+async fn get_file_size(path: String) -> u64 {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+    })
+    .await
+    .unwrap_or(0)
+}
+
+#[tauri::command]
+fn get_background_priority_shield() -> bool {
+    priority::is_background_shield_enabled()
+}
+
+#[tauri::command]
+fn set_background_priority_shield(enabled: bool) {
+    priority::set_background_shield(enabled);
 }
 
 #[tauri::command]
@@ -235,6 +249,8 @@ pub fn run() {
             get_archive_info,
             get_file_size,
             preview_archive_entry,
+            get_background_priority_shield,
+            set_background_priority_shield,
             open_settings_window,
             close_settings_window,
             minimize_settings_window
