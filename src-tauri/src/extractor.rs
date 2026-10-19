@@ -1373,10 +1373,20 @@ pub fn extract_archive_sync(
                 } else {
                     p
                 }
-            } else if extract_to_subfolder.unwrap_or(true) {
-                resolve_unique_folder_name(&p)
             } else {
-                p
+                // If the user or frontend selected a destination folder, we only resolve a unique name
+                // if `p` actually ends with the archive stem subfolder!
+                // We must NEVER rename an existing parent directory (like Downloads, Desktop, or Documents) into Downloads (1)!
+                let is_stem_folder = p.file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|n| n.eq_ignore_ascii_case(&stem) || base_folder_stem(n).eq_ignore_ascii_case(&stem))
+                    .unwrap_or(false);
+
+                if is_stem_folder {
+                    resolve_unique_folder_name(&p)
+                } else {
+                    p
+                }
             }
         }
     } else {
@@ -1441,9 +1451,27 @@ pub fn extract_archive_sync(
         bytes_extracted: total_final_bytes,
     });
 
+    let mut final_output_dir = target_folder;
+    if !extracted_files.is_empty() {
+        let first_path = Path::new(&extracted_files[0]);
+        if let Ok(first_rel) = first_path.strip_prefix(&dest_dir) {
+            if let Some(first_comp) = first_rel.components().next() {
+                let candidate_sub = dest_dir.join(first_comp.as_os_str());
+                if candidate_sub.is_dir() {
+                    let all_in_candidate = extracted_files.iter().all(|f| {
+                        Path::new(f).starts_with(&candidate_sub)
+                    });
+                    if all_in_candidate {
+                        final_output_dir = candidate_sub;
+                    }
+                }
+            }
+        }
+    }
+
     Ok(ExtractResponse {
         success: true,
-        output_directory: target_folder.to_string_lossy().to_string(),
+        output_directory: final_output_dir.to_string_lossy().to_string(),
         file_count: extracted_files.len(),
         elapsed_ms: start_time.elapsed().as_millis() as u64,
         error: None,

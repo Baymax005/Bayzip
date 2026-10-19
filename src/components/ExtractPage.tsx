@@ -313,13 +313,19 @@ export function ExtractPage({
             </div>
             <div className="ml-3 text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
               Extract into dedicated folder{" "}
-              <span className="text-[#60CDFF] font-mono text-xs">
-                ({archiveInfo?.filename
-                  ? getArchiveStemName(archiveInfo.filename)
-                  : selectedArchive
-                    ? getArchiveStemName(selectedArchive.split(/[/\\]/).pop() || "")
-                    : "folder_name"})
-              </span>
+              {archiveInfo?.filename || selectedArchive ? (
+                <span className="text-[#60CDFF] font-mono text-xs">
+                  (
+                  {archiveInfo?.filename
+                    ? getArchiveStemName(archiveInfo.filename)
+                    : getArchiveStemName(selectedArchive?.split(/[/\\]/).pop() || "")}
+                  )
+                </span>
+              ) : (
+                <span className="text-[#777777] font-mono text-xs">
+                  (subfolder)
+                </span>
+              )}
             </div>
           </label>
 

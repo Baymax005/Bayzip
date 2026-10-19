@@ -2,6 +2,23 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.0.3] - 2026-10-20
+
+### 📁 Extraction Subfolder Path Fix & Compression View Modularization
+- **Duplicate Parent Folder Renaming Prevention**:
+  - Fixed a destination path calculation bug in `extractor.rs` where extracting into existing user directories (e.g., `C:\Users\<user>\Downloads`) triggered automatic unique folder renaming, creating redundant duplicates like `Downloads (1)`.
+  - Added strict stem folder verification (`is_stem_folder`) ensuring parent system folders are preserved untouched.
+- **Accurate Single-Root Extraction Target Resolution**:
+  - Enhanced output directory resolution in `extractor.rs` to detect when all extracted files reside inside a common archive root directory (e.g., `Downloads\lab-4`), returning the true extracted folder path rather than the generic parent directory.
+  - The Extraction Complete modal and "Open Folder" action now accurately open the extracted directory directly.
+- **Dynamic Dedicated Folder Label**:
+  - Updated `ExtractPage.tsx` so the "Extract into dedicated folder" toggle dynamically indicates the actual archive stem name `(archive_stem)` once an archive is loaded, replacing the static `(folder_name)` placeholder.
+- **Compression View Modularization (`CompressPage.tsx`)**:
+  - Decomposed the monolithic compression view out of `App.tsx` into a standalone, fully typed component ([src/components/CompressPage.tsx](src/components/CompressPage.tsx)), reducing `App.tsx` by ~700 lines.
+  - Locked option switches ("Archive to original path", "Add to separate archives", "Smart media bypass") during active compression (`cursor-not-allowed opacity-50 pointer-events-none`) to safeguard against mid-operation state desynchronization.
+
+---
+
 ## [v2.0.2] - 2026-10-20
 
 ### 🗂️ Selective Folder Exclusion & Frontend Modularization
