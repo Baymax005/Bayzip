@@ -162,20 +162,38 @@ export function ArchiveTreeInspector({
 
   const excludedCount = excludedPaths.size;
 
+  const isFileExcluded = (filePath: string): boolean => {
+    if (!excludedPaths || excludedPaths.size === 0) return false;
+    const clean = normalizeArchiveEntryPath(filePath);
+    if (excludedPaths.has(clean)) return true;
+    for (const exc of Array.from(excludedPaths)) {
+      const parentPrefix = exc.endsWith("/") ? exc : exc + "/";
+      if (clean.startsWith(parentPrefix)) return true;
+    }
+    return false;
+  };
+
   const isDirExcluded = (dirPath: string): boolean => {
     if (!excludedPaths || excludedPaths.size === 0) return false;
     const cleanDir = normalizeArchiveEntryPath(dirPath);
+    if (excludedPaths.has(cleanDir)) return true;
+    for (const exc of Array.from(excludedPaths)) {
+      const parentPrefix = exc.endsWith("/") ? exc : exc + "/";
+      if (cleanDir.startsWith(parentPrefix)) return true;
+    }
     const prefix = cleanDir ? `${cleanDir}/` : "";
     const allEntries = archiveInfo?.entries || [];
     const filesInDir = allEntries.filter((e) => !e.is_dir && normalizeArchiveEntryPath(e.name).startsWith(prefix));
-    if (filesInDir.length === 0) return false;
-    return filesInDir.every((f) => excludedPaths.has(normalizeArchiveEntryPath(f.name)));
+    if (filesInDir.length > 0 && filesInDir.every((f) => isFileExcluded(f.name))) {
+      return true;
+    }
+    return false;
   };
 
   const excludedBytes = useMemo(() => {
     if (!archiveInfo?.entries || excludedPaths.size === 0) return 0;
     return archiveInfo.entries
-      .filter((e) => !e.is_dir && excludedPaths.has(normalizeArchiveEntryPath(e.name)))
+      .filter((e) => !e.is_dir && isFileExcluded(e.name))
       .reduce((acc, curr) => acc + (curr.size || 0), 0);
   }, [archiveInfo, excludedPaths]);
 
@@ -383,6 +401,7 @@ export function ArchiveTreeInspector({
     const isExpanded = expandedFolders.has(node.path);
     const isSelected = currentFolderPath === node.path;
     const hasChildren = node.subfolders.length > 0;
+    const isFolderSkipped = isDirExcluded(node.path);
 
     return (
       <div key={node.path || "root"} className="select-none text-xs">
@@ -392,7 +411,9 @@ export function ArchiveTreeInspector({
           className={`flex items-center justify-between py-1.5 pr-2 rounded-md transition-colors cursor-pointer group ${
             isSelected
               ? "bg-[#25394A] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF]"
-              : "hover:bg-[#282828] text-[#CCCCCC]"
+              : isFolderSkipped
+                ? "bg-rose-950/20 text-rose-300/80 hover:bg-rose-950/30"
+                : "hover:bg-[#282828] text-[#CCCCCC]"
           }`}
         >
           <div className="flex items-center space-x-1.5 min-w-0 flex-1 mr-2">
@@ -418,7 +439,7 @@ export function ArchiveTreeInspector({
 
             {/* Folder Icon */}
             <svg
-              className={`w-4 h-4 shrink-0 ${isSelected ? "text-[#60CDFF]" : "text-[#E8C488]"}`}
+              className={`w-4 h-4 shrink-0 ${isSelected ? "text-[#60CDFF]" : isFolderSkipped ? "text-rose-400" : "text-[#E8C488]"}`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -435,15 +456,26 @@ export function ArchiveTreeInspector({
               />
             </svg>
 
-            <span className="truncate font-mono text-[11px]" title={node.name}>
+            <span
+              className={`truncate font-mono text-[11px] ${
+                isFolderSkipped ? "text-rose-300 line-through opacity-80" : ""
+              }`}
+              title={node.name}
+            >
               {node.name}
             </span>
           </div>
 
           {/* Badge */}
-          <span className="text-[10px] font-mono text-[#888888] px-1.5 py-0.2 rounded bg-[#2A2A2A] border border-[#3A3A3A] shrink-0">
-            {node.totalItemCount}
-          </span>
+          {isFolderSkipped ? (
+            <span className="text-[9px] font-semibold text-rose-400 px-1 py-0.2 rounded bg-rose-950/60 border border-rose-800/80 shrink-0">
+              ✕
+            </span>
+          ) : (
+            <span className="text-[10px] font-mono text-[#888888] px-1.5 py-0.2 rounded bg-[#2A2A2A] border border-[#3A3A3A] shrink-0">
+              {node.totalItemCount}
+            </span>
+          )}
         </div>
 
         {/* Render nested subfolders if expanded */}
@@ -829,7 +861,7 @@ export function ArchiveTreeInspector({
           const file = item.data;
           const isSelected = selectedEntryName === file.name;
           const fileNameOnly = file.name.split("/").pop() || file.name;
-          const isExcluded = excludedPaths?.has(normalizeArchiveEntryPath(file.name));
+          const isExcluded = isFileExcluded(file.name);
 
           return (
             <div
@@ -940,7 +972,7 @@ export function ArchiveTreeInspector({
         renderRow={(entry, idx) => {
           const isSelected = selectedEntryName === entry.name;
           const fileNameOnly = entry.name.split("/").pop() || entry.name;
-          const isExcluded = !entry.is_dir && excludedPaths?.has(normalizeArchiveEntryPath(entry.name));
+          const isExcluded = !entry.is_dir && isFileExcluded(entry.name);
           const isFolderSkipped = entry.is_dir && isDirExcluded(entry.name);
           const isDimmed = isExcluded || isFolderSkipped;
 

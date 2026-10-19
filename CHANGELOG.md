@@ -2,6 +2,20 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.0.2] - 2026-10-20
+
+### 🗂️ Selective Folder Exclusion & Frontend Modularization
+- **Hierarchical Directory Exclusion & Visual Synchronization**:
+  - Fixed an issue in `ArchiveTreeInspector` where excluding a folder did not cascade to its nested child files or reflect visually on folder rows.
+  - Implemented `isFileExcluded` and recursive `isDirExcluded` checking both direct entry exclusions and parent folder path prefixes.
+  - Added visual indicator badges: excluded folders immediately highlight with `[ ✕ Folder Excluded ]` and switch action button to `[ ↺ Include ]`, all child files display `(Skipped)` with line-through styling, and tree navigation nodes reflect excluded status.
+  - Total skipped bytes and excluded file counts now update dynamically in the inspector footer and primary extract button.
+- **Extraction View Modularization (`ExtractPage.tsx`)**:
+  - Decomposed the monolithic extraction view out of `App.tsx` into a modular, self-contained component ([src/components/ExtractPage.tsx](src/components/ExtractPage.tsx)), cutting ~400 lines of complex JSX from `App.tsx`.
+  - Added visual disabled states and pointer shielding on extraction toggles ("Extract into dedicated folder", "Open folder when extraction completes") during active decompression to prevent mid-operation state desynchronization.
+
+---
+
 ## [v2.0.1] - 2026-10-19
 
 ### 🛡️ Security, Robustness & OS Scheduling Hardening
