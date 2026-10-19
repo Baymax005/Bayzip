@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.0.1)
+# 📦 Bayzip (v2.0.6)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -82,6 +82,45 @@
 - **Smart Folder Conflict Resolution**:
   - Automatic single-root detection prevents redundant nested directories (e.g., `ArchiveName/ArchiveName/...`) when unpacking archives that already contain a top-level folder.
   - Clean conflict handling avoids spurious auto-numbering `(1)` folders when extracting into fresh or matching target paths.
+
+### 🛡️ Hardware-Aware Drive Protection & Safe Buffer Capping
+
+On Windows, uncapped write buffers (e.g., 128 MB dumps) on external flash drives or mechanical hard drives can lock operating system storage threads, freeze progress bars, and risk partition table/journal corruption (causing drives to appear as **RAW** file systems if interrupted).
+
+Bayzip actively queries the underlying drive bus via Win32 `IOCTL_STORAGE_QUERY_PROPERTY` and clamps sequential read slices and write buffers to safe, hardware-calibrated boundaries:
+
+```mermaid
+graph TD
+    subgraph Storage Detection ["Win32 IOCTL_STORAGE_QUERY_PROPERTY"]
+        Target["Destination / Source File Path"] --> Detect{"Detect Physical Bus"}
+        Detect -->|External USB / Thumb Drive| USB["External USB / Flash (BusTypeUsb)"]
+        Detect -->|Internal Mechanical / SATA SSD| SATA["Internal SATA HDD & SSD (BusTypeSata)"]
+        Detect -->|Internal PCIe NVMe SSD| NVME["Internal PCIe NVMe M.2 (BusTypeNvme)"]
+        Detect -->|Network / UNC / Unknown| NET["Network Share / Remote (DRIVE_REMOTE)"]
+    end
+
+    subgraph Read Slicing ["Source Read Slicing (f.read)"]
+        USB --> R_USB["1 MB Read Slice<br/>(Instant Cancel / Zero Timeouts)"]
+        SATA --> R_SATA["4 MB Read Slice<br/>(Smooth Platter Throughput)"]
+        NVME --> R_NVME["8 MB Read Slice<br/>(Saturates PCIe Multi-GB Bus)"]
+        NET --> R_NET["2 MB Read Slice<br/>(Network Safe Buffer)"]
+    end
+
+    subgraph Safe Buffer Capping ["Destination Write Capping (BufWriter)"]
+        USB --> W_USB["16 MB Max Cap<br/>(Prevents RAW Disks & Quick-Removal Freezes)"]
+        SATA --> W_SATA["64 MB Max Cap<br/>(Prevents Mechanical Platter Thrashing)"]
+        NVME --> W_NVME["128 MB Full Burst<br/>(Flushes in 25–40 ms @ 3,000+ MB/s)"]
+        NET --> W_NET["32 MB Safe Cap<br/>(Prevents Network Buffer Drops)"]
+    end
+```
+
+| Storage Medium | Bus Type | Read Slice | Write Buffer Cap | Flush Latency | Core Hardware Safeguard |
+|---|:---:|:---:|:---:|:---:|---|
+| **External USB / Flash Drive** | `BusTypeUsb` | **1 MB** | **16 MB** | ~1.0 – 1.8s | Prevents Windows Quick-Removal lockups, 20s stalls, and RAW partition corruption |
+| **Internal Mechanical HDD / SATA SSD** | `BusTypeSata` | **4 MB** | **64 MB** | ~0.4 – 0.6s | Prevents mechanical platter head thrashing and disk queue congestion |
+| **Internal PCIe NVMe SSD (M.2)** | `BusTypeNvme` | **8 MB** | **128 MB** | ~0.02 – 0.04s | Maximum multi-gigabyte PCIe Gen 3/4/5 line-rate burst ($3{,}000+\text{ MB/s}$) |
+| **Network Share / UNC / Fallback** | `DRIVE_REMOTE` | **2 MB** | **32 MB** | Safe generic | Prevents packet queue overflows and network driver latency |
+
 
 ### 🔒 Zero-Allocation Streaming AES-256-GCM Encryption
 - **In-Place AEAD Streaming**:
