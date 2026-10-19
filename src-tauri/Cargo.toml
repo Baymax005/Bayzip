@@ -1,6 +1,6 @@
 [package]
 name = "bayzip"
-version = "2.0.4"
+version = "2.0.5"
 description = "Bayzip - High-Performance Hardware-Accelerated Archiver"
 authors = ["Muhammad Ali (Baymax)"]
 edition = "2021"

@@ -2,6 +2,34 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.0.5] - 2026-10-20
+
+### ⚙️ Backend Architecture Modularization & Engine Separation
+- **Modular Compression Subsystem (`src-tauri/src/compressor/`)**:
+  - Decomposed the 1,936-line monolithic `compressor.rs` into specialized submodules:
+    - `mod.rs`: Central orchestrator (`compress_files_sync`, `headless_quick_compress`), CPU thread pool scaling (`calculate_target_threads`), Zstd compression level matrix (`calculate_zstd_level`), cancellation atomics, and streaming `ProgressReader`.
+    - `utils.rs`: Smart precompressed media detection (`is_precompressed_file`, `is_precompressed_extension`), path exclusion filters (`is_path_excluded`), and filtered recursive size calculations (`compute_path_size_filtered`).
+    - `bay.rs`: Native `.bay` and `.bayg` chunked streaming writers (Zstandard, Brotli, LZ4), TOC trailer serializers (`write_bay_toc_trailer`), and headless compression.
+    - `zip.rs`: ZIP container writer with deflate and AES-256 / ZipCrypto streaming encryption (`compress_zip`) and headless quick compression.
+    - `sevenz.rs`: 7-Zip LZMA / LZMA2 multi-threaded compression writer with optional AES encryption (`compress_7z`) and headless 7z compression.
+    - `tar.rs`: GNU TAR and tar.gz streaming builders (`compress_tar`, `headless_quick_compress_tar`).
+- **Modular Archive Inspection Subsystem (`src-tauri/src/inspector/`)**:
+  - Decomposed the 1,896-line monolithic `inspector.rs` into domain-focused submodules:
+    - `mod.rs`: Central archive inspection entrypoint (`inspect_archive`), path sanitization with Zip-Slip protection (`sanitize_archive_path`), single root directory detection (`get_single_root_dir`), safe atomic renaming (`safe_atomic_rename`), and read-only permission clearing.
+    - `hardware.rs`: Storage bus classification (`DriveBusKind` for NVMe, SATA SSD/HDD, and USB removable media) and optimal I/O chunk sizing (`get_optimal_read_slice`, `get_optimal_write_buffer`).
+    - `format.rs`: Magic byte signature inspection (`detect_archive_type`), instant TOC trailer detection (`has_instant_bay_toc`), and archive encryption detection (`is_archive_encrypted`, `check_rar4_encrypted`, `check_rar5_encrypted`).
+    - `bay.rs`: Fast `.bay` / `.bayg` TOC parsing (`list_bay_entries`) and streaming fallback reader (`list_bay_stream_entries`, `read_bay_entry_from_stream`, `preview_bay_entry_bytes`).
+    - `zip.rs`: Central directory entry scanner (`list_zip_entries`) and safe in-memory entry reader (`preview_zip_entry_bytes`).
+    - `sevenz.rs`: 7-Zip block indexer (`list_7z_entries`) and entry preview stream extractor (`preview_7z_entry_bytes`).
+    - `tar.rs`: Streaming TAR and tar.gz header reader (`list_tar_entries`, `preview_tar_entry_bytes`).
+    - `rar.rs`: RAR verbose format parser (`list_rar_entries`, `preview_rar_entry_bytes`).
+    - `preview.rs`: Safe in-memory preview generator (`preview_archive_entry_sync`, `preview_staged_file_sync`), base64 encoding, security restriction enforcement, and UTF-8 verification.
+    - `staged.rs`: Recursive local filesystem staging inspection (`inspect_staged_items_sync`).
+- **Zero API Breakage & 100% Backward Compatibility**:
+  - Maintained complete re-exports via `pub use` across `compressor/mod.rs` and `inspector/mod.rs`, ensuring `lib.rs` and `extractor.rs` compile without any breaking changes.
+
+---
+
 ## [v2.0.4] - 2026-10-20
 
 ### 🌲 Pre-Compression Staging Tree View & Selective File Exclusion
