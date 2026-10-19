@@ -297,30 +297,74 @@ pub fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<crate::types::Arc
     }
 }
 
-pub fn compute_path_size(p: &Path) -> (u64, bool) {
+pub fn is_path_excluded(clean_rel: &str, excluded: Option<&std::collections::HashSet<String>>) -> bool {
+    if let Some(set) = excluded {
+        let clean = clean_rel.replace('\\', "/").trim_start_matches('/').to_lowercase();
+        if set.contains(&clean) {
+            return true;
+        }
+        for exc in set {
+            let prefix = if exc.ends_with('/') { exc.clone() } else { format!("{}/", exc) };
+            if clean.starts_with(&prefix) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn compute_path_size_filtered(
+    p: &Path,
+    base_parent: &Path,
+    excluded: Option<&std::collections::HashSet<String>>,
+) -> (u64, bool) {
     if let Ok(meta) = std::fs::symlink_metadata(p) {
         if meta.is_file() {
-            (meta.len(), false)
+            let rel = p.strip_prefix(base_parent).unwrap_or(p);
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let clean = rel_str.trim_start_matches('/');
+            if is_path_excluded(clean, excluded) {
+                (0, false)
+            } else {
+                (meta.len(), false)
+            }
         } else if meta.is_dir() {
             let mut total: u64 = 0;
-            fn walk_dir(dir: &Path, total: &mut u64, depth: usize) {
+            fn walk_dir(
+                dir: &Path,
+                base_parent: &Path,
+                total: &mut u64,
+                depth: usize,
+                excluded: Option<&std::collections::HashSet<String>>,
+            ) {
                 if depth > 32 {
                     return;
                 }
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
                         let ep = entry.path();
+                        let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
+                        let rel_str = rel.to_string_lossy().replace('\\', "/");
+                        let clean = rel_str.trim_start_matches('/');
+                        if is_path_excluded(clean, excluded) {
+                            continue;
+                        }
                         if let Ok(m) = std::fs::symlink_metadata(&ep) {
                             if m.is_file() {
                                 *total += m.len();
                             } else if m.is_dir() && !m.file_type().is_symlink() {
-                                walk_dir(&ep, total, depth + 1);
+                                walk_dir(&ep, base_parent, total, depth + 1, excluded);
                             }
                         }
                     }
                 }
             }
-            walk_dir(p, &mut total, 0);
+            let rel = p.strip_prefix(base_parent).unwrap_or(p);
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let clean = rel_str.trim_start_matches('/');
+            if !is_path_excluded(clean, excluded) {
+                walk_dir(p, base_parent, &mut total, 0, excluded);
+            }
             (total, true)
         } else {
             (0, false)
@@ -328,6 +372,11 @@ pub fn compute_path_size(p: &Path) -> (u64, bool) {
     } else {
         (0, false)
     }
+}
+
+pub fn compute_path_size(p: &Path) -> (u64, bool) {
+    let parent = p.parent().unwrap_or(p);
+    compute_path_size_filtered(p, parent, None)
 }
 
 pub fn write_file_to_bay_archive<W: Write>(
@@ -428,6 +477,7 @@ pub fn write_dir_to_bay_archive<W: Write>(
     depth: usize,
     last_emit: &mut Instant,
     toc_entries: &mut Vec<crate::types::ArchiveEntryItem>,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<(), String> {
     if depth > 32 {
         return Ok(());
@@ -442,30 +492,28 @@ pub fn write_dir_to_bay_archive<W: Write>(
                 return Err("Compression cancelled by user".to_string());
             }
             let ep = entry.path();
+            let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let clean_rel = rel_str.trim_start_matches('/');
+            if is_path_excluded(clean_rel, excluded) {
+                continue;
+            }
             if let Ok(m) = std::fs::symlink_metadata(&ep) {
                 if m.is_file() {
-                    let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    let clean_rel = rel_str.trim_start_matches('/');
                     write_file_to_bay_archive(&ep, clean_rel, encoder, read_buf, bytes_processed, total_original, app, last_emit, toc_entries)?;
                 } else if m.is_dir() && !m.file_type().is_symlink() {
-                    let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    let clean_rel = rel_str.trim_start_matches('/').to_string();
-                    if !clean_rel.is_empty() {
-                        let dir_name = format!("{}/", clean_rel);
-                        let dir_bytes = dir_name.as_bytes();
-                        encoder.write_all(&[2u8]).map_err(|e| e.to_string())?; // 2 = Directory entry
-                        encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
-                        encoder.write_all(dir_bytes).map_err(|e| e.to_string())?;
-                        encoder.write_all(&0u64.to_le_bytes()).map_err(|e| e.to_string())?;
-                        toc_entries.push(crate::types::ArchiveEntryItem {
-                            name: dir_name,
-                            size: 0,
-                            is_dir: true,
-                        });
-                    }
-                    write_dir_to_bay_archive(&ep, base_parent, encoder, read_buf, bytes_processed, total_original, app, depth + 1, last_emit, toc_entries)?;
+                    let dir_name = format!("{}/", clean_rel);
+                    let dir_bytes = dir_name.as_bytes();
+                    encoder.write_all(&[2u8]).map_err(|e| e.to_string())?; // 2 = Directory entry
+                    encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+                    encoder.write_all(dir_bytes).map_err(|e| e.to_string())?;
+                    encoder.write_all(&0u64.to_le_bytes()).map_err(|e| e.to_string())?;
+                    toc_entries.push(crate::types::ArchiveEntryItem {
+                        name: dir_name,
+                        size: 0,
+                        is_dir: true,
+                    });
+                    write_dir_to_bay_archive(&ep, base_parent, encoder, read_buf, bytes_processed, total_original, app, depth + 1, last_emit, toc_entries, excluded)?;
                 }
             }
         }
@@ -564,6 +612,7 @@ pub fn compress_bay(
     password: Option<&str>,
     app: &AppHandle,
     total_original: u64,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<(), String> {
     if is_compression_cancelled() {
         return Err("Compression cancelled by user".to_string());
@@ -632,13 +681,16 @@ pub fn compress_bay(
                     return Err("Compression cancelled by user".to_string());
                 }
                 let p = Path::new(file_str);
+                let rel = p.strip_prefix(parent_dir).unwrap_or(p);
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let clean_rel = rel_str.trim_start_matches('/').to_string();
+                if is_path_excluded(&clean_rel, excluded) {
+                    continue;
+                }
                 if p.is_file() {
                     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
                     write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit, &mut toc_entries)?;
                 } else if p.is_dir() {
-                    let rel = p.strip_prefix(parent_dir).unwrap_or(p);
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    let clean_rel = rel_str.trim_start_matches('/').to_string();
                     if !clean_rel.is_empty() {
                         let dir_name = format!("{}/", clean_rel);
                         let dir_bytes = dir_name.as_bytes();
@@ -652,7 +704,7 @@ pub fn compress_bay(
                             is_dir: true,
                         });
                     }
-                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries)?;
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries, excluded)?;
                 }
             }
             if is_compression_cancelled() {
@@ -674,13 +726,16 @@ pub fn compress_bay(
                     return Err("Compression cancelled by user".to_string());
                 }
                 let p = Path::new(file_str);
+                let rel = p.strip_prefix(parent_dir).unwrap_or(p);
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let clean_rel = rel_str.trim_start_matches('/').to_string();
+                if is_path_excluded(&clean_rel, excluded) {
+                    continue;
+                }
                 if p.is_file() {
                     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
                     write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit, &mut toc_entries)?;
                 } else if p.is_dir() {
-                    let rel = p.strip_prefix(parent_dir).unwrap_or(p);
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    let clean_rel = rel_str.trim_start_matches('/').to_string();
                     if !clean_rel.is_empty() {
                         let dir_name = format!("{}/", clean_rel);
                         let dir_bytes = dir_name.as_bytes();
@@ -694,7 +749,7 @@ pub fn compress_bay(
                             is_dir: true,
                         });
                     }
-                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries)?;
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries, excluded)?;
                 }
             }
             if is_compression_cancelled() {
@@ -727,13 +782,16 @@ pub fn compress_bay(
                     return Err("Compression cancelled by user".to_string());
                 }
                 let p = Path::new(file_str);
+                let rel = p.strip_prefix(parent_dir).unwrap_or(p);
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let clean_rel = rel_str.trim_start_matches('/').to_string();
+                if is_path_excluded(&clean_rel, excluded) {
+                    continue;
+                }
                 if p.is_file() {
                     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
                     write_file_to_bay_archive(p, filename, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, &mut last_emit, &mut toc_entries)?;
                 } else if p.is_dir() {
-                    let rel = p.strip_prefix(parent_dir).unwrap_or(p);
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    let clean_rel = rel_str.trim_start_matches('/').to_string();
                     if !clean_rel.is_empty() {
                         let dir_name = format!("{}/", clean_rel);
                         let dir_bytes = dir_name.as_bytes();
@@ -747,7 +805,7 @@ pub fn compress_bay(
                             is_dir: true,
                         });
                     }
-                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries)?;
+                    write_dir_to_bay_archive(p, parent_dir, &mut encoder, &mut read_buf, &mut bytes_processed, total_original, app, 0, &mut last_emit, &mut toc_entries, excluded)?;
                 }
             }
             if is_compression_cancelled() {
@@ -784,6 +842,7 @@ pub fn compress_zip(
     app: &AppHandle,
     total_original: u64,
     smart_bypass: bool,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<(), String> {
     if is_compression_cancelled() {
         return Err("Compression cancelled by user".to_string());
@@ -839,6 +898,13 @@ pub fn compress_zip(
             return Err("Compression cancelled by user".to_string());
         }
         let p = Path::new(file_str);
+        let parent_dir = p.parent().unwrap_or(p);
+        let root_rel = p.strip_prefix(parent_dir).unwrap_or(p);
+        let root_str = root_rel.to_string_lossy().replace('\\', "/");
+        let clean_root = root_str.trim_start_matches('/').trim_end_matches('/');
+        if is_path_excluded(clean_root, excluded) {
+            continue;
+        }
         
         let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
         let is_precomp = smart_bypass && is_precompressed_file(p);
@@ -897,10 +963,6 @@ pub fn compress_zip(
                 }
             }
         } else if p.is_dir() {
-            let parent_dir = p.parent().unwrap_or(p);
-            let root_rel = p.strip_prefix(parent_dir).unwrap_or(p);
-            let root_str = root_rel.to_string_lossy().replace('\\', "/");
-            let clean_root = root_str.trim_start_matches('/').trim_end_matches('/');
             if !clean_root.is_empty() {
                 let dir_name = format!("{}/", clean_root);
                 let dir_options = SimpleFileOptions::default()
@@ -928,6 +990,7 @@ pub fn compress_zip(
                 last_emit: &mut Instant,
                 depth: usize,
                 smart_bypass: bool,
+                excluded: Option<&std::collections::HashSet<String>>,
             ) -> Result<(), String> {
                 if depth > 32 { return Ok(()); }
                 if let Ok(entries) = std::fs::read_dir(dir) {
@@ -940,7 +1003,7 @@ pub fn compress_zip(
                             let rel = path.strip_prefix(base).unwrap_or(&path);
                             let rel_str = rel.to_string_lossy().replace('\\', "/");
                             let clean_rel = rel_str.trim_start_matches('/').trim_end_matches('/');
-                            if clean_rel.is_empty() { continue; }
+                            if clean_rel.is_empty() || is_path_excluded(clean_rel, excluded) { continue; }
                             
                             let is_large = m.len() >= 0xFFFF_FFFF;
                             let is_precomp = smart_bypass && is_precompressed_file(&path);
@@ -961,7 +1024,7 @@ pub fn compress_zip(
                                 } else {
                                     let _ = writer.add_directory(&dir_name, options);
                                 }
-                                add_dir_to_zip(&path, base, writer, read_buf, method, deflate_level, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1, smart_bypass)?;
+                                add_dir_to_zip(&path, base, writer, read_buf, method, deflate_level, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1, smart_bypass, excluded)?;
                             } else if m.is_file() {
                                 let mut f = match File::open(&path) {
                                     Ok(file) => file,
@@ -1013,7 +1076,7 @@ pub fn compress_zip(
                 }
                 Ok(())
             }
-            add_dir_to_zip(p, parent_dir, &mut writer, &mut read_buf, method, deflate_level, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0, smart_bypass)?;
+            add_dir_to_zip(p, parent_dir, &mut writer, &mut read_buf, method, deflate_level, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0, smart_bypass, excluded)?;
         }
     }
 
@@ -1043,6 +1106,7 @@ pub fn compress_tar(
     output_path: &Path,
     app: &AppHandle,
     total_original: u64,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<(), String> {
     if is_compression_cancelled() {
         return Err("Compression cancelled by user".to_string());
@@ -1072,6 +1136,7 @@ pub fn compress_tar(
             app: &AppHandle,
             last_emit: &mut Instant,
             depth: usize,
+            excluded: Option<&std::collections::HashSet<String>>,
         ) -> Result<(), String> {
             if depth > 32 { return Ok(()); }
             if let Ok(entries) = std::fs::read_dir(dir) {
@@ -1084,11 +1149,11 @@ pub fn compress_tar(
                         let rel = path.strip_prefix(base).unwrap_or(&path);
                         let clean = rel.to_string_lossy().replace('\\', "/");
                         let trimmed = clean.trim_start_matches('/');
-                        if trimmed.is_empty() { continue; }
+                        if trimmed.is_empty() || is_path_excluded(trimmed, excluded) { continue; }
 
                         if m.is_dir() && !m.file_type().is_symlink() {
                             let _ = builder.append_dir(trimmed, &path);
-                            add_dir_to_tar(&path, base, builder, bytes_processed, total_original, app, last_emit, depth + 1)?;
+                            add_dir_to_tar(&path, base, builder, bytes_processed, total_original, app, last_emit, depth + 1, excluded)?;
                         } else if m.is_file() {
                             if let Ok(f) = File::open(&path) {
                                 let mut header = tar::Header::new_gnu();
@@ -1115,6 +1180,13 @@ pub fn compress_tar(
                 return Err("Compression cancelled by user".to_string());
             }
             let p = Path::new(file_str);
+            let parent = p.parent().unwrap_or(p);
+            let rel = p.strip_prefix(parent).unwrap_or(p);
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let clean_rel = rel_str.trim_start_matches('/').trim_end_matches('/');
+            if is_path_excluded(clean_rel, excluded) {
+                continue;
+            }
             let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
             if p.is_file() {
                 if let Ok(f) = File::open(p) {
@@ -1129,9 +1201,8 @@ pub fn compress_tar(
                         .map_err(|e| format!("Tar append file error: {}", e))?;
                 }
             } else if p.is_dir() {
-                let parent = p.parent().unwrap_or(p);
                 let _ = builder.append_dir(name, p);
-                add_dir_to_tar(p, parent, &mut builder, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
+                add_dir_to_tar(p, parent, &mut builder, &mut bytes_processed, total_original, app, &mut last_emit, 0, excluded)?;
             }
         }
 
@@ -1162,6 +1233,7 @@ pub fn compress_7z(
     password: Option<&str>,
     app: &AppHandle,
     total_original: u64,
+    excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<(), String> {
     if is_compression_cancelled() {
         return Err("Compression cancelled by user".to_string());
@@ -1228,6 +1300,11 @@ pub fn compress_7z(
                 continue;
             }
             let parent = p.parent().unwrap_or(p);
+            let rel_root = p.strip_prefix(parent).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            let clean_root = rel_root.trim_start_matches('/').trim_end_matches('/');
+            if is_path_excluded(clean_root, excluded) {
+                continue;
+            }
 
             if p.is_file() {
                 let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
@@ -1240,8 +1317,6 @@ pub fn compress_7z(
                 sz.push_archive_entry(entry, Some(prog_reader))
                     .map_err(|e| format!("7z entry error: {}", e))?;
             } else if p.is_dir() {
-                let rel_root = p.strip_prefix(parent).unwrap_or(p).to_string_lossy().replace('\\', "/");
-                let clean_root = rel_root.trim_start_matches('/').trim_end_matches('/');
                 if !clean_root.is_empty() {
                     let mut dir_entry = ArchiveEntry::from_path(p, format!("{}/", clean_root));
                     dir_entry.is_directory = true;
@@ -1258,6 +1333,7 @@ pub fn compress_7z(
                     app: &AppHandle,
                     last_emit: &mut Instant,
                     depth: usize,
+                    excluded: Option<&std::collections::HashSet<String>>,
                 ) -> Result<(), String> {
                     if depth > 32 { return Ok(()); }
                     if let Ok(read_dir) = std::fs::read_dir(dir) {
@@ -1272,14 +1348,14 @@ pub fn compress_7z(
                                 let rel = path.strip_prefix(base).unwrap_or(&path);
                                 let clean = rel.to_string_lossy().replace('\\', "/");
                                 let trimmed = clean.trim_start_matches('/');
-                                if trimmed.is_empty() { continue; }
+                                if trimmed.is_empty() || is_path_excluded(trimmed, excluded) { continue; }
 
                                 if m.is_dir() && !m.file_type().is_symlink() {
                                     let mut d_entry = ArchiveEntry::from_path(&path, format!("{}/", trimmed.trim_end_matches('/')));
                                     d_entry.is_directory = true;
                                     d_entry.has_stream = false;
                                     let _ = sz.push_archive_entry::<&[u8]>(d_entry, None);
-                                    add_dir_7z(&path, base, sz, bytes_processed, total_original, app, last_emit, depth + 1)?;
+                                    add_dir_7z(&path, base, sz, bytes_processed, total_original, app, last_emit, depth + 1, excluded)?;
                                 } else if m.is_file() {
                                     let mut f_entry = ArchiveEntry::from_path(&path, trimmed.to_string());
                                     f_entry.is_directory = false;
@@ -1295,7 +1371,7 @@ pub fn compress_7z(
                     }
                     Ok(())
                 }
-                add_dir_7z(p, parent, &mut sz, &mut bytes_processed, total_original, app, &mut last_emit, 0)?;
+                add_dir_7z(p, parent, &mut sz, &mut bytes_processed, total_original, app, &mut last_emit, 0, excluded)?;
             }
         }
 
@@ -1756,10 +1832,17 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
     let archive_name = format!("{}{}", base_name, ext);
     let output_path = parent_dir.join(&archive_name);
     
-    // Calculate total original size across files & folders
+    let excluded_set: Option<std::collections::HashSet<String>> = payload.excluded_paths.as_ref().map(|paths| {
+        paths.iter().map(|p| p.replace('\\', "/").trim_start_matches('/').to_lowercase()).collect()
+    });
+    let excluded_ref = excluded_set.as_ref();
+
+    // Calculate total original size across files & folders (accounting for excluded paths)
     let mut total_original: u64 = 0;
     for file_str in &payload.files {
-        let (s, _) = compute_path_size(Path::new(file_str));
+        let p = Path::new(file_str);
+        let parent = p.parent().unwrap_or(p);
+        let (s, _) = compute_path_size_filtered(p, parent, excluded_ref);
         total_original += s;
     }
 
@@ -1787,13 +1870,14 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
                 &app,
                 total_original,
                 smart_bypass,
+                excluded_ref,
             )
         },
         "tar" => {
-            compress_tar(&payload.files, &output_path, &app, total_original)
+            compress_tar(&payload.files, &output_path, &app, total_original, excluded_ref)
         },
         "7z" => {
-            compress_7z(&payload.files, &output_path, payload.slider_value, pwd_ref, &app, total_original)
+            compress_7z(&payload.files, &output_path, payload.slider_value, pwd_ref, &app, total_original, excluded_ref)
         },
         "bayg" => {
             compress_bay(
@@ -1804,6 +1888,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
                 pwd_ref,
                 &app,
                 total_original,
+                excluded_ref,
             )
         },
         _ => {
@@ -1815,6 +1900,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
                 pwd_ref,
                 &app,
                 total_original,
+                excluded_ref,
             )
         }
     };

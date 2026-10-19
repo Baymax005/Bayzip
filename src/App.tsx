@@ -24,6 +24,7 @@ import {
   ExtractProgress,
   ExtractResult,
   ArchiveInfo,
+  ArchiveEntryItem,
   ArchiveEntryPreview,
   StartupCommand,
 } from "./types";
@@ -113,6 +114,10 @@ function App() {
   const [smartMediaBypass, setSmartMediaBypass] = useState(true);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [itemsInfo, setItemsInfo] = useState<Record<string, { size: number; is_dir: boolean }>>({});
+  const [compressViewMode, setCompressViewMode] = useState<"tree" | "list">("tree");
+  const [stagedEntries, setStagedEntries] = useState<ArchiveEntryItem[]>([]);
+  const [isInspectingStaged, setIsInspectingStaged] = useState<boolean>(false);
+  const [excludedCompressPaths, setExcludedCompressPaths] = useState<Set<string>>(new Set());
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
@@ -237,29 +242,141 @@ function App() {
     }
   };
 
-  // Query file and folder size metadata when selection changes
+  // Query file and folder size metadata and recursive tree when selection changes
   useEffect(() => {
     if (selectedFiles.length === 0) {
       setItemsInfo({});
+      setStagedEntries([]);
+      setExcludedCompressPaths(new Set());
+      setIsInspectingStaged(false);
       return;
     }
     let isCurrent = true;
+    setIsInspectingStaged(true);
+
+    // 1. Fetch top-level item infos
     invoke<SelectedItemInfo[]>("get_selected_items_info", { paths: selectedFiles })
       .then((infos) => {
         if (!isCurrent) return;
+        let hasFolder = false;
         const map: Record<string, { size: number; is_dir: boolean }> = {};
         infos.forEach((info) => {
           map[info.path] = { size: info.size, is_dir: info.is_dir };
+          if (info.is_dir) hasFolder = true;
         });
         setItemsInfo(map);
+        if (hasFolder) {
+          setCompressViewMode("tree");
+        }
       })
       .catch((err) => {
         if (isCurrent) console.error("Failed to query item sizes:", err);
       });
+
+    // 2. Deep recursive inspection for Staged Tree View
+    invoke<ArchiveEntryItem[]>("inspect_staged_items", { paths: selectedFiles })
+      .then((entries) => {
+        if (!isCurrent) return;
+        setStagedEntries(entries);
+        if (entries.some((e) => e.is_dir)) {
+          setCompressViewMode("tree");
+        }
+      })
+      .catch((err) => {
+        if (isCurrent) console.error("Failed to inspect staged items:", err);
+      })
+      .finally(() => {
+        if (isCurrent) setIsInspectingStaged(false);
+      });
+
     return () => {
       isCurrent = false;
     };
   }, [selectedFiles]);
+
+  const handleToggleCompressExclude = (rawPath: string, isDir?: boolean) => {
+    const norm = normalizeArchiveEntryPath(rawPath);
+    const prefix = norm.endsWith("/") ? norm : norm + "/";
+
+    setExcludedCompressPaths((prev) => {
+      const next = new Set(prev);
+      const isCurrentlyExcluded =
+        next.has(norm) ||
+        (isDir && Array.from(next).some((p) => p === norm || p.startsWith(prefix)));
+
+      if (isCurrentlyExcluded) {
+        next.delete(norm);
+        if (isDir) {
+          for (const p of Array.from(next)) {
+            if (p === norm || p.startsWith(prefix)) {
+              next.delete(p);
+            }
+          }
+        }
+      } else {
+        next.add(norm);
+        if (isDir && stagedEntries.length > 0) {
+          for (const entry of stagedEntries) {
+            const entryNorm = normalizeArchiveEntryPath(entry.name);
+            if (entryNorm.startsWith(prefix) || entryNorm === norm) {
+              next.add(entryNorm);
+            }
+          }
+        }
+      }
+      return next;
+    });
+  };
+
+  const handleCompressIncludeAll = () => {
+    setExcludedCompressPaths(new Set());
+  };
+
+  const handlePreviewStagedEntry = async (entryName: string) => {
+    let resolvedPath: string | null = null;
+    const clean = entryName.replace(/\\/g, "/").replace(/^\/+/, "");
+    const firstSegment = clean.split("/")[0].toLowerCase();
+
+    for (const filePath of selectedFiles) {
+      const normFilePath = filePath.replace(/\\/g, "/");
+      const name = normFilePath.split("/").pop() || "";
+      if (name.toLowerCase() === firstSegment) {
+        if (clean.includes("/")) {
+          const sub = clean.substring(clean.indexOf("/") + 1);
+          resolvedPath = `${filePath}/${sub}`;
+        } else {
+          resolvedPath = filePath;
+        }
+        break;
+      }
+    }
+
+    if (!resolvedPath && selectedFiles.length === 1) {
+      resolvedPath = `${selectedFiles[0]}/${clean}`;
+    }
+
+    if (!resolvedPath) {
+      setPreviewError("Could not locate source file on disk.");
+      setIsPreviewOpen(true);
+      return;
+    }
+
+    setIsPreviewOpen(true);
+    setIsPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewData(null);
+
+    try {
+      const res = await invoke<ArchiveEntryPreview>("preview_staged_file", {
+        filePath: resolvedPath,
+      });
+      setPreviewData(res);
+    } catch (err: unknown) {
+      setPreviewError(typeof err === "string" ? err : String(err));
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  };
 
   // Auto-fill archive name from first file stem if currently empty
   useEffect(() => {
@@ -640,6 +757,7 @@ function App() {
               password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
               output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
               smart_bypass: smartMediaBypass,
+              excluded_paths: excludedCompressPaths.size > 0 ? Array.from(excludedCompressPaths) : undefined,
             },
           });
           totalOrig += res.original_size;
@@ -668,6 +786,7 @@ function App() {
             password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
             output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
             smart_bypass: smartMediaBypass,
+            excluded_paths: excludedCompressPaths.size > 0 ? Array.from(excludedCompressPaths) : undefined,
           },
         });
         setCompressResult(res);
@@ -933,6 +1052,14 @@ function App() {
               handleSelectCompressDestination={handleSelectCompressDestination}
               handleCompress={handleCompress}
               handleCancelCompress={handleCancelCompress}
+              compressViewMode={compressViewMode}
+              setCompressViewMode={setCompressViewMode}
+              stagedEntries={stagedEntries}
+              isInspectingStaged={isInspectingStaged}
+              excludedCompressPaths={excludedCompressPaths}
+              onToggleCompressExclude={handleToggleCompressExclude}
+              onCompressIncludeAll={handleCompressIncludeAll}
+              onPreviewStagedEntry={handlePreviewStagedEntry}
             />
           )}
 
@@ -985,6 +1112,8 @@ function App() {
           setCompressResult(null);
           setSelectedFiles([]);
           setCustomArchiveName("");
+          setStagedEntries([]);
+          setExcludedCompressPaths(new Set());
         }}
         extractResult={extractResult}
         archiveInfo={archiveInfo}

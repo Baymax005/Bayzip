@@ -79,6 +79,7 @@ pub struct CompressPayload {
     pub password: Option<String>,
     pub output_dir: Option<String>,
     pub smart_bypass: Option<bool>,
+    pub excluded_paths: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Clone, Debug)]

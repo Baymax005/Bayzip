@@ -1731,3 +1731,165 @@ pub fn get_optimal_write_buffer(_output_path: &Path, requested_buffer: usize) ->
     requested_buffer.min(64 * 1024 * 1024).max(1024 * 1024)
 }
 
+pub fn inspect_staged_items_sync(paths: &[String]) -> Result<Vec<ArchiveEntryItem>, String> {
+    let mut entries = Vec::new();
+    for path_str in paths {
+        let p = Path::new(path_str);
+        if !p.exists() {
+            continue;
+        }
+        let base_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("item");
+        if p.is_file() {
+            let meta = std::fs::symlink_metadata(p).map_err(|e| e.to_string())?;
+            entries.push(ArchiveEntryItem {
+                name: base_name.to_string(),
+                size: meta.len(),
+                is_dir: false,
+            });
+        } else if p.is_dir() {
+            entries.push(ArchiveEntryItem {
+                name: format!("{}/", base_name),
+                size: 0,
+                is_dir: true,
+            });
+
+            fn walk_staged_dir(dir: &Path, rel_prefix: &str, entries: &mut Vec<ArchiveEntryItem>, depth: usize) {
+                if depth > 32 { return; }
+                if let Ok(rd) = std::fs::read_dir(dir) {
+                    for entry in rd.flatten() {
+                        let path = entry.path();
+                        let file_name = match path.file_name().and_then(|s| s.to_str()) {
+                            Some(s) => s,
+                            None => continue,
+                        };
+                        let rel = format!("{}/{}", rel_prefix, file_name);
+                        if let Ok(m) = std::fs::symlink_metadata(&path) {
+                            if m.is_dir() {
+                                entries.push(ArchiveEntryItem {
+                                    name: format!("{}/", rel),
+                                    size: 0,
+                                    is_dir: true,
+                                });
+                                if !m.file_type().is_symlink() {
+                                    walk_staged_dir(&path, &rel, entries, depth + 1);
+                                }
+                            } else {
+                                entries.push(ArchiveEntryItem {
+                                    name: rel,
+                                    size: m.len(),
+                                    is_dir: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            walk_staged_dir(p, base_name, &mut entries, 0);
+        }
+    }
+    Ok(entries)
+}
+
+pub fn preview_staged_file_sync(file_path: &str) -> Result<ArchiveEntryPreview, String> {
+    let p = Path::new(file_path);
+    if !p.exists() {
+        return Err("File not found".into());
+    }
+    let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+    let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    let total_size = meta.len();
+
+    // Check restricted executables first
+    if RESTRICTED_EXECUTABLE_EXTS.contains(&ext.as_str()) {
+        return Ok(ArchiveEntryPreview {
+            name: file_name.to_string(),
+            size: total_size,
+            preview_type: "restricted".to_string(),
+            content: None,
+            mime_type: None,
+            is_restricted: true,
+            warning: Some("Restricted Executable: Binaries (.exe, .dll, .sys, etc.) cannot be executed inside the preview viewer for system security.".to_string()),
+        });
+    }
+
+    // Limit read size to 10 MB for preview safety
+    let max_read = (10 * 1024 * 1024).min(total_size as usize);
+    let mut file = File::open(p).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut bytes = vec![0u8; max_read];
+    let n = file.read(&mut bytes).map_err(|e| format!("Failed to read file: {}", e))?;
+    bytes.truncate(n);
+
+    // If restricted script (.bat, .cmd, .ps1, .vbs)
+    if RESTRICTED_SCRIPT_EXTS.contains(&ext.as_str()) {
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        return Ok(ArchiveEntryPreview {
+            name: file_name.to_string(),
+            size: total_size,
+            preview_type: "restricted".to_string(),
+            content: Some(text),
+            mime_type: Some("text/plain".to_string()),
+            is_restricted: true,
+            warning: Some("Execution Blocked: Shell scripts (.bat, .cmd, .ps1, .vbs) are displayed in safe read-only preview mode. Accidental execution is completely blocked.".to_string()),
+        });
+    }
+
+    // Check image types
+    if IMAGE_EXTS.contains(&ext.as_str()) {
+        let mime = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            "ico" => "image/x-icon",
+            "svg" => "image/svg+xml",
+            _ => "image/png",
+        };
+        let data_url = format!("data:{};base64,{}", mime, base64_encode(&bytes));
+        return Ok(ArchiveEntryPreview {
+            name: file_name.to_string(),
+            size: total_size,
+            preview_type: "image".to_string(),
+            content: Some(data_url),
+            mime_type: Some(mime.to_string()),
+            is_restricted: false,
+            warning: None,
+        });
+    }
+
+    // Check text/code or valid UTF-8
+    let is_text_ext = TEXT_CODE_EXTS.contains(&ext.as_str());
+    let is_valid_utf8 = !bytes.is_empty() && !bytes[..bytes.len().min(512)].contains(&0) && std::str::from_utf8(&bytes).is_ok();
+
+    if is_text_ext || is_valid_utf8 {
+        let (content_str, warning) = if bytes.len() > 1_000_000 {
+            let truncated = String::from_utf8_lossy(&bytes[..1_000_000]).to_string();
+            (truncated, Some("Preview truncated to 1 MB for high performance.".to_string()))
+        } else {
+            (String::from_utf8_lossy(&bytes).to_string(), None)
+        };
+
+        return Ok(ArchiveEntryPreview {
+            name: file_name.to_string(),
+            size: total_size,
+            preview_type: "text".to_string(),
+            content: Some(content_str),
+            mime_type: Some("text/plain".to_string()),
+            is_restricted: false,
+            warning,
+        });
+    }
+
+    // Generic binary file
+    Ok(ArchiveEntryPreview {
+        name: file_name.to_string(),
+        size: total_size,
+        preview_type: "binary".to_string(),
+        content: None,
+        mime_type: Some("application/octet-stream".to_string()),
+        is_restricted: false,
+        warning: Some("Binary File: Direct preview is not supported for this file type.".to_string()),
+    })
+}
+

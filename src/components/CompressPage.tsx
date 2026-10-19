@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { SystemSpecs, CompressProgress } from "../types";
+import { SystemSpecs, CompressProgress, ArchiveInfo, ArchiveEntryItem } from "../types";
+import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeInspector";
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
@@ -63,6 +64,16 @@ export interface CompressPageProps {
   handleSelectCompressDestination: () => void;
   handleCompress: () => void;
   handleCancelCompress: () => void;
+
+  // Turn 3: Staged Tree Inspection & Exclusions
+  compressViewMode: "tree" | "list";
+  setCompressViewMode: (mode: "tree" | "list") => void;
+  stagedEntries: ArchiveEntryItem[];
+  isInspectingStaged: boolean;
+  excludedCompressPaths: Set<string>;
+  onToggleCompressExclude: (path: string, isDir?: boolean) => void;
+  onCompressIncludeAll: () => void;
+  onPreviewStagedEntry: (entryName: string) => void;
 }
 
 export function CompressPage({
@@ -105,10 +116,79 @@ export function CompressPage({
   handleSelectCompressDestination,
   handleCompress,
   handleCancelCompress,
+  compressViewMode,
+  setCompressViewMode,
+  stagedEntries,
+  isInspectingStaged,
+  excludedCompressPaths,
+  onToggleCompressExclude,
+  onCompressIncludeAll,
+  onPreviewStagedEntry,
 }: CompressPageProps) {
   const totalSelectedSize = useMemo(() => {
     return selectedFiles.reduce((acc, f) => acc + (itemsInfo[f]?.size || 0), 0);
   }, [selectedFiles, itemsInfo]);
+
+  const effectiveTotalSize = useMemo(() => {
+    if (stagedEntries.length === 0) {
+      return totalSelectedSize;
+    }
+    if (excludedCompressPaths.size === 0) {
+      return stagedEntries.reduce((acc, e) => acc + (e.is_dir ? 0 : e.size), 0);
+    }
+    const excludedArray = Array.from(excludedCompressPaths);
+    return stagedEntries.reduce((acc, e) => {
+      if (e.is_dir) return acc;
+      const norm = normalizeArchiveEntryPath(e.name);
+      const isExcluded = excludedArray.some((ex) => {
+        if (norm === ex) return true;
+        const prefix = ex.endsWith("/") ? ex : ex + "/";
+        return norm.startsWith(prefix);
+      });
+      return isExcluded ? acc : acc + e.size;
+    }, 0);
+  }, [stagedEntries, excludedCompressPaths, totalSelectedSize]);
+
+  const totalStagedFilesCount = useMemo(() => {
+    return stagedEntries.filter((e) => !e.is_dir).length;
+  }, [stagedEntries]);
+
+  const includedFilesCount = useMemo(() => {
+    if (stagedEntries.length === 0) return selectedFiles.length;
+    if (excludedCompressPaths.size === 0) return totalStagedFilesCount;
+    const excludedArray = Array.from(excludedCompressPaths);
+    let count = 0;
+    for (const e of stagedEntries) {
+      if (e.is_dir) continue;
+      const norm = normalizeArchiveEntryPath(e.name);
+      const isExcluded = excludedArray.some((ex) => {
+        if (norm === ex) return true;
+        const prefix = ex.endsWith("/") ? ex : ex + "/";
+        return norm.startsWith(prefix);
+      });
+      if (!isExcluded) {
+        count++;
+      }
+    }
+    return count;
+  }, [stagedEntries, excludedCompressPaths, totalStagedFilesCount, selectedFiles.length]);
+
+  const stagedArchiveInfo = useMemo<ArchiveInfo>(() => {
+    const targetName =
+      customArchiveName.trim() ||
+      (selectedFiles.length === 1 ? selectedFiles[0].split(/[/\\]/).pop() || "Archive" : "Archive");
+    return {
+      path: selectedFiles[0] || "",
+      filename: targetName,
+      size: effectiveTotalSize,
+      format: selectedFormat.toUpperCase(),
+      is_archive: false,
+      is_encrypted: false,
+      file_count: totalStagedFilesCount,
+      total_uncompressed_size: effectiveTotalSize,
+      entries: stagedEntries,
+    };
+  }, [selectedFiles, customArchiveName, effectiveTotalSize, selectedFormat, stagedEntries, totalStagedFilesCount]);
 
   const getEstimatedCores = () => {
     const val = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
@@ -155,19 +235,27 @@ export function CompressPage({
 
   return (
     <>
-      {/* Windows 11 File Drop Zone */}
+      {/* Windows 11 File Drop Zone & Staging Inspector */}
       {selectedFiles.length > 0 ? (
         <div className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-4 flex flex-col space-y-3">
           <div className="flex justify-between items-center text-xs border-b border-[#3E3E3E] pb-2">
-            <div className="flex items-center space-x-2 text-[#A8A8A8]">
+            <div className="flex items-center space-x-2 text-[#A8A8A8] flex-wrap">
               <span className="text-white font-medium">
                 {selectedFiles.length} item{selectedFiles.length > 1 ? "s" : ""} selected
               </span>
-              {totalSelectedSize > 0 && (
+              {effectiveTotalSize > 0 && (
                 <>
                   <span>•</span>
                   <span className="text-[#60CDFF] font-mono font-medium">
-                    Total: {formatBytes(totalSelectedSize)}
+                    Total: {formatBytes(effectiveTotalSize)}
+                  </span>
+                </>
+              )}
+              {excludedCompressPaths.size > 0 && (
+                <>
+                  <span>•</span>
+                  <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-[11px] font-medium">
+                    {includedFilesCount} of {totalStagedFilesCount} files included ({excludedCompressPaths.size} excluded)
                   </span>
                 </>
               )}
@@ -177,88 +265,139 @@ export function CompressPage({
                 </span>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedFiles([]);
-                if (!isCompressing) {
-                  setCustomArchiveName("");
-                }
-              }}
-              className="text-red-400 hover:text-red-300 transition-colors cursor-pointer"
-            >
-              Clear all
-            </button>
+
+            <div className="flex items-center space-x-3">
+              {/* View Switcher: Tree vs List */}
+              <div className="flex items-center bg-[#202020] p-0.5 rounded-md border border-[#3E3E3E]">
+                <button
+                  type="button"
+                  onClick={() => setCompressViewMode("tree")}
+                  className={`px-2.5 py-1 text-xs font-medium rounded transition-colors flex items-center space-x-1.5 cursor-pointer ${
+                    compressViewMode === "tree"
+                      ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/30 font-semibold shadow-sm"
+                      : "text-[#A8A8A8] hover:text-white"
+                  }`}
+                  title="Hierarchical Tree & Folder Inspector"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  <span>Tree</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCompressViewMode("list")}
+                  className={`px-2.5 py-1 text-xs font-medium rounded transition-colors flex items-center space-x-1.5 cursor-pointer ${
+                    compressViewMode === "list"
+                      ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/30 font-semibold shadow-sm"
+                      : "text-[#A8A8A8] hover:text-white"
+                  }`}
+                  title="Compact List View"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                  <span>List</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedFiles([]);
+                  if (!isCompressing) {
+                    setCustomArchiveName("");
+                  }
+                }}
+                className="text-red-400 hover:text-red-300 transition-colors cursor-pointer text-xs"
+              >
+                Clear all
+              </button>
+            </div>
           </div>
 
-          <div className="max-h-48 overflow-y-auto flex flex-col space-y-2 custom-scrollbar pr-1">
-            {selectedFiles.map((file) => {
-              const info = itemsInfo[file];
-              const isDir = info?.is_dir;
-              const sizeFormatted = info !== undefined ? formatBytes(info.size) : "...";
-              return (
-                <div
-                  key={file}
-                  className="flex justify-between items-center bg-[#202020] px-4 py-2.5 rounded-md border border-[#3E3E3E] group hover:border-[#555] transition-colors"
-                >
-                  <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                    {isDir ? (
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        className="w-4 h-4 text-[#60CDFF] shrink-0"
+          {compressViewMode === "tree" ? (
+            <div className="rounded-md overflow-hidden border border-[#3E3E3E]">
+              <ArchiveTreeInspector
+                archiveInfo={stagedArchiveInfo}
+                selectedArchive={selectedFiles[0] || "staged"}
+                isLoading={isInspectingStaged}
+                onPreviewEntry={onPreviewStagedEntry}
+                excludedPaths={excludedCompressPaths}
+                onToggleExclude={onToggleCompressExclude}
+                onIncludeAll={onCompressIncludeAll}
+              />
+            </div>
+          ) : (
+            <div className="max-h-56 overflow-y-auto flex flex-col space-y-2 custom-scrollbar pr-1">
+              {selectedFiles.map((file) => {
+                const info = itemsInfo[file];
+                const isDir = info?.is_dir;
+                const sizeFormatted = info !== undefined ? formatBytes(info.size) : "...";
+                return (
+                  <div
+                    key={file}
+                    className="flex justify-between items-center bg-[#202020] px-4 py-2.5 rounded-md border border-[#3E3E3E] group hover:border-[#555] transition-colors"
+                  >
+                    <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                      {isDir ? (
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          className="w-4 h-4 text-[#60CDFF] shrink-0"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                          />
+                        </svg>
+                      ) : (
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          className="w-4 h-4 text-[#A8A8A8] shrink-0"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                          />
+                        </svg>
+                      )}
+                      <span className="text-sm truncate text-white" title={file}>
+                        {file.split(/[/\\]/).pop()}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-3 shrink-0">
+                      <span className="text-xs text-[#A8A8A8] font-mono">{sizeFormatted}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedFiles((prev) => prev.filter((f) => f !== file))
+                        }
+                        className="text-[#888888] hover:text-red-400 p-1 transition-colors cursor-pointer"
+                        title="Remove from selection"
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-                        />
-                      </svg>
-                    ) : (
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        className="w-4 h-4 text-[#A8A8A8] shrink-0"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                        />
-                      </svg>
-                    )}
-                    <span className="text-sm truncate text-white" title={file}>
-                      {file.split(/[/\\]/).pop()}
-                    </span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-3 shrink-0">
-                    <span className="text-xs text-[#A8A8A8] font-mono">{sizeFormatted}</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSelectedFiles((prev) => prev.filter((f) => f !== file))
-                      }
-                      className="text-[#888888] hover:text-red-400 p-1 transition-colors cursor-pointer"
-                      title="Remove from selection"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
 
           <div className="flex justify-between items-center pt-2">
             <div className="flex space-x-2">

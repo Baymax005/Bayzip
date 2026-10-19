@@ -2,6 +2,26 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.0.4] - 2026-10-20
+
+### 🌲 Pre-Compression Staging Tree View & Selective File Exclusion
+- **Hierarchical Folder Tree Inspection & Staging**:
+  - Integrated `ArchiveTreeInspector` directly into the compression staging view (`CompressPage.tsx`).
+  - Dropping or selecting folders automatically opens in Tree View, exposing full subfolder hierarchies, folder expansion/collapse, breadcrumb navigation, search filtering, and per-item size statistics before compression begins.
+- **Dual View Mode Switcher (`[ ☷ Tree ]` / `[ ☰ List ]`)**:
+  - Added Fluent pill switcher in the card header allowing instant toggling between Tree View (hierarchical folder inspection) and List View (compact summary of top-level selections).
+- **Pre-Compression Selective Exclusion Filter**:
+  - Added interactive `[ ✕ Exclude ]` / `[ ↺ Include ]` action buttons on staged entries.
+  - Excluded folders cascade skipped status across all nested descendants with visual strike-through indicators.
+  - Staged total size and file counts dynamically recalculate in real-time when entries are excluded or included.
+- **Multi-Format Backend Exclusion Integration**:
+  - Added `inspect_staged_items` and `preview_staged_file` Tauri async IPC commands in `inspector.rs`.
+  - Updated all compression engines (`.bay`, `.bayg`, `.zip`, `.7z`, `.tar`) in `compressor.rs` to accept `excluded_paths`, omitting excluded files and directories from the generated archives and computing filtered total payload sizes.
+- **Safe Staged File Preview (`FilePreviewModal`)**:
+  - Staged text and code files, images, and scripts can be safely inspected directly from the tree view before archiving without risk of accidental execution.
+
+---
+
 ## [v2.0.3] - 2026-10-20
 
 ### 📁 Extraction Subfolder Path Fix & Compression View Modularization

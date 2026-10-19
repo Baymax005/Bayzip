@@ -168,6 +168,24 @@ async fn preview_archive_entry(
 }
 
 #[tauri::command]
+async fn inspect_staged_items(paths: Vec<String>) -> Result<Vec<ArchiveEntryItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        inspector::inspect_staged_items_sync(&paths)
+    })
+    .await
+    .map_err(|e| format!("Staged items inspection error: {}", e))?
+}
+
+#[tauri::command]
+async fn preview_staged_file(path: String) -> Result<ArchiveEntryPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        inspector::preview_staged_file_sync(&path)
+    })
+    .await
+    .map_err(|e| format!("Staged file preview error: {}", e))?
+}
+
+#[tauri::command]
 fn cancel_compression() {
     crate::compressor::cancel_compression_flag();
 }
@@ -249,6 +267,8 @@ pub fn run() {
             get_archive_info,
             get_file_size,
             preview_archive_entry,
+            inspect_staged_items,
+            preview_staged_file,
             get_background_priority_shield,
             set_background_priority_shield,
             open_settings_window,
