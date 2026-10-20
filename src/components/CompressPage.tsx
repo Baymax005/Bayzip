@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useState, useMemo } from "react";
 import { SystemSpecs, CompressProgress, ArchiveInfo, ArchiveEntryItem } from "../types";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeInspector";
+import { BayzipLogo } from "./BayzipLogo";
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
@@ -47,8 +48,6 @@ export interface CompressPageProps {
   sliderValue: number;
   setSliderValue: (val: number) => void;
   specs: SystemSpecs | null;
-  isRefreshingSpecs: boolean;
-  handleRefreshSpecs: () => void;
   isCompressing: boolean;
   isCancellingCompress: boolean;
   progress: CompressProgress | null;
@@ -104,8 +103,6 @@ export function CompressPage({
   sliderValue,
   setSliderValue,
   specs,
-  isRefreshingSpecs,
-  handleRefreshSpecs,
   isCompressing,
   isCancellingCompress,
   progress,
@@ -233,6 +230,171 @@ export function CompressPage({
     return "Maximum Power";
   };
 
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+
+  const renderWorkspaceSidebar = () => (
+    <div className="space-y-4 text-xs">
+      {/* Archive Name Card */}
+      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-1.5">
+        <label className="text-[11px] font-medium text-[#C8C8C8]">Archive Name</label>
+        <div className="flex items-center space-x-2">
+          <div className="w-8 h-8 rounded-md bg-[#252525] border border-[#3E3E3E] flex items-center justify-center shrink-0">
+            <BayzipLogo className="w-4 h-4" />
+          </div>
+          <div className="flex-1 flex items-center bg-[#252525] rounded-md border border-[#3E3E3E] focus-within:border-[#60CDFF] px-2 py-1">
+            <input
+              type="text"
+              disabled={isCompressing}
+              value={isCompressing && activeCompressConfig ? activeCompressConfig.archiveName : customArchiveName}
+              onChange={(e) => setCustomArchiveName(e.target.value)}
+              placeholder="Archive name..."
+              className="bg-transparent border-none outline-none text-white text-xs font-mono flex-1 disabled:opacity-50"
+            />
+            <span className="text-[11px] text-[#60CDFF] font-mono ml-1 font-semibold">
+              {selectedFormat}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Format Selector Pills */}
+      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-2">
+        <label className="text-[11px] font-medium text-[#C8C8C8]">Archive Format</label>
+        <div className="grid grid-cols-3 gap-1.5">
+          {[".bay", ".bayg", ".zip", ".7z", ".tar"].map((fmt) => (
+            <button
+              key={fmt}
+              type="button"
+              disabled={isCompressing}
+              onClick={() => {
+                setSelectedFormat(fmt);
+                setSelectedAlgorithm(FORMAT_ALGORITHMS[fmt]?.[0] || "None (Store)");
+              }}
+              className={`py-1.5 px-2 rounded text-xs font-mono font-semibold transition-all cursor-pointer ${
+                selectedFormat === fmt
+                  ? "bg-[#60CDFF] text-black shadow-sm"
+                  : "bg-[#252525] text-[#A8A8A8] hover:text-white border border-[#383838]"
+              }`}
+            >
+              {fmt}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Compression Level Slider */}
+      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-2">
+        <div className="flex justify-between items-center">
+          <label className="text-[11px] font-medium text-[#C8C8C8]">Compression Profile</label>
+          <span className="text-[10px] text-[#60CDFF] font-semibold bg-[#1a3847] px-2 py-0.5 rounded border border-[#23536b]">
+            {getSliderLabel()}
+          </span>
+        </div>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="25"
+          disabled={isCompressing}
+          value={sliderValue}
+          onChange={(e) => setSliderValue(Number(e.target.value))}
+          className="w-full h-1.5 bg-[#333333] rounded-lg appearance-none cursor-pointer accent-[#60CDFF]"
+        />
+        <div className="flex justify-between text-[9px] text-[#777777] font-mono">
+          <span>Eco</span>
+          <span>Fast</span>
+          <span>Balanced</span>
+          <span>High</span>
+          <span>Max</span>
+        </div>
+      </div>
+
+      {/* Smart Media Bypass Toggle */}
+      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 flex items-center justify-between">
+        <div>
+          <p className="text-[11px] font-medium text-white">Smart Media Bypass</p>
+          <p className="text-[10px] text-[#888888]">Store pre-compressed media directly</p>
+        </div>
+        <input
+          type="checkbox"
+          disabled={isCompressing}
+          checked={smartMediaBypass}
+          onChange={(e) => setSmartMediaBypass(e.target.checked)}
+          className="accent-[#60CDFF] w-4 h-4 cursor-pointer"
+        />
+      </div>
+
+      {/* Password Protection */}
+      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-1.5">
+        <label className="text-[11px] font-medium text-[#C8C8C8]">Encryption (Optional)</label>
+        <div className="flex items-center bg-[#252525] rounded-md border border-[#3E3E3E] focus-within:border-[#60CDFF] px-2 py-1">
+          <input
+            type={showCompressPassword ? "text" : "password"}
+            disabled={isCompressing}
+            value={compressPassword}
+            onChange={(e) => {
+              setCompressPassword(e.target.value);
+              if (e.target.value.trim().length > 0 && selectedEncryption === "none") {
+                setSelectedEncryption("aes256");
+              }
+            }}
+            placeholder="Password..."
+            className="bg-transparent border-none outline-none text-white text-xs font-mono flex-1 disabled:opacity-50"
+          />
+          <button
+            type="button"
+            onClick={() => setShowCompressPassword(!showCompressPassword)}
+            className="text-[#888] hover:text-white p-0.5 cursor-pointer text-xs"
+          >
+            {showCompressPassword ? "Hide" : "Show"}
+          </button>
+        </div>
+      </div>
+
+      {/* Live Staging Summary */}
+      <div className="bg-[#182633]/60 border border-[#20495f]/70 rounded-lg p-3 space-y-1 text-[#C8C8C8]">
+        <div className="flex justify-between text-[11px]">
+          <span>Files Selected:</span>
+          <span className="font-mono text-white font-semibold">{includedFilesCount} of {totalStagedFilesCount}</span>
+        </div>
+        {excludedCompressPaths.size > 0 && (
+          <div className="flex justify-between text-[11px] text-rose-300">
+            <span>Files Excluded:</span>
+            <span className="font-mono font-semibold">{excludedCompressPaths.size} skipped</span>
+          </div>
+        )}
+        <div className="flex justify-between text-[11px]">
+          <span>Est. Payload:</span>
+          <span className="font-mono text-[#60CDFF] font-semibold">{formatBytes(effectiveTotalSize)}</span>
+        </div>
+      </div>
+
+      {/* Primary Action Button */}
+      <div className="pt-1">
+        {isCompressing ? (
+          <button
+            type="button"
+            onClick={handleCancelCompress}
+            disabled={isCancellingCompress}
+            className="w-full py-2.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg text-xs transition-colors flex items-center justify-center space-x-2 cursor-pointer shadow-lg"
+          >
+            <span>{isCancellingCompress ? "Cancelling..." : "Cancel Compression"}</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleCompress}
+            disabled={selectedFiles.length === 0}
+            className="w-full py-3 bg-[#60CDFF] hover:bg-[#72D4FF] text-black font-bold rounded-lg text-xs tracking-wide uppercase transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-lg hover:shadow-[0_0_20px_rgba(96,205,255,0.4)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span>⚡</span>
+            <span>Compress Now ({selectedFormat})</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <>
       {/* Windows 11 File Drop Zone & Staging Inspector */}
@@ -266,7 +428,20 @@ export function CompressPage({
               )}
             </div>
 
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2.5">
+              {/* Workspace Mode Button */}
+              <button
+                type="button"
+                onClick={() => setIsWorkspaceOpen(true)}
+                className="px-2.5 py-1 text-xs font-semibold rounded transition-all flex items-center space-x-1.5 cursor-pointer bg-[#202020] hover:bg-[#282828] text-[#60CDFF] hover:text-[#90DCFF] border border-[#3E3E3E] hover:border-[#60CDFF]/50 shadow-sm"
+                title="Open full workspace with folder hierarchy, file selection, and options sidebar"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                </svg>
+                <span>Workspace Mode</span>
+              </button>
+
               {/* View Switcher: Tree vs List */}
               <div className="flex items-center bg-[#202020] p-0.5 rounded-md border border-[#3E3E3E]">
                 <button
@@ -326,6 +501,11 @@ export function CompressPage({
                 excludedPaths={excludedCompressPaths}
                 onToggleExclude={onToggleCompressExclude}
                 onIncludeAll={onCompressIncludeAll}
+                isExpandedModal={isWorkspaceOpen}
+                onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
+                onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
+                sidebar={renderWorkspaceSidebar()}
+                sidebarTitle="Compression Options"
               />
             </div>
           ) : (
@@ -345,7 +525,7 @@ export function CompressPage({
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
-                          className="w-4 h-4 text-[#60CDFF] shrink-0"
+                          className="w-4 h-4 text-[#F9D648] shrink-0"
                         >
                           <path
                             strokeLinecap="round"
@@ -397,6 +577,23 @@ export function CompressPage({
                 );
               })}
             </div>
+          )}
+
+          {compressViewMode !== "tree" && isWorkspaceOpen && (
+            <ArchiveTreeInspector
+              archiveInfo={stagedArchiveInfo}
+              selectedArchive={selectedFiles[0] || "staged"}
+              isLoading={isInspectingStaged}
+              onPreviewEntry={onPreviewStagedEntry}
+              excludedPaths={excludedCompressPaths}
+              onToggleExclude={onToggleCompressExclude}
+              onIncludeAll={onCompressIncludeAll}
+              isExpandedModal={true}
+              onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
+              onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
+              sidebar={renderWorkspaceSidebar()}
+              sidebarTitle="Compression Options"
+            />
           )}
 
           <div className="flex justify-between items-center pt-2">
@@ -479,11 +676,14 @@ export function CompressPage({
       {/* Target Archive Name Card */}
       {selectedFiles.length > 0 && (
         <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-4 flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-md bg-[#202020] border border-[#3E3E3E] flex items-center justify-center text-[#60CDFF] shrink-0 font-mono text-xs font-bold">
-            {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat).toUpperCase()}
+          <div className="w-9 h-9 rounded-lg bg-[#202020] border border-[#3E3E3E] flex items-center justify-center shrink-0 shadow-sm">
+            <BayzipLogo className="w-5 h-5" />
           </div>
           <div className="flex-1">
-            <label className="block text-[11px] text-[#A8A8A8] mb-1">Archive Name</label>
+            <div className="flex justify-between items-center mb-1">
+              <label className="block text-[11px] text-[#A8A8A8]">Archive Name</label>
+              <span className="text-[10px] text-[#888888]">Saved in source folder</span>
+            </div>
             <div className="flex items-center bg-[#202020] rounded-md border border-[#3E3E3E] focus-within:border-[#60CDFF] px-2.5 py-1.5 transition-colors">
               <input
                 type="text"
@@ -508,28 +708,9 @@ export function CompressPage({
             <h3 className="text-sm font-medium text-white">Hardware Allocation</h3>
             <p className="text-xs text-[#A8A8A8] mt-0.5">Control system CPU cores, thread pool & memory limits</p>
           </div>
-          <div className="flex items-center space-x-2">
-            <span className="text-xs font-medium text-[#60CDFF] bg-[#1a3847] px-2.5 py-1 rounded-md border border-[#23536b]">
-              {getSliderLabel()}
-            </span>
-            <button
-              type="button"
-              onClick={handleRefreshSpecs}
-              disabled={isRefreshingSpecs}
-              className="p-1 rounded bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] text-[#A8A8A8] hover:text-white transition-colors cursor-pointer disabled:opacity-50"
-              title="Refresh Hardware Specs"
-            >
-              <svg
-                className={`w-3.5 h-3.5 ${isRefreshingSpecs ? "animate-spin text-[#60CDFF]" : ""}`}
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
-          </div>
+          <span className="text-xs font-medium text-[#60CDFF] bg-[#1a3847] px-2.5 py-1 rounded-md border border-[#23536b]">
+            {getSliderLabel()}
+          </span>
         </div>
 
         {/* Dynamic 5-Tier Hardware Allocation Slider */}
@@ -989,6 +1170,23 @@ export function CompressPage({
           </span>
         </button>
       </div>
+
+      {/* Full Workspace Modal with Right-Hand Options Sidebar */}
+      {isWorkspaceOpen && (
+        <ArchiveTreeInspector
+          archiveInfo={stagedArchiveInfo}
+          selectedArchive={selectedFiles[0] || "staged"}
+          isLoading={isInspectingStaged}
+          onPreviewEntry={onPreviewStagedEntry}
+          excludedPaths={excludedCompressPaths}
+          onToggleExclude={onToggleCompressExclude}
+          onIncludeAll={onCompressIncludeAll}
+          isExpandedModal={true}
+          onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
+          sidebar={renderWorkspaceSidebar()}
+          sidebarTitle="Compression Options"
+        />
+      )}
     </>
   );
 }

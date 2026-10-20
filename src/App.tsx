@@ -85,21 +85,8 @@ function App() {
 
   // System Specs
   const [specs, setSpecs] = useState<SystemSpecs | null>(null);
-  const [isRefreshingSpecs, setIsRefreshingSpecs] = useState(false);
   const [sliderValue, setSliderValue] = useState<number>(50); // 0, 25, 50, 75, 100
   const [isAdvanced, setIsAdvanced] = useState(false);
-
-  const handleRefreshSpecs = async () => {
-    setIsRefreshingSpecs(true);
-    try {
-      const res = await invoke<SystemSpecs>("get_system_specs");
-      setSpecs(res);
-    } catch (err) {
-      console.error("Specs query error:", err);
-    } finally {
-      setTimeout(() => setIsRefreshingSpecs(false), 500);
-    }
-  };
 
   // Compress Options & Naming
   const [customArchiveName, setCustomArchiveName] = useState<string>("");
@@ -114,7 +101,7 @@ function App() {
   const [smartMediaBypass, setSmartMediaBypass] = useState(true);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [itemsInfo, setItemsInfo] = useState<Record<string, { size: number; is_dir: boolean }>>({});
-  const [compressViewMode, setCompressViewMode] = useState<"tree" | "list">("tree");
+  const [compressViewMode, setCompressViewMode] = useState<"tree" | "list">("list");
   const [stagedEntries, setStagedEntries] = useState<ArchiveEntryItem[]>([]);
   const [isInspectingStaged, setIsInspectingStaged] = useState<boolean>(false);
   const [excludedCompressPaths, setExcludedCompressPaths] = useState<Set<string>>(new Set());
@@ -1052,8 +1039,6 @@ function App() {
               sliderValue={sliderValue}
               setSliderValue={setSliderValue}
               specs={specs}
-              isRefreshingSpecs={isRefreshingSpecs}
-              handleRefreshSpecs={handleRefreshSpecs}
               isCompressing={isCompressing}
               isCancellingCompress={isCancellingCompress}
               progress={progress}

@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { BayzipLogo } from "./BayzipLogo";
 
 export function Titlebar() {
   return (
@@ -14,14 +15,7 @@ export function Titlebar() {
       {/* Left Branding Area - Fully Grabbable */}
       <div data-tauri-drag-region className="flex items-center space-x-2.5 px-4 cursor-default">
         <div data-tauri-drag-region className="w-5 h-5 flex items-center justify-center pointer-events-none">
-          <img
-            src="/bayzip-logo.png"
-            alt="Bayzip"
-            className="w-4 h-4 object-contain pointer-events-none rounded-sm"
-            onError={(e) => {
-              (e.currentTarget as HTMLElement).style.display = "none";
-            }}
-          />
+          <BayzipLogo className="w-4 h-4 rounded-sm pointer-events-none" />
         </div>
         <span data-tauri-drag-region className="text-xs font-semibold text-white tracking-wide pointer-events-none">
           Bayzip

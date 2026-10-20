@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.0.6)
+# 📦 Bayzip (v2.0.7)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -170,13 +170,13 @@ graph TD
 
 ## 📋 Release Notes
 
-### v2.0.6 (Latest)
-- **Hardened Path Traversal & Zip-Slip Protection**: Sanitizes `CurDir` (`.`) and `./` artifacts cleanly without breaking relative subfolder paths, strictly rejecting unauthorized root and prefix directory traversals.
-- **Robust Single-Root Folder Deduplication**: Hardened candidate root scanning across `.bay`, `.zip`, `.7z`, and `.rar` to eliminate false-positive root stripping on loose top-level files.
-- **Precision Folder Exclusion Filtering**: Standardized trailing-slash normalization across compression engines, ensuring excluded folders and their nested descendants are reliably skipped.
-- **Modularized Subsystem Architecture**: Fully decoupled backend engines into dedicated modules (`compressor/` and `inspector/`) with zero API breakage, optimized thread management, and hardware-scaled I/O.
+### v2.0.7 (Latest)
+- **Symmetric Pro Workspace Mode**: Full-screen dual-pane workspace modal with right-hand Action Sidebar across both Compress and Extract workflows, allowing complete archive inspection, breadcrumb navigation, search filtering, and configuration without leaving the view.
+- **Fluent Yellow Folder Icons (`#F9D648`)**: Restored authentic Windows 11 Fluent Yellow folder icons across all tree nodes, active directory cards, and flat table views.
+- **Resilient Brand Assets**: Standalone `BayzipLogo` vector fallback component ensures brand tiles and logos never break or disappear on asset load failures.
+- **Clean Default UI State**: Restored compact staging list as the default view mode (< 190px) and removed redundant hardware specs refresh controls.
 
-> 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases (v1.0.1 through v2.0.6), see [CHANGELOG.md](CHANGELOG.md).
+> 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases (v1.0.1 through v2.0.7), see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

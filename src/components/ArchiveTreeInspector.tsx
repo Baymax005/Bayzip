@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { ArchiveInfo, ArchiveEntryItem } from "../types";
 
-interface ArchiveTreeInspectorProps {
+export interface ArchiveTreeInspectorProps {
   archiveInfo: ArchiveInfo;
   selectedArchive: string;
   extractPassword?: string;
@@ -11,6 +11,11 @@ interface ArchiveTreeInspectorProps {
   excludedPaths?: Set<string>;
   onToggleExclude?: (path: string, isDir?: boolean) => void;
   onIncludeAll?: () => void;
+  isExpandedModal?: boolean;
+  onCloseExpandedModal?: () => void;
+  onOpenExpandedModal?: () => void;
+  sidebar?: React.ReactNode;
+  sidebarTitle?: string;
 }
 
 export function normalizeArchiveEntryPath(p: string): string {
@@ -151,9 +156,23 @@ export function ArchiveTreeInspector({
   excludedPaths = new Set(),
   onToggleExclude,
   onIncludeAll,
+  isExpandedModal: isExpandedModalProp,
+  onCloseExpandedModal,
+  onOpenExpandedModal,
+  sidebar,
+  sidebarTitle,
 }: ArchiveTreeInspectorProps) {
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
-  const [isExpandedModal, setIsExpandedModal] = useState<boolean>(false);
+  const [internalExpandedModal, setInternalExpandedModal] = useState<boolean>(false);
+  const isExpandedModal = isExpandedModalProp !== undefined ? isExpandedModalProp : internalExpandedModal;
+  const setIsExpandedModal = (val: boolean) => {
+    setInternalExpandedModal(val);
+    if (val && onOpenExpandedModal) {
+      onOpenExpandedModal();
+    } else if (!val && onCloseExpandedModal) {
+      onCloseExpandedModal();
+    }
+  };
   const [currentFolderPath, setCurrentFolderPath] = useState<string>("");
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set([""]));
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -439,7 +458,7 @@ export function ArchiveTreeInspector({
 
             {/* Folder Icon */}
             <svg
-              className={`w-4 h-4 shrink-0 ${isSelected ? "text-[#60CDFF]" : isFolderSkipped ? "text-rose-400" : "text-[#E8C488]"}`}
+              className={`w-4 h-4 shrink-0 ${isSelected ? "text-[#60CDFF]" : isFolderSkipped ? "text-rose-400" : "text-[#F9D648]"}`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -612,7 +631,7 @@ export function ArchiveTreeInspector({
             type="button"
             onClick={() => setIsExpandedModal(true)}
             className="p-1.5 bg-[#2D2D2D] hover:bg-[#383838] text-[#A8A8A8] hover:text-white rounded border border-[#3E3E3E] transition-colors cursor-pointer"
-            title="Expand into full dual-pane workspace (⤢)"
+            title="Expand into full workspace (⤢)"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
@@ -622,12 +641,13 @@ export function ArchiveTreeInspector({
           <button
             type="button"
             onClick={() => setIsExpandedModal(false)}
-            className="p-1.5 bg-[#2D2D2D] hover:bg-[#383838] text-[#A8A8A8] hover:text-white rounded border border-[#3E3E3E] transition-colors cursor-pointer"
-            title="Minimize to normal view"
+            className="px-2.5 py-1 bg-[#2D2D2D] hover:bg-rose-950/40 text-[#A8A8A8] hover:text-rose-300 rounded-md border border-[#3E3E3E] hover:border-rose-700/60 transition-colors cursor-pointer flex items-center space-x-1.5 text-xs font-medium"
+            title="Exit Workspace (Esc)"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
+            <span>Exit Workspace</span>
           </button>
         )}
       </div>
@@ -805,7 +825,7 @@ export function ArchiveTreeInspector({
                 }`}
               >
                 <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                  <svg className="w-4 h-4 text-[#E8C488] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                   </svg>
                   <span
@@ -1000,7 +1020,7 @@ export function ArchiveTreeInspector({
             >
               <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
                 {entry.is_dir ? (
-                  <svg className="w-4 h-4 text-[#E8C488] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                   </svg>
                 ) : (
@@ -1139,7 +1159,9 @@ export function ArchiveTreeInspector({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-[#1E1E1E] border border-[#3E3E3E] rounded-xl shadow-2xl flex flex-col w-full max-w-6xl h-[88vh] overflow-hidden relative"
+            className={`bg-[#1E1E1E] border border-[#3E3E3E] rounded-xl shadow-2xl flex flex-col w-full ${
+              sidebar ? "max-w-[96vw] h-[92vh]" : "max-w-6xl h-[88vh]"
+            } overflow-hidden relative`}
           >
             {renderToolbar(true)}
 
@@ -1148,40 +1170,56 @@ export function ArchiveTreeInspector({
                 {renderEncryptedBanner()}
               </div>
             ) : (
-              <div className="flex-1 flex flex-col overflow-hidden">
-                {viewMode === "tree" ? (
-                  <>
-                    {renderBreadcrumbs()}
-                    {renderSearchInput()}
-                    {/* Dual-Pane Layout: Left Folder Tree, Right Folder Files */}
-                    <div className="flex-1 flex overflow-hidden">
-                      {/* Left Pane: Hierarchical Tree */}
-                      <div className="w-80 bg-[#1A1A1A] border-r border-[#333333] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0">
-                        <div className="text-[10px] font-bold tracking-wider uppercase text-[#888888] px-2 py-1 mb-1">
-                          Folder Hierarchy
+              <div className="flex-1 flex overflow-hidden">
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  {viewMode === "tree" ? (
+                    <>
+                      {renderBreadcrumbs()}
+                      {renderSearchInput()}
+                      {/* Dual-Pane Layout: Left Folder Tree, Right Folder Files */}
+                      <div className="flex-1 flex overflow-hidden">
+                        {/* Left Pane: Hierarchical Tree */}
+                        <div className="w-72 bg-[#1A1A1A] border-r border-[#333333] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0">
+                          <div className="text-[10px] font-bold tracking-wider uppercase text-[#888888] px-2 py-1 mb-1">
+                            Folder Hierarchy
+                          </div>
+                          {renderTreeFolderNode(treeRoot)}
                         </div>
-                        {renderTreeFolderNode(treeRoot)}
-                      </div>
 
-                      {/* Right Pane: Files inside selected folder */}
-                      <div className="flex-1 bg-[#181818] overflow-hidden flex flex-col">
-                        <div className="px-3 py-1.5 bg-[#222222] border-b border-[#2E2E2E] text-[11px] font-mono text-[#A8A8A8] flex justify-between shrink-0">
-                          <span>Folder: <span className="text-white font-semibold">/{currentFolderPath || ""}</span></span>
-                          <span>Double-click or Spacebar to Preview</span>
-                        </div>
-                        <div className="flex-1 flex flex-col overflow-hidden">
-                          {renderCurrentFolderContents()}
+                        {/* Right Pane: Files inside selected folder */}
+                        <div className="flex-1 bg-[#181818] overflow-hidden flex flex-col">
+                          <div className="px-3 py-1.5 bg-[#222222] border-b border-[#2E2E2E] text-[11px] font-mono text-[#A8A8A8] flex justify-between shrink-0">
+                            <span>Folder: <span className="text-white font-semibold">/{currentFolderPath || ""}</span></span>
+                            <span>Double-click or Spacebar to Preview</span>
+                          </div>
+                          <div className="flex-1 flex flex-col overflow-hidden">
+                            {renderCurrentFolderContents()}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    {renderSearchInput()}
-                    <div className="flex-1 overflow-hidden bg-[#181818] flex flex-col">
-                      {renderFlatTable()}
-                    </div>
-                  </>
+                    </>
+                  ) : (
+                    <>
+                      {renderSearchInput()}
+                      <div className="flex-1 overflow-hidden bg-[#181818] flex flex-col">
+                        {renderFlatTable()}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Right Options Sidebar (WinRAR / Pro Archiver style) */}
+                {sidebar && (
+                  <div className="w-80 bg-[#202020] border-l border-[#333333] flex flex-col shrink-0 overflow-y-auto custom-scrollbar p-4 space-y-4">
+                    {sidebarTitle && (
+                      <div className="flex items-center justify-between border-b border-[#3E3E3E] pb-2 mb-1 shrink-0">
+                        <span className="text-xs uppercase tracking-wider font-semibold text-[#60CDFF]">
+                          {sidebarTitle}
+                        </span>
+                      </div>
+                    )}
+                    {sidebar}
+                  </div>
                 )}
               </div>
             )}

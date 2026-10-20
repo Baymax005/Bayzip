@@ -2,6 +2,26 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.0.7] - 2026-10-21
+
+### 🚀 Pro Workspace Mode with Side Options, Fluent Yellow Folders & UI Polish
+- **Symmetric Pro Workspace Mode (`CompressPage.tsx` & `ExtractPage.tsx`)**:
+  - Full-screen dual-pane workspace with a right-hand Action Sidebar (`w-80`) across both **Compress** and **Extract** workflows.
+  - Allows full archive inspection, selective file/folder exclusion, folder tree exploration, and spacebar file previewing while keeping all configuration controls and execution buttons directly within reach.
+  - **Compress Workspace Sidebar**: Archive naming with branding tile, format pills (`.bay`, `.bayg`, `.zip`, `.7z`, `.tar`), hardware/compression level slider, media pass-through toggle, encryption password, staging payload summary, and `[ ⚡ Compress Now ]`.
+  - **Extract Workspace Sidebar**: Destination folder picker with Browse button, encryption password with Show/Hide toggle, subfolder extraction toggle, completion trigger toggle, selection summary, and `[ 📦 Extract Selected Files ]`.
+  - Accessible via the `[ ⤢ Workspace Mode ]` header button in both views or the toolbar expand icon, with keyboard `Esc` shortcut.
+- **Authentic Windows 11 Fluent Yellow Folders (`#F9D648`)**:
+  - Restored classic Fluent Yellow folder icons across all directory listings, tree inspector nodes, breadcrumb elements, and flat table views, replacing generic blue/tan icons.
+- **Resilient Brand Identity (`BayzipLogo.tsx`)**:
+  - Created standalone, resilient `BayzipLogo` component with inline vector SVG fallback, ensuring branding assets never fail or hide on image load errors.
+  - Integrated into Window Titlebar, About Modal, Compression header, Extraction card, and Workspace sidebars.
+- **Compact Default State & Redundancy Cleanup**:
+  - Restored the sleek, compact list view as default for staging files (< 190px), preserving the lightweight feel of v2.0.0.
+  - Removed redundant spinning hardware specs refresh button from Hardware Allocation settings.
+
+---
+
 ## [v2.0.6] - 2026-10-20
 
 ### 🛡️ Path Hardening, Directory Traversal Security & Heuristic Fixes

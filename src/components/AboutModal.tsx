@@ -1,4 +1,5 @@
 import { APP_VERSION } from "../version";
+import { BayzipLogo } from "./BayzipLogo";
 
 interface AboutModalProps {
   isOpen: boolean;
@@ -32,11 +33,7 @@ export function AboutModal({ isOpen, onClose }: AboutModalProps) {
         {/* Header Hero */}
         <div className="flex items-center space-x-4 pr-6">
           <div className="w-13 h-13 rounded-2xl bg-gradient-to-br from-[#183144] to-[#0D1C27] border border-[#60CDFF]/40 p-2 shadow-[0_0_20px_rgba(96,205,255,0.25)] flex items-center justify-center shrink-0">
-            <img
-              src="/bayzip-logo.png"
-              alt="Bayzip"
-              className="w-full h-full object-contain filter drop-shadow-[0_2px_8px_rgba(96,205,255,0.4)]"
-            />
+            <BayzipLogo className="w-full h-full object-contain filter drop-shadow-[0_2px_8px_rgba(96,205,255,0.4)]" />
           </div>
           <div>
             <div className="flex items-center space-x-2.5">
