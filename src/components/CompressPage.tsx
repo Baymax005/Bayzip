@@ -673,48 +673,54 @@ export function CompressPage({
         </div>
       )}
 
-      {/* Target Archive Name Card */}
-      {selectedFiles.length > 0 && (
-        <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-4 flex items-center space-x-3">
+      {/* Target Archive Name Card - Always visible with glowing Bayzip logo tile */}
+      <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-4 flex flex-col space-y-2">
+        <div className="flex justify-between items-center text-xs">
+          <span className="font-medium text-[#C8C8C8]">Archive Name</span>
+          <span className="text-[11px] text-[#888888]">Saved in source folder</span>
+        </div>
+        <div className="flex items-center space-x-2.5">
           <div className="w-9 h-9 rounded-lg bg-[#202020] border border-[#3E3E3E] flex items-center justify-center shrink-0 shadow-sm">
             <BayzipLogo className="w-5 h-5" />
           </div>
-          <div className="flex-1">
-            <div className="flex justify-between items-center mb-1">
-              <label className="block text-[11px] text-[#A8A8A8]">Archive Name</label>
-              <span className="text-[10px] text-[#888888]">Saved in source folder</span>
-            </div>
-            <div className="flex items-center bg-[#202020] rounded-md border border-[#3E3E3E] focus-within:border-[#60CDFF] px-2.5 py-1.5 transition-colors">
-              <input
-                type="text"
-                disabled={isCompressing}
-                value={isCompressing && activeCompressConfig ? activeCompressConfig.archiveName : customArchiveName}
-                onChange={(e) => setCustomArchiveName(e.target.value)}
-                placeholder="Enter archive name..."
-                className="bg-transparent border-none outline-none text-white text-xs font-mono flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <span className="text-xs text-[#60CDFF] font-mono ml-1 font-semibold select-none">
-                {isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat}
-              </span>
-            </div>
-          </div>
+          <input
+            type="text"
+            disabled={isCompressing}
+            value={isCompressing && activeCompressConfig ? activeCompressConfig.archiveName : customArchiveName}
+            onChange={(e) => setCustomArchiveName(e.target.value)}
+            placeholder={selectedFiles.length > 0 ? "Archive name..." : "Enter archive name..."}
+            className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-medium placeholder-[#666] disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+          <span className="bg-[#202020] px-3 py-2 rounded-md border border-[#3E3E3E] text-xs font-mono text-[#60CDFF] shrink-0 font-semibold select-none">
+            {isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat}
+          </span>
         </div>
-      )}
+      </div>
 
       {/* Hardware Allocation & Thread Matrix Card */}
-      <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6 space-y-5">
+      <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6 space-y-4">
         <div className="flex justify-between items-center">
           <div>
             <h3 className="text-sm font-medium text-white">Hardware Allocation</h3>
-            <p className="text-xs text-[#A8A8A8] mt-0.5">Control system CPU cores, thread pool & memory limits</p>
+            <div className="text-xs font-semibold text-[#60CDFF] mt-0.5">
+              {getSliderLabel()}
+            </div>
           </div>
-          <span className="text-xs font-medium text-[#60CDFF] bg-[#1a3847] px-2.5 py-1 rounded-md border border-[#23536b]">
-            {getSliderLabel()}
+          <span className="text-[10px] font-semibold uppercase tracking-wider bg-[#202020] text-[#60CDFF] px-2.5 py-1 rounded border border-[#3E3E3E]">
+            {(isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".bayg"
+              ? "BAYGAMER MULTI-CORE"
+              : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".7z"
+                ? "LZMA2 MULTI-CORE"
+                : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".zip"
+                  ? "ZIP ARCHIVE ENGINE"
+                  : (isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat) === ".tar"
+                    ? "TAR STREAM PACKAGING"
+                    : "ZSTANDARD MULTI-CORE"}
           </span>
         </div>
 
         {/* Dynamic 5-Tier Hardware Allocation Slider */}
-        <div className="space-y-2 pt-2">
+        <div className="space-y-1.5 pt-1">
           <input
             type="range"
             min="0"
@@ -726,19 +732,19 @@ export function CompressPage({
             className="w-full h-1.5 bg-[#202020] rounded-lg appearance-none cursor-pointer accent-[#60CDFF] disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <div className="flex justify-between text-[11px] text-[#A8A8A8] px-0.5">
-            <span>0% (Eco)</span>
-            <span>25%</span>
-            <span>50% (Balanced)</span>
-            <span>75%</span>
-            <span>100% (Max)</span>
+            <span>0</span>
+            <span>25</span>
+            <span>50</span>
+            <span>75</span>
+            <span>100</span>
           </div>
         </div>
 
         {/* Live Hardware Resource Estimates */}
-        <div className="grid grid-cols-2 gap-4 pt-2">
+        <div className="grid grid-cols-2 gap-4 pt-1">
           <div className="bg-[#202020] p-4 rounded-md border border-[#3E3E3E]">
             <div className="flex justify-between items-start mb-1">
-              <p className="text-xs text-[#A8A8A8]">Encoder RAM Allocation</p>
+              <p className="text-xs text-[#A8A8A8]">Target RAM Usage</p>
               {specs && (
                 <span className="text-[10px] text-[#60CDFF] bg-[#1a3847] px-1.5 py-0.5 rounded font-mono">
                   {Math.round(specs.total_ram_gb)} GB Total
