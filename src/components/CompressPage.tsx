@@ -691,9 +691,34 @@ export function CompressPage({
             placeholder={selectedFiles.length > 0 ? "Archive name..." : "Enter archive name..."}
             className="flex-1 bg-[#202020] text-sm text-white px-3 py-2 rounded-md border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-medium placeholder-[#666] disabled:opacity-50 disabled:cursor-not-allowed"
           />
-          <span className="bg-[#202020] px-3 py-2 rounded-md border border-[#3E3E3E] text-xs font-mono text-[#60CDFF] shrink-0 font-semibold select-none">
-            {isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat}
-          </span>
+          {/* Quick Format Dropdown Selector */}
+          <div className="relative group shrink-0">
+            <select
+              disabled={isCompressing}
+              value={isCompressing && activeCompressConfig ? activeCompressConfig.format : selectedFormat}
+              onChange={(e) => {
+                if (isCompressing) return;
+                const newFmt = e.target.value;
+                setSelectedFormat(newFmt);
+                if (FORMAT_ALGORITHMS[newFmt]) {
+                  setSelectedAlgorithm(FORMAT_ALGORITHMS[newFmt][0]);
+                }
+              }}
+              className="appearance-none bg-[#202020] hover:bg-[#282828] text-xs font-mono text-[#60CDFF] font-semibold pl-3 pr-7 py-2 rounded-md border border-[#3E3E3E] hover:border-[#60CDFF]/60 focus:border-[#60CDFF] outline-none cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Change archive compression format"
+            >
+              <option value=".bay" className="bg-[#202020] text-white">.bay</option>
+              <option value=".bayg" className="bg-[#202020] text-white">.bayg (Gamer)</option>
+              <option value=".zip" className="bg-[#202020] text-white">.zip</option>
+              <option value=".7z" className="bg-[#202020] text-white">.7z</option>
+              <option value=".tar" className="bg-[#202020] text-white">.tar</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 text-[#60CDFF] group-hover:text-white transition-colors">
+              <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6l4 4 4-4" />
+              </svg>
+            </div>
+          </div>
         </div>
       </div>
 
