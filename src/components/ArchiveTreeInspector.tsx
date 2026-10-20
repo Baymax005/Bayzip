@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { ArchiveInfo, ArchiveEntryItem } from "../types";
+import { FileFormatIcon } from "./FileFormatIcon";
 
 export interface ArchiveTreeInspectorProps {
   archiveInfo: ArchiveInfo;
@@ -39,31 +40,6 @@ function formatBytes(bytes: number): string {
   const sizes = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-function getFileCategory(name: string): "code" | "image" | "restricted" | "archive" | "media" | "doc" {
-  const ext = name.split(".").pop()?.toLowerCase() || "";
-  if (["exe", "bat", "cmd", "msi", "dll", "sys", "com", "scr", "vbs", "ps1"].includes(ext)) {
-    return "restricted";
-  }
-  if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "svg"].includes(ext)) {
-    return "image";
-  }
-  if (["zip", "7z", "bay", "bayg", "tar", "gz", "tgz", "rar", "bz2", "xz"].includes(ext)) {
-    return "archive";
-  }
-  if (["mp3", "wav", "flac", "mp4", "mkv", "avi", "mov", "webm"].includes(ext)) {
-    return "media";
-  }
-  if (
-    [
-      "js", "ts", "jsx", "tsx", "rs", "py", "c", "cpp", "h", "cs", "java", "go",
-      "html", "css", "json", "yaml", "yml", "toml", "xml", "sql", "sh"
-    ].includes(ext)
-  ) {
-    return "code";
-  }
-  return "doc";
 }
 
 interface VirtualScrollListProps<T> {
@@ -507,42 +483,9 @@ export function ArchiveTreeInspector({
     );
   };
 
-  // Render File Icon based on category
+  // Render File Icon based on category using FileFormatIcon
   const renderFileIcon = (fileName: string) => {
-    const cat = getFileCategory(fileName);
-    if (cat === "restricted") {
-      return (
-        <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m0 0v2m0-2h2m-2 0H10m11-5a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      );
-    }
-    if (cat === "image") {
-      return (
-        <svg className="w-4 h-4 text-purple-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
-      );
-    }
-    if (cat === "archive") {
-      return (
-        <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-        </svg>
-      );
-    }
-    if (cat === "code") {
-      return (
-        <svg className="w-4 h-4 text-[#60CDFF] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-        </svg>
-      );
-    }
-    return (
-      <svg className="w-4 h-4 text-[#A8A8A8] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-      </svg>
-    );
+    return <FileFormatIcon fileName={fileName} size="sm" />;
   };
 
   // Main UI Toolbar Component

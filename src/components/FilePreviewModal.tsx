@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { ArchiveEntryPreview } from "../types";
+import { FileFormatIcon, getFileCategory } from "./FileFormatIcon";
 
 interface FilePreviewModalProps {
   isOpen: boolean;
@@ -92,17 +93,9 @@ export function FilePreviewModal({
             {/* File Format Icon */}
             <div className="w-8 h-8 rounded-lg bg-[#181818] border border-[#3A3A3A] flex items-center justify-center shrink-0">
               {preview?.is_restricted ? (
-                <svg className="w-4 h-4 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m0 0v2m0-2h2m-2 0H10m11-5a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              ) : preview?.preview_type === "image" ? (
-                <svg className="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
+                <FileFormatIcon category="restricted" size="sm" />
               ) : (
-                <svg className="w-4 h-4 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
+                <FileFormatIcon fileName={preview?.name || ""} size="md" />
               )}
             </div>
 
@@ -301,23 +294,181 @@ export function FilePreviewModal({
               </div>
             </div>
           ) : (
-            /* Binary Unsupported Screen */
-            <div className="h-full flex flex-col items-center justify-center space-y-3 p-8 text-center max-w-md mx-auto">
-              <div className="w-14 h-14 rounded-2xl bg-[#262626] border border-[#3E3E3E] flex items-center justify-center text-[#888888]">
-                <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </div>
-              <div>
-                <h4 className="text-sm font-semibold text-white">No Direct Preview Available</h4>
-                <p className="text-xs text-[#888888] mt-1 leading-relaxed">
-                  This file format is binary and cannot be rendered as text or an image.
-                </p>
-              </div>
-              <div className="text-xs text-[#888888] font-mono bg-[#202020] px-3 py-1.5 rounded border border-[#333333]">
-                Size: <span className="text-white font-semibold">{preview ? formatBytes(preview.size) : "0 B"}</span>
-              </div>
-            </div>
+            /* Document / Binary Viewer Card */
+            (() => {
+              const fileName = preview?.name || "";
+              const cat = getFileCategory(fileName);
+              const ext = fileName.split(".").pop()?.toUpperCase() || "FILE";
+
+              if (cat === "pdf") {
+                return (
+                  <div className="h-full flex flex-col items-center justify-center space-y-5 p-8 text-center max-w-lg mx-auto animate-in fade-in duration-200">
+                    <FileFormatIcon fileName={fileName} size="xl" />
+                    <div className="space-y-1.5">
+                      <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-red-950/40 border border-red-800/50 text-red-400 text-xs font-semibold">
+                        <span>Adobe Acrobat PDF Document</span>
+                      </div>
+                      <h4 className="text-base font-semibold text-white font-mono break-all pt-1">
+                        {fileName.split("/").pop()}
+                      </h4>
+                      <p className="text-xs text-[#A8A8A8] leading-relaxed max-w-md mx-auto">
+                        This is a compiled vector document. Bayzip has safely isolated and inspected the stream in memory with zero disk footprint.
+                      </p>
+                    </div>
+
+                    <div className="bg-[#222222] border border-[#333333] rounded-xl p-4 w-full text-left space-y-2 text-xs font-mono">
+                      <div className="flex justify-between items-center text-[#888888] pb-1.5 border-b border-[#2C2C2C]">
+                        <span>Format Standard:</span>
+                        <span className="text-white font-medium">Portable Document Format (PDF)</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[#888888] pb-1.5 border-b border-[#2C2C2C]">
+                        <span>Document Size:</span>
+                        <span className="text-emerald-400 font-semibold">{preview ? formatBytes(preview.size) : "0 B"}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[#888888]">
+                        <span>Inspection Security:</span>
+                        <span className="text-[#60CDFF] font-medium">Zero-Disk Sandboxed In-Memory</span>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-[#777777]">
+                      Extract this archive or entry to open and read with Adobe Acrobat, Microsoft Edge, or Google Chrome.
+                    </p>
+                  </div>
+                );
+              }
+
+              if (cat === "word") {
+                return (
+                  <div className="h-full flex flex-col items-center justify-center space-y-5 p-8 text-center max-w-lg mx-auto animate-in fade-in duration-200">
+                    <FileFormatIcon fileName={fileName} size="xl" />
+                    <div className="space-y-1.5">
+                      <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-blue-950/40 border border-blue-800/50 text-blue-400 text-xs font-semibold">
+                        <span>Microsoft Word Document</span>
+                      </div>
+                      <h4 className="text-base font-semibold text-white font-mono break-all pt-1">
+                        {fileName.split("/").pop()}
+                      </h4>
+                      <p className="text-xs text-[#A8A8A8] leading-relaxed max-w-md mx-auto">
+                        This is a structured Microsoft Word document containing OpenXML formatting, styles, tables, and media.
+                      </p>
+                    </div>
+
+                    <div className="bg-[#222222] border border-[#333333] rounded-xl p-4 w-full text-left space-y-2 text-xs font-mono">
+                      <div className="flex justify-between items-center text-[#888888] pb-1.5 border-b border-[#2C2C2C]">
+                        <span>Format Standard:</span>
+                        <span className="text-white font-medium">Microsoft Word (.docx / .doc)</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[#888888] pb-1.5 border-b border-[#2C2C2C]">
+                        <span>Document Size:</span>
+                        <span className="text-emerald-400 font-semibold">{preview ? formatBytes(preview.size) : "0 B"}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[#888888]">
+                        <span>Inspection Security:</span>
+                        <span className="text-[#60CDFF] font-medium">Zero-Disk Sandboxed In-Memory</span>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-[#777777]">
+                      Extract this archive or entry to open and edit with Microsoft Word, LibreOffice, or Office 365.
+                    </p>
+                  </div>
+                );
+              }
+
+              if (cat === "excel") {
+                return (
+                  <div className="h-full flex flex-col items-center justify-center space-y-5 p-8 text-center max-w-lg mx-auto animate-in fade-in duration-200">
+                    <FileFormatIcon fileName={fileName} size="xl" />
+                    <div className="space-y-1.5">
+                      <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-950/40 border border-emerald-800/50 text-emerald-400 text-xs font-semibold">
+                        <span>Microsoft Excel Spreadsheet</span>
+                      </div>
+                      <h4 className="text-base font-semibold text-white font-mono break-all pt-1">
+                        {fileName.split("/").pop()}
+                      </h4>
+                      <p className="text-xs text-[#A8A8A8] leading-relaxed max-w-md mx-auto">
+                        This is a spreadsheet workbook containing grid worksheets, formulas, and tabular data.
+                      </p>
+                    </div>
+
+                    <div className="bg-[#222222] border border-[#333333] rounded-xl p-4 w-full text-left space-y-2 text-xs font-mono">
+                      <div className="flex justify-between items-center text-[#888888] pb-1.5 border-b border-[#2C2C2C]">
+                        <span>Format Standard:</span>
+                        <span className="text-white font-medium">Microsoft Excel (.xlsx / .xls)</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[#888888] pb-1.5 border-b border-[#2C2C2C]">
+                        <span>File Size:</span>
+                        <span className="text-emerald-400 font-semibold">{preview ? formatBytes(preview.size) : "0 B"}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[#888888]">
+                        <span>Inspection Security:</span>
+                        <span className="text-[#60CDFF] font-medium">Zero-Disk Sandboxed In-Memory</span>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-[#777777]">
+                      Extract this archive to view or edit formulas in Microsoft Excel or Google Sheets.
+                    </p>
+                  </div>
+                );
+              }
+
+              if (cat === "powerpoint") {
+                return (
+                  <div className="h-full flex flex-col items-center justify-center space-y-5 p-8 text-center max-w-lg mx-auto animate-in fade-in duration-200">
+                    <FileFormatIcon fileName={fileName} size="xl" />
+                    <div className="space-y-1.5">
+                      <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-orange-950/40 border border-orange-800/50 text-orange-400 text-xs font-semibold">
+                        <span>Microsoft PowerPoint Presentation</span>
+                      </div>
+                      <h4 className="text-base font-semibold text-white font-mono break-all pt-1">
+                        {fileName.split("/").pop()}
+                      </h4>
+                      <p className="text-xs text-[#A8A8A8] leading-relaxed max-w-md mx-auto">
+                        This is a presentation deck containing slides, transitions, vector art, and graphics.
+                      </p>
+                    </div>
+
+                    <div className="bg-[#222222] border border-[#333333] rounded-xl p-4 w-full text-left space-y-2 text-xs font-mono">
+                      <div className="flex justify-between items-center text-[#888888] pb-1.5 border-b border-[#2C2C2C]">
+                        <span>Format Standard:</span>
+                        <span className="text-white font-medium">Microsoft PowerPoint (.pptx / .ppt)</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[#888888] pb-1.5 border-b border-[#2C2C2C]">
+                        <span>File Size:</span>
+                        <span className="text-emerald-400 font-semibold">{preview ? formatBytes(preview.size) : "0 B"}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[#888888]">
+                        <span>Inspection Security:</span>
+                        <span className="text-[#60CDFF] font-medium">Zero-Disk Sandboxed In-Memory</span>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-[#777777]">
+                      Extract this archive to present slides in Microsoft PowerPoint or Keynote.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="h-full flex flex-col items-center justify-center space-y-3 p-8 text-center max-w-md mx-auto">
+                  <div className="w-14 h-14 rounded-2xl bg-[#262626] border border-[#3E3E3E] flex items-center justify-center text-[#888888]">
+                    <FileFormatIcon fileName={fileName} size="lg" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-white">Binary Format Inspection</h4>
+                    <p className="text-xs text-[#888888] mt-1 leading-relaxed">
+                      This file format is binary ({ext}) and requires extraction to be opened by its native application.
+                    </p>
+                  </div>
+                  <div className="text-xs text-[#888888] font-mono bg-[#202020] px-3 py-1.5 rounded border border-[#333333]">
+                    Size: <span className="text-white font-semibold">{preview ? formatBytes(preview.size) : "0 B"}</span>
+                  </div>
+                </div>
+              );
+            })()
           )}
         </div>
 

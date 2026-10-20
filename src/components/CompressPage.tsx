@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { SystemSpecs, CompressProgress, ArchiveInfo, ArchiveEntryItem } from "../types";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
+import { FileFormatIcon } from "./FileFormatIcon";
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
@@ -535,19 +536,7 @@ export function CompressPage({
                           />
                         </svg>
                       ) : (
-                        <svg
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          className="w-4 h-4 text-[#A8A8A8] shrink-0"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                          />
-                        </svg>
+                        <FileFormatIcon fileName={file} size="sm" />
                       )}
                       <span className="text-sm truncate text-white" title={file}>
                         {file.split(/[/\\]/).pop()}
