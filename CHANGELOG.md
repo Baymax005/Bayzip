@@ -4,7 +4,19 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ## [v2.0.7] - 2026-10-21
 
-### 🚀 Pro Workspace Mode with Side Options, Fluent Yellow Folders & UI Polish
+### 🚀 Pro Workspace Mode, Quick Format Selector, Authentic v2.0.0 UI & Responsive Width
+- **Quick Format Selector Dropdown (`CompressPage.tsx`)**:
+  - Replaced the static format badge on the Archive Name card with an interactive format selector dropdown featuring a subtle chevron indicator (`▼`).
+  - Allows 1-click switching between `.bay`, `.bayg (Gamer)`, `.zip`, `.7z`, and `.tar` directly from the main view (at 50% Balanced or any slider setting) without opening Advanced Options.
+  - Automatically updates the compression algorithm, hardware engine badge, and thread matrix in real time upon selection.
+- **Authentic v2.0.0 UI Aesthetic Restoration (`CompressPage.tsx`)**:
+  - Restored always-visible Archive Name card featuring the glowing 3D Bayzip file box icon tile, "Saved in source folder" indicator, and input container.
+  - Restored the original Hardware Allocation header layout: dynamic multi-core engine badge (`[ ZSTANDARD MULTI-CORE ]`, `[ ZIP ARCHIVE ENGINE ]`, `[ LZMA2 MULTI-CORE ]`) on the top right, active profile name (e.g. `Balanced`) in cyan directly under the title, clean numeric slider ticks (`0`, `25`, `50`, `75`, `100`), and `Target RAM Usage` subcard header.
+- **Responsive Full-Screen Width Scaling (`App.tsx`)**:
+  - Replaced the rigid `max-w-2xl` body container with responsive width scaling: `w-full max-w-2xl lg:max-w-4xl xl:max-w-5xl mx-auto space-y-6 transition-all duration-200`.
+  - Maintains compact static width (~672px) at default window size (800x700), while expanding smoothly to ~1024px on maximized/full-screen widescreen displays (1080p, 1440p, 4K) so dropzones, file trees, and sliders utilize screen width comfortably without empty black voids.
+- **Settings-Inspired In-App About Modal (`AboutModal.tsx`)**:
+  - Restructured the About modal to adopt the exact dark glassmorphism design language of the Settings interface: dark gradient header bar (`bg-gradient-to-r from-[#262626] to-[#1F1F1F]`), glowing `BayzipLogo` emblem, engine architecture card with active green status pill, 2x2 feature grid, author creator panel, and `Esc` key dismissal.
 - **Symmetric Pro Workspace Mode (`CompressPage.tsx` & `ExtractPage.tsx`)**:
   - Full-screen dual-pane workspace with a right-hand Action Sidebar (`w-80`) across both **Compress** and **Extract** workflows.
   - Allows full archive inspection, selective file/folder exclusion, folder tree exploration, and spacebar file previewing while keeping all configuration controls and execution buttons directly within reach.

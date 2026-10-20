@@ -171,10 +171,13 @@ graph TD
 ## 📋 Release Notes
 
 ### v2.0.7 (Latest)
+- **Quick Format Selector Dropdown**: Interactive format selector on the Archive Name card enabling 1-click format switching between `.bay`, `.bayg`, `.zip`, `.7z`, and `.tar` without opening Advanced Options.
+- **Authentic v2.0.0 UI Aesthetic**: Always-visible Archive Name card with glowing 3D Bayzip icon tile, clean Hardware Allocation layout (`[ ZSTANDARD MULTI-CORE ]` badge, cyan profile name, clean numeric `0`–`100` slider ticks, and `Target RAM Usage` subcard).
+- **Responsive Full-Screen Scaling**: Dynamically expands central layout from `max-w-2xl` (~672px) up to `max-w-5xl` (~1024px) when maximized, eliminating empty black voids on widescreen monitors while preserving a compact footprint on standard windows.
+- **Settings-Inspired In-App About Modal**: Redesigned About modal with Settings dark glassmorphism aesthetic, active engine architecture panel, 2x2 feature grid, and author creator card.
 - **Symmetric Pro Workspace Mode**: Full-screen dual-pane workspace modal with right-hand Action Sidebar across both Compress and Extract workflows, allowing complete archive inspection, breadcrumb navigation, search filtering, and configuration without leaving the view.
 - **Fluent Yellow Folder Icons (`#F9D648`)**: Restored authentic Windows 11 Fluent Yellow folder icons across all tree nodes, active directory cards, and flat table views.
 - **Resilient Brand Assets**: Standalone `BayzipLogo` vector fallback component ensures brand tiles and logos never break or disappear on asset load failures.
-- **Clean Default UI State**: Restored compact staging list as the default view mode (< 190px) and removed redundant hardware specs refresh controls.
 
 > 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases (v1.0.1 through v2.0.7), see [CHANGELOG.md](CHANGELOG.md).
 
