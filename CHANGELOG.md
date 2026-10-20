@@ -2,6 +2,27 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.0.8] - (Unreleased / In Development)
+
+### 🎨 Authentic Document Icons, Rich Previewer Cards & Enhanced File Detection
+- **Authentic Recognized File Format Icons (`FileFormatIcon.tsx`)**:
+  - Replaced generic gray document icons with authentic, recognizable logos matching the visual standard of Windows File Explorer, WinRAR, and Bandizip.
+  - **Adobe PDF (`.pdf`)**: Dedicated Adobe Crimson Red (`#E5252A`) folded sheet with crisp white `PDF` typography at 16px, and a high-definition layered Acrobat document with folded corner and ambient glow at larger preview sizes.
+  - **Microsoft Word (`.docx`, `.doc`, `.docm`, `.rtf`, `.odt`)**: Distinctive Microsoft Word Royal Blue (`#185ABD`) folded document with bold white `W` emblem at 16px, and a 3D layered Office tile at larger preview sizes.
+  - **Microsoft Excel (`.xlsx`, `.xls`, `.csv`)**: Microsoft Excel Green (`#107C41`) folded sheet with crisp white `X` emblem and spreadsheet grid motif.
+  - **Microsoft PowerPoint (`.pptx`, `.ppt`)**: PowerPoint Orange/Red (`#D24726`) folded sheet with crisp white `P` emblem.
+  - Centralized categorization engine mapping 40+ common document, code, archive, and media extensions into appropriate visual categories.
+- **Enhanced Archive Tree Inspector (`ArchiveTreeInspector.tsx`)**:
+  - Integrated `FileFormatIcon` into both the **Folder Tree** and **Flat Table / Search** views, instantly revealing document identities at a glance.
+- **Rich Document Preview Hero Cards (`FilePreviewModal.tsx`)**:
+  - Upgraded the Safe In-Memory File Previewer: when inspecting binary documents (PDF, Word, Excel, PowerPoint), instead of a generic "No Direct Preview Available" box, Bayzip presents a rich Document Hero Card with large glowing branded insignia, verified standard format badges, exact file sizes, and security scan status.
+  - Added clear viewing instructions informing users how to extract or open the file with their native desktop applications.
+  - Updated the top modal header bar to display the authentic format icon matching the file extension.
+- **Compress Staged Items View (`CompressPage.tsx`)**:
+  - Updated staged files list to display authentic PDF, Word, and media format icons beside file paths prior to compression.
+
+---
+
 ## [v2.0.7] - 2026-10-21
 
 ### 🚀 Pro Workspace Mode, Quick Format Selector, Authentic v2.0.0 UI & Responsive Width
