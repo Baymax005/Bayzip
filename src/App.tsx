@@ -912,8 +912,8 @@ function App() {
       <Titlebar />
 
       {/* Main Scrollable Body */}
-      <div className="flex-1 flex flex-col p-6 overflow-y-auto custom-scrollbar">
-        <div className="w-full max-w-2xl mx-auto space-y-6">
+      <div className="flex-1 flex flex-col p-4 sm:p-6 overflow-y-auto custom-scrollbar">
+        <div className="w-full max-w-2xl lg:max-w-4xl xl:max-w-5xl mx-auto space-y-6 transition-all duration-200">
           {/* Header & Mode Switcher */}
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
