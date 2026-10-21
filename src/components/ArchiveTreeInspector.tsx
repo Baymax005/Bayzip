@@ -1,5 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { ArchiveInfo, ArchiveEntryItem } from "../types";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ArchiveInfo, ArchiveEntryItem, DriveInfo } from "../types";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 
 export interface ArchiveTreeInspectorProps {
@@ -157,6 +159,267 @@ export function ArchiveTreeInspector({
   const [selectedEntryName, setSelectedEntryName] = useState<string | null>(null);
   const [isExclusionMode, setIsExclusionMode] = useState<boolean>(false);
 
+  // Dynamic responsive window width tracking
+  const [windowWidth, setWindowWidth] = useState<number>(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1200
+  );
+  const [showMobileTree, setShowMobileTree] = useState<boolean>(false);
+  const [showMobileSidebar, setShowMobileSidebar] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // System drives for Drive Switcher
+  const [drives, setDrives] = useState<DriveInfo[]>([]);
+  const [isDriveMenuOpen, setIsDriveMenuOpen] = useState(false);
+  const [activeDrive, setActiveDrive] = useState<string>("C:");
+
+  useEffect(() => {
+    invoke<DriveInfo[]>("get_system_drives")
+      .then((res) => {
+        if (res && res.length > 0) {
+          setDrives(res);
+          if (selectedArchive && /^[a-zA-Z]:/.test(selectedArchive)) {
+            setActiveDrive(selectedArchive.slice(0, 2).toUpperCase());
+          } else {
+            setActiveDrive(res[0].mount_point.slice(0, 2).toUpperCase());
+          }
+        }
+      })
+      .catch(() => {});
+  }, [selectedArchive]);
+
+  // Local mutable entries state for real-time additions/renames/deletions
+  const [localEntries, setLocalEntries] = useState<ArchiveEntryItem[]>(archiveInfo.entries || []);
+
+  useEffect(() => {
+    setLocalEntries(archiveInfo.entries || []);
+  }, [archiveInfo.entries]);
+
+  // Inline New Folder State
+  const [isCreatingFolder, setIsCreatingFolder] = useState<boolean>(false);
+  const [newFolderName, setNewFolderName] = useState<string>("New Folder");
+
+  // Inline Rename State
+  const [renamingItem, setRenamingItem] = useState<{ originalName: string; isDir: boolean } | null>(null);
+  const [renamingName, setRenamingName] = useState<string>("");
+
+  // Internal Clipboard for Copy & Paste
+  const [clipboardItem, setClipboardItem] = useState<{
+    relName: string;
+    isDir: boolean;
+    diskPath?: string;
+  } | null>(null);
+
+  // Right-Click Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    isOpen: boolean;
+    x: number;
+    y: number;
+    target?: {
+      name: string;
+      isDir: boolean;
+      size?: number;
+    } | null;
+  }>({
+    isOpen: false,
+    x: 0,
+    y: 0,
+    target: null,
+  });
+
+  const getDiskPath = (relPath: string): string => {
+    if (!selectedArchive) return "";
+    const cleanRel = relPath.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+    const base = selectedArchive.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (!cleanRel) return base;
+    return `${base}/${cleanRel}`;
+  };
+
+  const handleStartNewFolder = () => {
+    setIsCreatingFolder(true);
+    setNewFolderName("New Folder");
+    setRenamingItem(null);
+  };
+
+  const handleCancelNewFolder = () => {
+    setIsCreatingFolder(false);
+    setNewFolderName("New Folder");
+  };
+
+  const handleCommitNewFolder = async () => {
+    const trimmed = newFolderName.trim();
+    if (!trimmed) {
+      setIsCreatingFolder(false);
+      return;
+    }
+    const cleanCurrent = currentFolderPath ? currentFolderPath.replace(/\/+$/, "") : "";
+    const relFolderPath = cleanCurrent ? `${cleanCurrent}/${trimmed}` : trimmed;
+    const folderEntryName = `${relFolderPath}/`;
+
+    setLocalEntries((prev) => {
+      const exists = prev.some(
+        (e) => normalizeArchiveEntryPath(e.name).replace(/\/+$/, "") === normalizeArchiveEntryPath(relFolderPath)
+      );
+      if (exists) return prev;
+      return [{ name: folderEntryName, size: 0, is_dir: true }, ...prev];
+    });
+
+    const diskPath = getDiskPath(relFolderPath);
+    if (diskPath) {
+      invoke("create_directory", { path: diskPath }).catch((err) =>
+        console.error("Directory create error on disk:", err)
+      );
+    }
+
+    // Automatically expand parent and the new folder in the Left Bar Hierarchy
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (cleanCurrent) next.add(cleanCurrent);
+      next.add(relFolderPath);
+      return next;
+    });
+
+    setIsCreatingFolder(false);
+    setNewFolderName("New Folder");
+  };
+
+  const handleStartRename = (name: string, isDir: boolean) => {
+    const baseName = name.replace(/\/+$/, "").split("/").pop() || "";
+    setRenamingItem({ originalName: name, isDir });
+    setRenamingName(baseName);
+    setIsCreatingFolder(false);
+  };
+
+  const handleCancelRename = () => {
+    setRenamingItem(null);
+    setRenamingName("");
+  };
+
+  const handleCommitRename = async () => {
+    if (!renamingItem) return;
+    const trimmed = renamingName.trim();
+    if (!trimmed) {
+      setRenamingItem(null);
+      return;
+    }
+
+    const { originalName, isDir } = renamingItem;
+    const cleanOrig = originalName.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+    const lastSlash = cleanOrig.lastIndexOf("/");
+    const parent = lastSlash === -1 ? "" : cleanOrig.substring(0, lastSlash);
+    const newRel = parent ? `${parent}/${trimmed}` : trimmed;
+    const newEntryName = isDir ? `${newRel}/` : newRel;
+
+    const oldDisk = getDiskPath(cleanOrig);
+    const newDisk = getDiskPath(newRel);
+    if (oldDisk && newDisk) {
+      invoke("rename_path", { oldPath: oldDisk, newPath: newDisk }).catch((err) =>
+        console.error("Rename error on disk:", err)
+      );
+    }
+
+    setLocalEntries((prev) =>
+      prev.map((e) => {
+        const eNorm = e.name.replace(/\\/g, "/").replace(/^\.?\/+/, "");
+        if (isDir) {
+          if (eNorm.replace(/\/+$/, "") === cleanOrig) {
+            return { ...e, name: newEntryName };
+          }
+          if (eNorm.startsWith(cleanOrig + "/")) {
+            return { ...e, name: `${newRel}/${eNorm.substring(cleanOrig.length + 1)}` };
+          }
+        } else {
+          if (eNorm === cleanOrig) {
+            return { ...e, name: newEntryName };
+          }
+        }
+        return e;
+      })
+    );
+
+    setRenamingItem(null);
+    setRenamingName("");
+  };
+
+  const handleDeleteItem = async (name: string, isDir: boolean) => {
+    const clean = name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+    const diskPath = getDiskPath(clean);
+
+    if (diskPath) {
+      try {
+        await invoke("delete_to_recycle_bin", { path: diskPath });
+      } catch (err) {
+        console.error("Recycle bin delete error:", err);
+      }
+    }
+
+    setLocalEntries((prev) =>
+      prev.filter((e) => {
+        const eNorm = e.name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+        if (isDir) {
+          return eNorm !== clean && !eNorm.startsWith(clean + "/");
+        }
+        return eNorm !== clean;
+      })
+    );
+
+    if (selectedEntryName === name) {
+      setSelectedEntryName(null);
+    }
+  };
+
+  const handlePasteItem = async () => {
+    if (!clipboardItem) return;
+    const destDirDisk = getDiskPath(currentFolderPath);
+    const itemName = clipboardItem.relName.split("/").filter(Boolean).pop() || "item";
+
+    if (clipboardItem.diskPath && destDirDisk) {
+      try {
+        const createdPath = await invoke<string>("copy_path", {
+          src: clipboardItem.diskPath,
+          destDir: destDirDisk,
+        });
+        const actualName = createdPath.replace(/\\/g, "/").split("/").pop() || itemName;
+        const newRel = currentFolderPath ? `${currentFolderPath}/${actualName}` : actualName;
+        const newEntryName = clipboardItem.isDir ? `${newRel}/` : newRel;
+
+        setLocalEntries((prev) => [
+          { name: newEntryName, size: 0, is_dir: clipboardItem.isDir },
+          ...prev,
+        ]);
+      } catch (err) {
+        console.error("Paste error:", err);
+      }
+    } else {
+      const newRel = currentFolderPath ? `${currentFolderPath}/${itemName}` : itemName;
+      const newEntryName = clipboardItem.isDir ? `${newRel}/` : newRel;
+      setLocalEntries((prev) => [
+        { name: newEntryName, size: 0, is_dir: clipboardItem.isDir },
+        ...prev,
+      ]);
+    }
+  };
+
+  const handleOpenContextMenu = (
+    e: React.MouseEvent,
+    target?: { name: string; isDir: boolean; size?: number } | null
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const clampedX = Math.min(e.clientX, window.innerWidth - 230);
+    const clampedY = Math.min(e.clientY, window.innerHeight - 280);
+    setContextMenu({
+      isOpen: true,
+      x: clampedX,
+      y: clampedY,
+      target: target || null,
+    });
+  };
+
   // Draggable Split Panel Widths for large screens
   const [leftPanelWidth, setLeftPanelWidth] = useState<number>(288); // Default 288px (w-72)
   const [rightPanelWidth, setRightPanelWidth] = useState<number>(320); // Default 320px (w-80)
@@ -266,24 +529,84 @@ export function ArchiveTreeInspector({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isExpandedModal]);
 
-  // Spacebar to preview selected entry (safely ignoring text inputs)
+  // Keyboard shortcuts for File Manager & Preview (safely ignoring text inputs)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === " " && selectedEntryName) {
-        const target = e.target as HTMLElement | null;
-        const tag = target?.tagName;
-        const isEditable = target?.isContentEditable;
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || isEditable) {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isEditable = target?.isContentEditable;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || isEditable) {
+        return;
+      }
+
+      // Escape closes context menu, cancels folder creation or rename
+      if (e.key === "Escape") {
+        if (contextMenu.isOpen) {
+          setContextMenu((prev) => ({ ...prev, isOpen: false }));
           return;
         }
-        // Prevent page scroll on Space
+        if (isCreatingFolder) {
+          setIsCreatingFolder(false);
+          return;
+        }
+        if (renamingItem) {
+          setRenamingItem(null);
+          return;
+        }
+      }
+
+      // Spacebar to preview selected entry
+      if (e.key === " " && selectedEntryName) {
         e.preventDefault();
         onPreviewEntry(selectedEntryName);
+        return;
+      }
+
+      // Ctrl+Shift+N: New Folder
+      if (e.ctrlKey && e.shiftKey && (e.key === "N" || e.key === "n")) {
+        e.preventDefault();
+        handleStartNewFolder();
+        return;
+      }
+
+      // F2: Rename selected entry
+      if (e.key === "F2" && selectedEntryName) {
+        e.preventDefault();
+        const isDir = selectedEntryName.endsWith("/");
+        handleStartRename(selectedEntryName, isDir);
+        return;
+      }
+
+      // Delete: Recycle bin delete selected entry
+      if ((e.key === "Delete" || e.key === "Del") && selectedEntryName) {
+        e.preventDefault();
+        const isDir = selectedEntryName.endsWith("/");
+        handleDeleteItem(selectedEntryName, isDir);
+        return;
+      }
+
+      // Ctrl+C: Copy selected entry
+      if (e.ctrlKey && (e.key === "c" || e.key === "C") && selectedEntryName) {
+        e.preventDefault();
+        const isDir = selectedEntryName.endsWith("/");
+        setClipboardItem({
+          relName: selectedEntryName,
+          isDir,
+          diskPath: getDiskPath(selectedEntryName),
+        });
+        return;
+      }
+
+      // Ctrl+V: Paste copied entry into current folder
+      if (e.ctrlKey && (e.key === "v" || e.key === "V") && clipboardItem) {
+        e.preventDefault();
+        handlePasteItem();
+        return;
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedEntryName, onPreviewEntry]);
+  }, [selectedEntryName, onPreviewEntry, contextMenu.isOpen, isCreatingFolder, renamingItem, clipboardItem, currentFolderPath]);
 
   // Build Hierarchical Tree structure from flat entries
   const treeRoot = useMemo<TreeNode>(() => {
@@ -298,7 +621,7 @@ export function ArchiveTreeInspector({
       files: [],
     };
 
-    if (!archiveInfo.entries || archiveInfo.entries.length === 0) {
+    if (!localEntries || localEntries.length === 0) {
       return root;
     }
 
@@ -330,7 +653,7 @@ export function ArchiveTreeInspector({
       return newNode;
     };
 
-    for (const entry of archiveInfo.entries) {
+    for (const entry of localEntries) {
       const clean = entry.name.replace(/\\/g, "/").trim().replace(/^\.?\/+/, "");
       if (!clean || clean === ".") continue;
 
@@ -376,7 +699,7 @@ export function ArchiveTreeInspector({
 
     computeStats(root);
     return root;
-  }, [archiveInfo]);
+  }, [archiveInfo.filename, archiveInfo.is_archive, localEntries]);
 
   // Current folder node based on currentFolderPath
   const currentFolderNode = useMemo<TreeNode>(() => {
@@ -438,11 +761,11 @@ export function ArchiveTreeInspector({
 
   // Filtered entries for Flat View
   const filteredFlatEntries = useMemo(() => {
-    if (!archiveInfo.entries) return [];
-    if (!searchQuery.trim()) return archiveInfo.entries;
+    if (!localEntries) return [];
+    if (!searchQuery.trim()) return localEntries;
     const q = searchQuery.toLowerCase();
-    return archiveInfo.entries.filter((entry) => entry.name.toLowerCase().includes(q));
-  }, [archiveInfo.entries, searchQuery]);
+    return localEntries.filter((entry) => entry.name.toLowerCase().includes(q));
+  }, [localEntries, searchQuery]);
 
   // Filtered files in Current Folder for Tree View
   const filteredCurrentFiles = useMemo(() => {
@@ -450,6 +773,109 @@ export function ArchiveTreeInspector({
     const q = searchQuery.toLowerCase();
     return currentFolderNode.files.filter((f) => f.name.toLowerCase().includes(q));
   }, [currentFolderNode.files, searchQuery]);
+
+  // Sleek Drive Switcher Badge & Header
+  const renderFolderHierarchyHeader = (isDrawer: boolean = false) => (
+    <div
+      className={`flex items-center justify-between px-2 py-1 mb-1 shrink-0 relative ${
+        isDrawer ? "border-b border-[#2E2E2E]" : ""
+      }`}
+    >
+      <span className="text-[10px] font-bold tracking-wider uppercase text-[#888888]">
+        Folder Hierarchy
+      </span>
+      <div className="flex items-center space-x-1.5">
+        {/* + New Folder Button on Left Header */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleStartNewFolder();
+          }}
+          className="px-1.5 py-0.5 rounded bg-[#252525] hover:bg-[#303030] border border-[#3E3E3E] hover:border-[#60CDFF]/60 text-[#60CDFF] hover:text-[#90DCFF] text-[10px] font-mono font-semibold flex items-center space-x-0.5 transition-all cursor-pointer shadow-sm"
+          title="Create New Folder (Ctrl+Shift+N)"
+        >
+          <span>📁+</span>
+        </button>
+
+        {drives.length > 0 && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsDriveMenuOpen((prev) => !prev);
+              }}
+              className="px-2 py-0.5 rounded bg-[#252525] hover:bg-[#303030] border border-[#3E3E3E] hover:border-[#60CDFF]/60 text-[#60CDFF] hover:text-[#90DCFF] text-[10px] font-mono font-semibold flex items-center space-x-1 transition-all cursor-pointer shadow-sm"
+              title="Switch System Drive"
+            >
+              <span>🖴</span>
+              <span>{activeDrive}</span>
+              <span className="text-[8px] text-[#888888]">▾</span>
+            </button>
+
+            {isDriveMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsDriveMenuOpen(false);
+                  }}
+                />
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute right-0 top-full mt-1.5 z-50 w-56 bg-[#1C1C1C] border border-[#3E3E3E] rounded-lg shadow-2xl p-1.5 space-y-1 animate-in fade-in duration-100"
+                >
+                  <div className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-[#777777] border-b border-[#2A2A2A]">
+                    System Drives
+                  </div>
+                  {drives.map((d) => {
+                    const driveLetter = d.mount_point.slice(0, 2).toUpperCase();
+                    const isCur = activeDrive === driveLetter;
+                    return (
+                      <button
+                        key={d.mount_point}
+                        type="button"
+                        onClick={() => {
+                          setActiveDrive(driveLetter);
+                          setIsDriveMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                          isCur
+                            ? "bg-[#25394A] text-[#60CDFF] font-semibold border border-[#60CDFF]/40"
+                            : "hover:bg-[#282828] text-white"
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2 min-w-0">
+                          <span className="text-sm">{d.is_removable ? "🔌" : "🖴"}</span>
+                          <span className="font-mono font-bold">{driveLetter}</span>
+                          <span className="text-[10px] text-[#888888] truncate">{d.name}</span>
+                        </div>
+                        <span className="text-[9px] font-mono text-[#777777] shrink-0">
+                          {formatBytes(d.available_bytes)} free
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {isDrawer && (
+          <button
+            type="button"
+            onClick={() => setShowMobileTree(false)}
+            className="text-[#888888] hover:text-white text-xs px-1.5 py-0.5 rounded hover:bg-[#2A2A2A] cursor-pointer"
+            title="Close Folder Hierarchy Drawer"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    </div>
+  );
 
   // Recursive Tree Node Renderer for Left Pane
   const renderTreeFolderNode = (node: TreeNode, depth: number = 0) => {
@@ -462,6 +888,7 @@ export function ArchiveTreeInspector({
       <div key={node.path || "root"} className="select-none text-xs">
         <div
           onClick={() => navigateToFolder(node.path)}
+          onContextMenu={(e) => handleOpenContextMenu(e, { name: node.path, isDir: true })}
           style={{ paddingLeft: `${Math.max(8, depth * 16 + 8)}px` }}
           className={`flex items-center justify-between py-1.5 pr-2 rounded-md transition-colors cursor-pointer group ${
             isSelected
@@ -564,6 +991,40 @@ export function ArchiveTreeInspector({
       </div>
 
       <div className="flex items-center space-x-2">
+        {/* Responsive Folder Tree Toggle (in full modal when window width < 850px) */}
+        {isFullModal && viewMode === "tree" && (
+          <button
+            type="button"
+            onClick={() => setShowMobileTree((prev) => !prev)}
+            className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all flex items-center space-x-1.5 cursor-pointer ${
+              showMobileTree
+                ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/70 shadow-[0_0_10px_rgba(96,205,255,0.2)] font-semibold"
+                : "bg-[#1C1C1C] hover:bg-[#2A2A2A] text-[#A8A8A8] hover:text-white border border-[#3E3E3E]"
+            } ${windowWidth >= 850 ? "hidden" : "flex"}`}
+            title={showMobileTree ? "Hide Folder Tree" : "Show Folder Tree Drawer"}
+          >
+            <span>📁</span>
+            <span>Tree</span>
+          </button>
+        )}
+
+        {/* Responsive Options Sidebar Toggle (in full modal when window width < 1150px) */}
+        {isFullModal && sidebar && (
+          <button
+            type="button"
+            onClick={() => setShowMobileSidebar((prev) => !prev)}
+            className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all flex items-center space-x-1.5 cursor-pointer ${
+              showMobileSidebar
+                ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/70 shadow-[0_0_10px_rgba(96,205,255,0.2)] font-semibold"
+                : "bg-[#1C1C1C] hover:bg-[#2A2A2A] text-[#A8A8A8] hover:text-white border border-[#3E3E3E]"
+            } ${windowWidth >= 1150 ? "hidden" : "flex"}`}
+            title={showMobileSidebar ? "Hide Options Panel" : "Show Options Panel Drawer"}
+          >
+            <span>⚙️</span>
+            <span>{sidebarTitle || "Options"}</span>
+          </button>
+        )}
+
         {/* Toggle between Tree View and Flat Table */}
         <div className="bg-[#1C1C1C] p-0.5 rounded-lg border border-[#3E3E3E] flex items-center space-x-1">
           <button
@@ -577,7 +1038,8 @@ export function ArchiveTreeInspector({
             title="Hierarchical Tree View"
           >
             <span>🗂️</span>
-            <span>Tree View</span>
+            <span className="hidden sm:inline">Tree View</span>
+            <span className="sm:hidden">Tree</span>
           </button>
           <button
             type="button"
@@ -590,9 +1052,24 @@ export function ArchiveTreeInspector({
             title="Flat Archive Table"
           >
             <span>📋</span>
-            <span>Flat Table</span>
+            <span className="hidden sm:inline">Flat Table</span>
+            <span className="sm:hidden">Flat</span>
           </button>
         </div>
+
+        {/* + New Folder Button */}
+        <button
+          type="button"
+          onClick={handleStartNewFolder}
+          className="px-2.5 py-1 text-xs rounded-lg font-medium transition-all flex items-center space-x-1.5 bg-[#25394A] hover:bg-[#2C4459] text-[#60CDFF] border border-[#60CDFF]/30 hover:border-[#60CDFF]/60 cursor-pointer shadow-sm"
+          title="Create New Folder (Ctrl+Shift+N)"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+          </svg>
+          <span className="hidden sm:inline">New Folder</span>
+          <span className="sm:hidden">+Folder</span>
+        </button>
 
         {/* Selective Exclusion Mode Button */}
         <button
@@ -607,7 +1084,8 @@ export function ArchiveTreeInspector({
         >
           {isExclusionMode && <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>}
           <span className="text-rose-400 font-bold">✕</span>
-          <span>{isExclusionMode ? "Exclusion Mode" : "Exclude Files"}</span>
+          <span className="hidden sm:inline">{isExclusionMode ? "Exclusion Mode" : "Exclude Files"}</span>
+          <span className="sm:hidden">{isExclusionMode ? "Mode" : "Exclude"}</span>
           {excludedCount > 0 && (
             <span className="text-[10px] font-mono bg-rose-900/70 text-white px-1.5 py-0.2 rounded-full border border-rose-600">
               {excludedCount}
@@ -626,7 +1104,7 @@ export function ArchiveTreeInspector({
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            <span>Include All</span>
+            <span className="hidden sm:inline">Include All</span>
           </button>
         )}
 
@@ -643,17 +1121,59 @@ export function ArchiveTreeInspector({
             </svg>
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={() => setIsExpandedModal(false)}
-            className="px-2.5 py-1 bg-[#2D2D2D] hover:bg-rose-950/40 text-[#A8A8A8] hover:text-rose-300 rounded-md border border-[#3E3E3E] hover:border-rose-700/60 transition-colors cursor-pointer flex items-center space-x-1.5 text-xs font-medium"
-            title="Exit Workspace (Esc)"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-            <span>Exit Workspace</span>
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => setIsExpandedModal(false)}
+              className="px-2.5 py-1 bg-[#2D2D2D] hover:bg-rose-950/40 text-[#A8A8A8] hover:text-rose-300 rounded-md border border-[#3E3E3E] hover:border-rose-700/60 transition-colors cursor-pointer flex items-center space-x-1.5 text-xs font-medium"
+              title="Exit Workspace (Esc)"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              <span className="hidden sm:inline">Exit Workspace</span>
+            </button>
+
+            {/* Native Window Controls in Workspace Header */}
+            <div className="flex items-center h-full ml-1 border-l border-[#3E3E3E] pl-1.5 space-x-0.5" data-tauri-drag-region="false">
+              {/* Minimize */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  getCurrentWindow().minimize().catch(() => {});
+                }}
+                className="p-1.5 hover:bg-[#333333] text-[#A8A8A8] hover:text-white rounded transition-colors cursor-pointer"
+                title="Minimize"
+              >
+                <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor" /></svg>
+              </button>
+              {/* Maximize / Restore */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  getCurrentWindow().toggleMaximize().catch(() => {});
+                }}
+                className="p-1.5 hover:bg-[#333333] text-[#A8A8A8] hover:text-white rounded transition-colors cursor-pointer"
+                title="Maximize / Restore"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0,0v10h10V0H0z M9,9H1V1h8V9z" fill="currentColor" /></svg>
+              </button>
+              {/* Close */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  getCurrentWindow().close().catch(() => {});
+                }}
+                className="p-1.5 hover:bg-[#E81123] text-[#A8A8A8] hover:text-white rounded transition-colors cursor-pointer"
+                title="Close Bayzip"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10"><path d="M10,1L9,0L5,4L1,0L0,1l4,4l-4,4l1,1l4-4l4,4l1-1l-4-4L10,1z" fill="currentColor" /></svg>
+              </button>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -714,7 +1234,7 @@ export function ArchiveTreeInspector({
         ))}
       </div>
 
-      <span className="text-[11px] text-[#777777] shrink-0 pl-2">
+      <span className="text-[11px] text-[#777777] shrink-0 pl-2 hidden sm:inline">
         {currentFolderNode.subfolders.length} dirs, {currentFolderNode.files.length} files
       </span>
     </div>
@@ -790,10 +1310,20 @@ export function ArchiveTreeInspector({
 
     const hasItems = currentFolderNode.subfolders.length > 0 || filteredCurrentFiles.length > 0;
 
-    if (!hasItems) {
+    if (!hasItems && !isCreatingFolder) {
       return (
-        <div className="p-8 text-center text-xs text-[#888888]">
-          {searchQuery ? "No matching files in this folder" : "This folder is empty"}
+        <div
+          onContextMenu={(e) => handleOpenContextMenu(e, null)}
+          className="p-8 text-center text-xs text-[#888888] flex flex-col items-center justify-center space-y-2 flex-1 h-full"
+        >
+          <span>{searchQuery ? "No matching files in this folder" : "This folder is empty"}</span>
+          <button
+            type="button"
+            onClick={handleStartNewFolder}
+            className="px-3 py-1 bg-[#25394A] hover:bg-[#2C4459] text-[#60CDFF] rounded border border-[#60CDFF]/40 text-xs font-medium cursor-pointer transition-colors shadow-sm"
+          >
+            + Create New Folder
+          </button>
         </div>
       );
     }
@@ -808,170 +1338,297 @@ export function ArchiveTreeInspector({
     ];
 
     return (
-      <VirtualScrollList
-        key={`folder-virtual-${currentFolderPath}-${searchQuery}`}
-        items={folderItems}
-        rowHeight={34}
-        className="flex-1 h-full"
-        renderRow={(item) => {
-          if (item.kind === "folder") {
-            const sub = item.data;
-            const isFolderSkipped = isDirExcluded(sub.path);
-            return (
-              <div
-                key={`folder-${sub.path}`}
-                onDoubleClick={() => navigateToFolder(sub.path)}
-                onClick={() => {
-                  if (isExclusionMode && onToggleExclude) {
-                    onToggleExclude(sub.path, true);
-                  } else {
-                    setSelectedEntryName(null);
-                  }
+      <div
+        className="flex-1 flex flex-col overflow-hidden relative h-full"
+        onContextMenu={(e) => handleOpenContextMenu(e, null)}
+      >
+        {/* Inline New Folder Input Row */}
+        {isCreatingFolder && (
+          <div
+            style={{ height: "34px" }}
+            className="flex items-center justify-between px-3 text-xs bg-[#25394A]/80 border-l-2 border-[#60CDFF] box-border shrink-0 z-10 animate-in fade-in duration-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+              <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              <input
+                type="text"
+                autoFocus
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCommitNewFolder();
+                  else if (e.key === "Escape") handleCancelNewFolder();
                 }}
-                style={{ height: "34px" }}
-                className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
-                  isFolderSkipped
-                    ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
-                    : "hover:bg-[#252525]"
-                }`}
+                ref={(el) => {
+                  if (el) el.select();
+                }}
+                className="bg-[#141414] text-white border border-[#60CDFF] rounded px-2 py-0.5 font-mono text-xs outline-none w-56 shadow-inner"
+                placeholder="Folder name..."
+              />
+            </div>
+            <div className="flex items-center space-x-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleCommitNewFolder}
+                className="p-1 rounded bg-[#10B981]/20 hover:bg-[#10B981]/40 text-[#10B981] border border-[#10B981]/50 cursor-pointer text-xs"
+                title="Create folder (Enter)"
               >
-                <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                  <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                  <span
-                    className={`font-mono text-[11px] truncate transition-colors font-medium ${
-                      isFolderSkipped ? "text-rose-300/80 line-through" : "text-white group-hover:text-[#60CDFF]"
-                    }`}
-                  >
-                    {sub.name}/
-                  </span>
-                  {isFolderSkipped && (
-                    <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-800 text-rose-300 shrink-0">
-                      ✕ Folder Excluded
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelNewFolder}
+                className="p-1 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-700/60 cursor-pointer text-xs"
+                title="Cancel (Esc)"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        <VirtualScrollList
+          key={`folder-virtual-${currentFolderPath}-${searchQuery}`}
+          items={folderItems}
+          rowHeight={34}
+          className="flex-1 h-full"
+          renderRow={(item) => {
+            if (item.kind === "folder") {
+              const sub = item.data;
+              const isFolderSkipped = isDirExcluded(sub.path);
+              const isRenaming = renamingItem && renamingItem.originalName === sub.path;
+              return (
+                <div
+                  key={`folder-${sub.path}`}
+                  onDoubleClick={() => navigateToFolder(sub.path)}
+                  onContextMenu={(e) => handleOpenContextMenu(e, { name: sub.path, isDir: true })}
+                  onClick={() => {
+                    if (isExclusionMode && onToggleExclude) {
+                      onToggleExclude(sub.path, true);
+                    } else {
+                      setSelectedEntryName(sub.path);
+                    }
+                  }}
+                  style={{ height: "34px" }}
+                  className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
+                    isFolderSkipped
+                      ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
+                      : "hover:bg-[#252525]"
+                  }`}
+                >
+                  <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                    <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                    {isRenaming ? (
+                      <div className="flex items-center space-x-1.5 flex-1" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="text"
+                          autoFocus
+                          value={renamingName}
+                          onChange={(e) => setRenamingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleCommitRename();
+                            else if (e.key === "Escape") handleCancelRename();
+                          }}
+                          ref={(el) => {
+                            if (el) el.select();
+                          }}
+                          className="bg-[#141414] text-white border border-[#60CDFF] rounded px-2 py-0.5 font-mono text-xs outline-none w-52 shadow-inner"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCommitRename}
+                          className="px-1.5 py-0.5 rounded bg-[#10B981]/20 hover:bg-[#10B981]/40 text-[#10B981] border border-[#10B981]/50 cursor-pointer text-xs"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCancelRename}
+                          className="px-1.5 py-0.5 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-700/60 cursor-pointer text-xs"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <span
+                        className={`font-mono text-[11px] truncate transition-colors font-medium ${
+                          isFolderSkipped ? "text-rose-300/80 line-through" : "text-white group-hover:text-[#60CDFF]"
+                        }`}
+                      >
+                        {sub.name}/
+                      </span>
+                    )}
+                    {isFolderSkipped && !isRenaming && (
+                      <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-800 text-rose-300 shrink-0">
+                        ✕ Folder Excluded
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <span className="text-[#777777] font-mono text-[10px]">
+                      {sub.totalItemCount} item{sub.totalItemCount !== 1 ? "s" : ""}
                     </span>
-                  )}
-                </div>
-                <div className="flex items-center space-x-2 shrink-0">
-                  <span className="text-[#777777] font-mono text-[10px]">
-                    {sub.totalItemCount} item{sub.totalItemCount !== 1 ? "s" : ""}
-                  </span>
-                  {isExclusionMode && onToggleExclude && (
+                    {isExclusionMode && onToggleExclude && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleExclude(sub.path, true);
+                        }}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center space-x-1 cursor-pointer ${
+                          isFolderSkipped
+                            ? "bg-rose-900/40 hover:bg-rose-900/70 text-rose-300 border-rose-700/60"
+                            : "bg-[#2D2D2D] hover:bg-rose-950/50 text-[#A8A8A8] hover:text-rose-300 border-[#3E3E3E] hover:border-rose-800/60"
+                        }`}
+                        title={isFolderSkipped ? "Include all files in this folder" : "Exclude all files in this folder"}
+                      >
+                        <span className="text-rose-400 font-bold">{isFolderSkipped ? "↺" : "✕"}</span>
+                        <span>{isFolderSkipped ? "Include" : "Skip Dir"}</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onToggleExclude(sub.path, true);
+                        navigateToFolder(sub.path);
+                      }}
+                      className="text-[10px] text-[#A8A8A8] hover:text-[#60CDFF] px-2 py-0.5 rounded bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] cursor-pointer"
+                    >
+                      Open ➔
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            const file = item.data;
+            const isSelected = selectedEntryName === file.name;
+            const fileNameOnly = file.name.split(/[/\\]/).pop() || file.name;
+            const isExcluded = isFileExcluded(file.name);
+            const isRenaming = renamingItem && renamingItem.originalName === file.name;
+
+            return (
+              <div
+                key={`file-${file.name}`}
+                onContextMenu={(e) => handleOpenContextMenu(e, { name: file.name, isDir: false, size: file.size })}
+                onClick={() => {
+                  if (isExclusionMode && onToggleExclude) {
+                    onToggleExclude(file.name);
+                  } else {
+                    setSelectedEntryName(file.name);
+                  }
+                }}
+                onDoubleClick={() => onPreviewEntry(file.name)}
+                style={{ height: "34px" }}
+                className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
+                  isExcluded
+                    ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
+                    : isSelected
+                      ? "bg-[#25394A] text-white"
+                      : "hover:bg-[#242424]"
+                }`}
+              >
+                <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                  {renderFileIcon(fileNameOnly)}
+                  {isRenaming ? (
+                    <div className="flex items-center space-x-1.5 flex-1" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        autoFocus
+                        value={renamingName}
+                        onChange={(e) => setRenamingName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleCommitRename();
+                          else if (e.key === "Escape") handleCancelRename();
+                        }}
+                        ref={(el) => {
+                          if (el) el.select();
+                        }}
+                        className="bg-[#141414] text-white border border-[#60CDFF] rounded px-2 py-0.5 font-mono text-xs outline-none w-52 shadow-inner"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCommitRename}
+                        className="px-1.5 py-0.5 rounded bg-[#10B981]/20 hover:bg-[#10B981]/40 text-[#10B981] border border-[#10B981]/50 cursor-pointer text-xs"
+                      >
+                        ✓
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCancelRename}
+                        className="px-1.5 py-0.5 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-700/60 cursor-pointer text-xs"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <span
+                      className={`font-mono text-[11px] truncate transition-colors ${
+                        isExcluded ? "text-rose-300/80 line-through" : "text-white group-hover:text-[#60CDFF]"
+                      }`}
+                      title={`${file.name} (Right-click for Menu | Double-click or Spacebar to Preview)`}
+                    >
+                      {fileNameOnly}
+                    </span>
+                  )}
+                  {isExcluded && !isRenaming && (
+                    <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-700/80 text-rose-300 flex items-center space-x-1 shrink-0 shadow-sm">
+                      <span>✕</span>
+                      <span>Excluded</span>
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center space-x-2.5 shrink-0">
+                  <span className={`font-mono text-[11px] ${isExcluded ? "text-rose-400 font-semibold" : "text-[#888888]"}`}>
+                    {isExcluded ? "(Skipped)" : formatBytes(file.size)}
+                  </span>
+                  {isExclusionMode && onToggleExclude ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleExclude(file.name);
                       }}
                       className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center space-x-1 cursor-pointer ${
-                        isFolderSkipped
-                          ? "bg-rose-900/40 hover:bg-rose-900/70 text-rose-300 border-rose-700/60"
-                          : "bg-[#2D2D2D] hover:bg-rose-950/50 text-[#A8A8A8] hover:text-rose-300 border-[#3E3E3E] hover:border-rose-800/60"
+                        isExcluded
+                          ? "bg-rose-900/40 hover:bg-rose-900/70 text-rose-300 border-rose-700/70"
+                          : "bg-[#2E2E2E] hover:bg-rose-950/50 text-[#A8A8A8] hover:text-rose-300 border-[#3E3E3E] hover:border-rose-800/60"
                       }`}
-                      title={isFolderSkipped ? "Include all files in this folder" : "Exclude all files in this folder"}
+                      title={isExcluded ? "Include this file in extraction" : "Exclude this file from extraction"}
                     >
-                      <span className="text-rose-400 font-bold">{isFolderSkipped ? "↺" : "✕"}</span>
-                      <span>{isFolderSkipped ? "Include" : "Skip Dir"}</span>
+                      <span className="text-rose-400 font-bold">{isExcluded ? "↺" : "✕"}</span>
+                      <span>{isExcluded ? "Include" : "Skip"}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPreviewEntry(file.name);
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
+                      title="In-memory safe preview (Zero-disk)"
+                    >
+                      <span>👁️</span>
+                      <span>Preview</span>
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigateToFolder(sub.path);
-                    }}
-                    className="text-[10px] text-[#A8A8A8] hover:text-[#60CDFF] px-2 py-0.5 rounded bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] cursor-pointer"
-                  >
-                    Open ➔
-                  </button>
                 </div>
               </div>
             );
-          }
-
-          const file = item.data;
-          const isSelected = selectedEntryName === file.name;
-          const fileNameOnly = file.name.split(/[/\\]/).pop() || file.name;
-          const isExcluded = isFileExcluded(file.name);
-
-          return (
-            <div
-              key={`file-${file.name}`}
-              onClick={() => {
-                if (isExclusionMode && onToggleExclude) {
-                  onToggleExclude(file.name);
-                } else {
-                  setSelectedEntryName(file.name);
-                }
-              }}
-              onDoubleClick={() => onPreviewEntry(file.name)}
-              style={{ height: "34px" }}
-              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
-                isExcluded
-                  ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
-                  : isSelected
-                    ? "bg-[#25394A] text-white"
-                    : "hover:bg-[#242424]"
-              }`}
-            >
-              <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                {renderFileIcon(fileNameOnly)}
-                <span
-                  className={`font-mono text-[11px] truncate transition-colors ${
-                    isExcluded ? "text-rose-300/80 line-through" : "text-white group-hover:text-[#60CDFF]"
-                  }`}
-                  title={`${file.name} (Double-click or Spacebar to Preview${isExclusionMode ? " | Click to Toggle Exclusion" : ""})`}
-                >
-                  {fileNameOnly}
-                </span>
-                {isExcluded && (
-                  <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-700/80 text-rose-300 flex items-center space-x-1 shrink-0 shadow-sm">
-                    <span>✕</span>
-                    <span>Excluded</span>
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center space-x-2.5 shrink-0">
-                <span className={`font-mono text-[11px] ${isExcluded ? "text-rose-400 font-semibold" : "text-[#888888]"}`}>
-                  {isExcluded ? "(Skipped)" : formatBytes(file.size)}
-                </span>
-                {isExclusionMode && onToggleExclude ? (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleExclude(file.name);
-                    }}
-                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center space-x-1 cursor-pointer ${
-                      isExcluded
-                        ? "bg-rose-900/40 hover:bg-rose-900/70 text-rose-300 border-rose-700/70"
-                        : "bg-[#2E2E2E] hover:bg-rose-950/50 text-[#A8A8A8] hover:text-rose-300 border-[#3E3E3E] hover:border-rose-800/60"
-                    }`}
-                    title={isExcluded ? "Include this file in extraction" : "Exclude this file from extraction"}
-                  >
-                    <span className="text-rose-400 font-bold">{isExcluded ? "↺" : "✕"}</span>
-                    <span>{isExcluded ? "Include" : "Skip"}</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onPreviewEntry(file.name);
-                    }}
-                    className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
-                    title="In-memory safe preview (Zero-disk)"
-                  >
-                    <span>👁️</span>
-                    <span>Preview</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        }}
-      />
+          }}
+        />
+      </div>
     );
   };
 
@@ -995,28 +1652,33 @@ export function ArchiveTreeInspector({
     }
 
     return (
-      <VirtualScrollList
-        key={`flat-virtual-${searchQuery}`}
-        items={filteredFlatEntries}
-        rowHeight={34}
-        className="flex-1 h-full"
-        renderRow={(entry, idx) => {
-          const isSelected = selectedEntryName === entry.name;
-          const fileNameOnly = entry.name.split(/[/\\]/).pop() || entry.name;
-          const isExcluded = !entry.is_dir && isFileExcluded(entry.name);
-          const isFolderSkipped = entry.is_dir && isDirExcluded(entry.name);
-          const isDimmed = isExcluded || isFolderSkipped;
+      <div
+        className="flex-1 flex flex-col overflow-hidden relative h-full"
+        onContextMenu={(e) => handleOpenContextMenu(e, null)}
+      >
+        <VirtualScrollList
+          key={`flat-virtual-${searchQuery}`}
+          items={filteredFlatEntries}
+          rowHeight={34}
+          className="flex-1 h-full"
+          renderRow={(entry, idx) => {
+            const isSelected = selectedEntryName === entry.name;
+            const fileNameOnly = entry.name.split(/[/\\]/).pop() || entry.name;
+            const isExcluded = !entry.is_dir && isFileExcluded(entry.name);
+            const isFolderSkipped = entry.is_dir && isDirExcluded(entry.name);
+            const isDimmed = isExcluded || isFolderSkipped;
 
-          return (
-            <div
-              key={`flat-${entry.name || idx}`}
-              onClick={() => {
-                if (isExclusionMode && onToggleExclude) {
-                  onToggleExclude(entry.name, entry.is_dir);
-                } else {
-                  setSelectedEntryName(entry.name);
-                }
-              }}
+            return (
+              <div
+                key={`flat-${entry.name || idx}`}
+                onContextMenu={(e) => handleOpenContextMenu(e, { name: entry.name, isDir: entry.is_dir, size: entry.size })}
+                onClick={() => {
+                  if (isExclusionMode && onToggleExclude) {
+                    onToggleExclude(entry.name, entry.is_dir);
+                  } else {
+                    setSelectedEntryName(entry.name);
+                  }
+                }}
               onDoubleClick={() => {
                 if (!entry.is_dir) onPreviewEntry(entry.name);
               }}
@@ -1106,8 +1768,9 @@ export function ArchiveTreeInspector({
           );
         }}
       />
-    );
-  };
+    </div>
+  );
+};
 
   const isEncryptedWithoutEntries =
     archiveInfo.is_encrypted && (!archiveInfo.entries || archiveInfo.entries.length === 0);
@@ -1142,6 +1805,13 @@ export function ArchiveTreeInspector({
               </>
             )}
           </>
+        )}
+
+        {/* Running Bottom Loading Line (Green) */}
+        {isLoading && (
+          <div className="w-full h-1 bg-[#1A1A1A] overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-[#059669] via-[#10B981] to-[#34D399] shadow-[0_0_12px_rgba(16,185,129,0.8)] animate-pulse w-full"></div>
+          </div>
         )}
 
         {/* Compact Footer */}
@@ -1181,39 +1851,51 @@ export function ArchiveTreeInspector({
                 {renderEncryptedBanner()}
               </div>
             ) : (
-              <div className="flex-1 flex overflow-hidden">
+              <div className="flex-1 flex overflow-hidden relative">
                 <div className="flex-1 flex flex-col overflow-hidden min-w-0">
                   {viewMode === "tree" ? (
                     <>
                       {renderBreadcrumbs()}
                       {renderSearchInput()}
                       {/* Dual-Pane Layout: Left Folder Tree, Right Folder Files */}
-                      <div className="flex-1 flex overflow-hidden">
-                        {/* Left Pane: Hierarchical Tree */}
-                        <div
-                          style={{ width: `${leftPanelWidth}px` }}
-                          className="bg-[#1A1A1A] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0"
-                        >
-                          <div className="text-[10px] font-bold tracking-wider uppercase text-[#888888] px-2 py-1 mb-1">
-                            Folder Hierarchy
-                          </div>
-                          {renderTreeFolderNode(treeRoot)}
-                        </div>
+                      <div className="flex-1 flex overflow-hidden relative">
+                        {/* Left Pane: Hierarchical Tree (Desktop >= 850px) */}
+                        {windowWidth >= 850 && (
+                          <>
+                            <div
+                              style={{ width: `${leftPanelWidth}px` }}
+                              className="bg-[#1A1A1A] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0"
+                            >
+                              {renderFolderHierarchyHeader(false)}
+                              {renderTreeFolderNode(treeRoot)}
+                            </div>
 
-                        {/* Draggable Resizer: Left Folder Tree */}
-                        <div
-                          onMouseDown={handleMouseDownLeft}
-                          className="w-1.5 hover:w-1.5 bg-[#262626] hover:bg-[#60CDFF] active:bg-[#60CDFF] cursor-col-resize transition-colors shrink-0 z-20 flex items-center justify-center group select-none"
-                          title="Drag to resize Folder Hierarchy panel"
-                        >
-                          <div className="w-0.5 h-8 bg-[#444444] group-hover:bg-white rounded-full transition-colors"></div>
-                        </div>
+                            {/* Draggable Resizer: Left Folder Tree */}
+                            <div
+                              onMouseDown={handleMouseDownLeft}
+                              className="w-1.5 hover:w-1.5 bg-[#262626] hover:bg-[#60CDFF] active:bg-[#60CDFF] cursor-col-resize transition-colors shrink-0 z-20 flex items-center justify-center group select-none"
+                              title="Drag to resize Folder Hierarchy panel"
+                            >
+                              <div className="w-0.5 h-8 bg-[#444444] group-hover:bg-white rounded-full transition-colors"></div>
+                            </div>
+                          </>
+                        )}
+
+                        {/* Left Pane: Slide-over Drawer (Compact < 850px) */}
+                        {windowWidth < 850 && showMobileTree && (
+                          <div className="absolute inset-y-0 left-0 z-30 w-72 max-w-[85%] bg-[#1A1A1A] border-r border-[#3E3E3E] shadow-2xl flex flex-col p-2 animate-in slide-in-from-left duration-150">
+                            {renderFolderHierarchyHeader(true)}
+                            <div className="flex-1 overflow-y-auto custom-scrollbar">
+                              {renderTreeFolderNode(treeRoot)}
+                            </div>
+                          </div>
+                        )}
 
                         {/* Right Pane: Files inside selected folder */}
                         <div className="flex-1 bg-[#181818] overflow-hidden flex flex-col min-w-0">
                           <div className="px-3 py-1.5 bg-[#222222] border-b border-[#2E2E2E] text-[11px] font-mono text-[#A8A8A8] flex justify-between shrink-0">
-                            <span>Folder: <span className="text-white font-semibold">/{currentFolderPath || ""}</span></span>
-                            <span>Double-click or Spacebar to Preview</span>
+                            <span className="truncate mr-2">Folder: <span className="text-white font-semibold">/{currentFolderPath || ""}</span></span>
+                            <span className="hidden md:inline shrink-0">Double-click or Spacebar to Preview</span>
                           </div>
                           <div className="flex-1 flex flex-col overflow-hidden">
                             {renderCurrentFolderContents()}
@@ -1231,8 +1913,8 @@ export function ArchiveTreeInspector({
                   )}
                 </div>
 
-                {/* Right Options Sidebar (WinRAR / Pro Archiver style) */}
-                {sidebar && (
+                {/* Right Options Sidebar: Desktop Inline (>= 1150px) */}
+                {sidebar && windowWidth >= 1150 && (
                   <>
                     {/* Draggable Resizer: Right Sidebar */}
                     <div
@@ -1258,31 +1940,60 @@ export function ArchiveTreeInspector({
                     </div>
                   </>
                 )}
+
+                {/* Right Options Sidebar: Slide-over Drawer (Compact < 1150px) */}
+                {sidebar && windowWidth < 1150 && showMobileSidebar && (
+                  <div className="absolute inset-y-0 right-0 z-30 w-80 max-w-[85%] bg-[#202020] border-l border-[#3E3E3E] shadow-2xl flex flex-col p-4 space-y-4 animate-in slide-in-from-right duration-150">
+                    <div className="flex items-center justify-between border-b border-[#3E3E3E] pb-2 mb-1 shrink-0">
+                      <span className="text-xs uppercase tracking-wider font-semibold text-[#60CDFF]">
+                        {sidebarTitle || "Options"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowMobileSidebar(false)}
+                        className="text-[#888888] hover:text-white text-xs px-2 py-0.5 rounded hover:bg-[#2A2A2A] cursor-pointer"
+                        title="Close Options Panel"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar">
+                      {sidebar}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Running Bottom Loading Line (High-Visibility Energetic Green Scheme) */}
+            {isLoading && (
+              <div className="w-full h-1 bg-[#1A1A1A] overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-[#059669] via-[#10B981] to-[#34D399] shadow-[0_0_12px_rgba(16,185,129,0.8)] animate-pulse w-full"></div>
               </div>
             )}
 
             {/* Modal Bottom Status Bar */}
-            <div className="px-4 py-2 bg-[#222222] border-t border-[#3E3E3E] flex items-center justify-between text-xs font-mono text-[#888888] shrink-0">
-              <div className="flex items-center space-x-3">
-                <span>Total Items: <span className="text-white">{archiveInfo.file_count || 0}</span></span>
+            <div className="px-4 py-2 bg-[#222222] border-t border-[#3E3E3E] flex items-center justify-between text-xs font-mono text-[#888888] shrink-0 gap-2">
+              <div className="flex items-center space-x-3 overflow-hidden min-w-0">
+                <span className="shrink-0">Total Items: <span className="text-white font-semibold">{archiveInfo.file_count || 0}</span></span>
                 <span>•</span>
-                <span>Uncompressed: <span className="text-white">{formatBytes(archiveInfo.total_uncompressed_size || 0)}</span></span>
+                <span className="shrink-0">Uncompressed: <span className="text-white font-semibold">{formatBytes(archiveInfo.total_uncompressed_size || 0)}</span></span>
                 {excludedCount > 0 && (
                   <>
                     <span>•</span>
-                    <span className="text-rose-400 font-semibold">
+                    <span className="text-rose-400 font-semibold truncate shrink-0">
                       {excludedCount} excluded ({formatBytes(excludedBytes)} skipped)
                     </span>
                   </>
                 )}
                 {selectedEntryName && (
                   <>
-                    <span>•</span>
-                    <span className="text-[#60CDFF] truncate max-w-xs">Selected: {selectedEntryName.split(/[/\\]/).pop()}</span>
+                    <span className="hidden lg:inline">•</span>
+                    <span className="text-[#60CDFF] truncate max-w-xs hidden lg:inline">Selected: {selectedEntryName.split(/[/\\]/).pop()}</span>
                   </>
                 )}
               </div>
-              <div className="flex items-center space-x-2">
+              <div className="hidden md:flex items-center space-x-2 shrink-0">
                 <span>Press <kbd className="px-1.5 py-0.5 bg-[#333333] border border-[#444444] rounded text-[10px] text-white">Space</kbd> to Preview</span>
                 <span>•</span>
                 <span>Press <kbd className="px-1.5 py-0.5 bg-[#333333] border border-[#444444] rounded text-[10px] text-white">Esc</kbd> to Exit</span>
@@ -1290,6 +2001,133 @@ export function ArchiveTreeInspector({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Sleek Windows 11 Fluent Floating Context Menu */}
+      {contextMenu.isOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-[120]"
+            onClick={() => setContextMenu((prev) => ({ ...prev, isOpen: false }))}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu((prev) => ({ ...prev, isOpen: false }));
+            }}
+          />
+          <div
+            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+            className="fixed z-[121] min-w-[210px] bg-[#1E1E1E]/95 backdrop-blur-md border border-[#3E3E3E] rounded-lg shadow-2xl p-1 text-xs select-none animate-in fade-in duration-100 font-sans"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {contextMenu.target && (
+              <>
+                {!contextMenu.target.isDir && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (contextMenu.target) onPreviewEntry(contextMenu.target.name);
+                      setContextMenu((prev) => ({ ...prev, isOpen: false }));
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <span className="text-sm">👁️</span>
+                      <span>Preview</span>
+                    </div>
+                    <span className="text-[10px] text-[#777777] font-mono">Space</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (contextMenu.target) handleStartRename(contextMenu.target.name, contextMenu.target.isDir);
+                    setContextMenu((prev) => ({ ...prev, isOpen: false }));
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm">✏️</span>
+                    <span>Rename</span>
+                  </div>
+                  <span className="text-[10px] text-[#777777] font-mono">F2</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (contextMenu.target) {
+                      setClipboardItem({
+                        relName: contextMenu.target.name,
+                        isDir: contextMenu.target.isDir,
+                        diskPath: getDiskPath(contextMenu.target.name),
+                      });
+                    }
+                    setContextMenu((prev) => ({ ...prev, isOpen: false }));
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm">📋</span>
+                    <span>Copy</span>
+                  </div>
+                  <span className="text-[10px] text-[#777777] font-mono">Ctrl+C</span>
+                </button>
+
+                <div className="my-1 border-t border-[#2E2E2E]" />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (contextMenu.target) handleDeleteItem(contextMenu.target.name, contextMenu.target.isDir);
+                    setContextMenu((prev) => ({ ...prev, isOpen: false }));
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/60 hover:text-rose-300 text-rose-400 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm">🗑️</span>
+                    <span>Delete (Recycle Bin)</span>
+                  </div>
+                  <span className="text-[10px] text-rose-400/80 font-mono">Del</span>
+                </button>
+
+                <div className="my-1 border-t border-[#2E2E2E]" />
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                handleStartNewFolder();
+                setContextMenu((prev) => ({ ...prev, isOpen: false }));
+              }}
+              className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
+            >
+              <div className="flex items-center space-x-2">
+                <span className="text-sm">📁+</span>
+                <span>New Folder</span>
+              </div>
+              <span className="text-[10px] text-[#777777] font-mono">Ctrl+Shift+N</span>
+            </button>
+
+            {clipboardItem && (
+              <button
+                type="button"
+                onClick={() => {
+                  handlePasteItem();
+                  setContextMenu((prev) => ({ ...prev, isOpen: false }));
+                }}
+                className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
+              >
+                <div className="flex items-center space-x-2 truncate mr-2">
+                  <span className="text-sm">📥</span>
+                  <span className="truncate">Paste "{clipboardItem.relName.split("/").filter(Boolean).pop()}"</span>
+                </div>
+                <span className="text-[10px] text-[#777777] font-mono shrink-0">Ctrl+V</span>
+              </button>
+            )}
+          </div>
+        </>
       )}
     </>
   );

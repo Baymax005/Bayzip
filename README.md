@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.1.1)
+# 📦 Bayzip (v2.2.0)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -20,6 +20,24 @@
   - Added a toggle switch in the Compression Options view (`Smart media bypass (ZIP) [Fast Store]`), active by default.
   - Right-click quick zip via Windows 11 context menu automatically leverages Store mode for instant media archiving.
   - Dedicated preferences status card in Settings.
+
+### 🗂️ In-App File Management Suite & Live Hierarchy Engine (v2.2.0)
+- **Full Right-Click Context Menu**:
+  - Context-aware right-click menu accessible on items or empty canvas: **New Folder** (`Ctrl+Shift+N`), **Rename** (`F2`), **Copy** (`Ctrl+C`), **Paste** (`Ctrl+V`), **Delete to Recycle Bin** (`Del`), and **Preview** (`Space`).
+  - Automatic duplicate name collision resolution with `- Copy (n)` formatting.
+- **Safe Windows Recycle Bin Deletion**:
+  - Direct Win32 `SHFileOperationW` (`FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT`) integration.
+  - Large files, multi-gigabyte ISOs, and deep directory trees are sent to the Windows Recycle Bin in $0\text{ ms}$ via Master File Table (MFT) pointer shifts without physical flash wear or UI lockups, fully recoverable by the user.
+- **Inline Folder Creation & Dynamic Left-Bar Hierarchy Synchronization**:
+  - Inline name editor input with auto-focus and auto-selection for rapid keyboard navigation.
+  - The left-hand folder tree hierarchy instantly updates and expands in real-time when folders are created, renamed, or deleted, keeping navigation and breadcrumbs completely synchronized.
+
+### 🧭 Non-Cluttering System Drive Switcher (v2.2.0)
+- **Discreet Header Flyout Badge (`[ C: ▾ ]`)**:
+  - Embedded into the Folder Tree hierarchy header rather than crowding the UI with static drive buttons.
+- **Live Partition & USB Detection (`sysinfo::Disks`)**:
+  - Queries physical storage mounts, volume labels, removable USB indicators, and live disk space capacity bars (`Available / Total GB`).
+  - 1-click drive mounting navigates straight to any partition (`C:\`, `D:\`, removable USBs) and auto-closes on selection or `Escape`.
 
 ### 🗂️ Tree-Type Archive Directory Inspector
 - **Hierarchical Tree View**:
@@ -170,7 +188,17 @@ graph TD
 
 ## 📋 Release Notes
 
-### v2.1.1 (Latest)
+### v2.2.0 (Latest)
+- **In-App File Management Suite**: Complete right-click context menu (New Folder, Rename, Copy, Paste, Delete, Preview) with native keyboard accelerators (`Ctrl+Shift+N`, `F2`, `Ctrl+C`, `Ctrl+V`, `Del`, `Space`).
+- **Safe Windows Recycle Bin Deletion**: Win32 `SHFileOperationW` (`FOF_ALLOWUNDO`) integration guarantees 0ms instantaneous MFT pointer deletion for arbitrary large files with full user recoverability and zero storage wear.
+- **Inline Folder Creation & Dynamic Left-Bar Hierarchy Sync**: Direct inline name editor with instant left-bar folder tree hierarchy and breadcrumb synchronization.
+- **Non-Cluttering System Drive Switcher**: Discreet header badge flyout (`[ C: ▾ ]`) displaying all physical partitions and removable USB flash drives with live storage capacity bars.
+- **Draggable Window Titlebar & Caption Buttons**: Full-screen workspace modal features native `data-tauri-drag-region` header dragging and native caption buttons (Minimize, Maximize/Restore, Close).
+- **Emerald Green Progress Bar**: Redesigned running compression and extraction progress indicators with an energetic emerald green gradient and ambient glow.
+- **Interactive "DROP" Watermark**: Semi-transparent animated pulsing drop watermark provides instant feedback when dragging assets into the workspace.
+- **Dynamic Second-by-Second Countdown ETA & Rolling Throughput**: High-precision 200ms sampler replaces static cumulative averages with real-time sliding-window speed and an active second-by-second countdown timer (`3s` ➔ `2s` ➔ `1s` ➔ `Finishing...`), eliminating frozen static ETAs during disk flushes and worker thread joins.
+
+### v2.1.1
 - **Windows 11 Shell Multi-Selection Archiving**: Right-clicking multiple selected files or folders in Windows File Explorer now creates a single unified archive (`ParentFolder.bay`, `.bayg`, `.zip`, `.7z`, or `.tar`) rather than spawning separate individual archives.
 - **Silent Headless Subprocess Spawning**: Added `CREATE_NO_WINDOW` (`0x08000000`) flag to Windows shell extension context menu actions, completely eliminating command prompt window flickers when compressing or extracting via right-click.
 - **Real-Time Live Speed & ETA Display**: Compression and extraction views now calculate and display real-time throughput transfer speed (e.g., `85.4 MB/s`) and dynamic completion time remaining (`ETA: 12s`).
@@ -188,7 +216,7 @@ graph TD
 - **Fluent Yellow Folder Icons (`#F9D648`)**: Restored authentic Windows 11 Fluent Yellow folder icons across all tree nodes, active directory cards, and flat table views.
 - **Resilient Brand Assets**: Standalone `BayzipLogo` vector fallback component ensures brand tiles and logos never break or disappear on asset load failures.
 
-> 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases (v1.0.1 through v2.1.1), see [CHANGELOG.md](CHANGELOG.md).
+> 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases (v1.0.1 through v2.2.0), see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

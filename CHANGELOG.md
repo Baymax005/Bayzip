@@ -2,6 +2,53 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.2.0] - 2026-10-22
+
+### 🗂️ Advanced In-App File Management Suite & Live Hierarchy Engine
+- **Full Right-Click Context Menu (`contextMenu`)**:
+  - Context-aware right-click menu accessible on individual files, folders, or empty workspace canvas across both Tree View and Flat Table.
+  - **New Folder (`Ctrl+Shift+N`)**: Instantly creates new directories both in-memory and on disk with dedicated toolbar and tree header shortcuts.
+  - **Rename (`F2`)**: In-place inline renaming with instant keybindings (`Enter` to commit, `Escape` to cancel).
+  - **Safe Windows Recycle Bin Deletion (`Del`)**:
+    - Replaced destructive unrecoverable deletes with native Win32 `SHFileOperationW` (`FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT`).
+    - Files and multi-gigabyte directories are transferred to the Windows Recycle Bin in $0\text{ ms}$ via Master File Table (MFT) pointer shifts without physical flash wear or UI lockups, keeping user files 100% recoverable.
+  - **Copy & Paste (`Ctrl+C` / `Ctrl+V`)**: Multi-item clipboard copying with automatic duplicate name collision resolution (`- Copy`, `- Copy (2)`, etc.).
+  - **Restricted Safe Preview (`Space` / Double Click)**: Direct zero-disk in-memory preview of documents, images, and source code.
+- **Inline Naming & Dynamic Left-Bar Hierarchy Synchronization**:
+  - Added inline text inputs for immediate naming and renaming of folders and files.
+  - Automatic focus and auto-selection of text for rapid keyboard workflows.
+  - The left-hand folder tree hierarchy instantly updates and expands in real-time when folders are created, renamed, or deleted, keeping navigation and breadcrumbs completely synchronized.
+
+### 🧭 Non-Cluttering System Drive Switcher
+- **Discreet Drive Switcher Badge (`[ C: ▾ ]`)**:
+  - Embedded a sleek, modern badge into the Folder Tree hierarchy header rather than crowding the UI with static drive buttons.
+- **Dynamic Multi-Partition & Removable Media Detection (`sysinfo::Disks`)**:
+  - Automatically queries physical storage mounts, volume names, disk space usage (`Available / Total GB`), and removable USB flash drive flags.
+  - Clicking the badge opens an animated Fluent glassmorphic flyout displaying all active drives with live storage capacity bars.
+  - 1-click instant mounting: selecting a drive immediately routes the folder tree to the chosen drive root (`C:\`, `D:\`, `E:\`, USBs).
+  - Closes automatically upon selection, outside click, or `Escape`, preserving a clean, minimalist workspace.
+
+### 🪟 Draggable Titlebar & Native Window Caption Controls
+- **Seamless Multi-Monitor Window Dragging**:
+  - Added native `data-tauri-drag-region` to the header of the full-screen expanded dual-pane workspace modal.
+  - Integrated native Windows caption controls: Minimize, Maximize/Restore, and Close buttons directly into the titlebar.
+  - Upgraded Tauri window bindings to static `getCurrentWindow()` references, eliminating dynamic import overhead and Vite chunk bundle warnings.
+
+### 🎨 Energetic Emerald Green Loading Indicators & Animated "DROP" Watermark
+- **Emerald Accent Progress Bars**:
+  - Redesigned continuous progress indicators across compression and extraction views to use an energetic emerald green gradient (`from-[#059669] via-[#10B981] to-[#34D399]`) with an ambient emerald glow effect, aligning with Bayzip's refined dark theme.
+- **Interactive Pulsing "DROP" Watermark**:
+  - Added an animated, semi-transparent pulsing **`DROP`** watermark (`z-[100]`) that activates when dragging files or directories over the Bayzip workspace, providing immediate visual confirmation that the window is ready to accept dropped assets.
+
+### ⚡ Dynamic Real-Time Throughput Engine & Second-by-Second Countdown ETA
+- **Eliminated Static ETA Freezes (`useDynamicThroughput`)**:
+  - Replaced legacy cumulative lifetime averaging (`bytes / total_elapsed`) with a high-precision sliding-window (2.0s) throughput sampler and an active 200ms tick timer.
+  - Solved the issue where an operation stalled on disk write flushes or multi-core worker joins caused the ETA to freeze statically (e.g., `ETA: 3s`).
+  - **Second-by-Second Real-Time Countdown**: Actively counts down remaining time (`3s` ➔ `2s` ➔ `1s` ➔ `Finishing...`) second-by-second, maintaining fluid feedback even between asynchronous Tauri IPC events.
+  - **Graceful Speed Decay**: Exponential Moving Average (EMA) smoothly decays throughput during physical storage flushes rather than sticking to obsolete read-burst figures.
+- **Backend Finalizing Progress Stream (`bay.rs`)**:
+  - Added dedicated final-chunk progress emissions and an explicit `"Finalizing archive..."` status event when worker threads are flushing frames and committing the Table of Contents trailer.
+
 ## [v2.1.1] - 2026-10-21
 
 ### 🪟 Windows 11 Shell Extension Multi-Selection Archiving

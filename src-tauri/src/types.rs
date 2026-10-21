@@ -55,6 +55,15 @@ pub struct ArchiveEntryPreview {
     pub warning: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DriveInfo {
+    pub mount_point: String,
+    pub name: String,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub is_removable: bool,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct ArchiveInfo {
     pub path: String,

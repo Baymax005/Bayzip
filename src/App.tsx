@@ -1082,7 +1082,7 @@ function App() {
                 </button>
               </div>
 
-              <span className="text-xl font-semibold tracking-tight text-white hidden sm:inline">
+              <span className="text-xl font-semibold tracking-tight text-white hidden md:inline">
                 {activeMode === "compress" ? "Create Archive" : "Extract Archive"}
               </span>
             </div>
@@ -1094,13 +1094,14 @@ function App() {
                   onClick={() => setIsAdvanced(!isAdvanced)}
                   className="text-xs font-medium px-3 py-1.5 rounded-md bg-[#252525] hover:bg-[#303030] border border-[#3E3E3E] hover:border-[#555] transition-colors cursor-pointer text-[#C8C8C8] hover:text-white"
                 >
-                  {isAdvanced ? "Simple Mode" : "Advanced"}
+                  <span className="hidden sm:inline">{isAdvanced ? "Simple Mode" : "Advanced"}</span>
+                  <span className="sm:hidden">{isAdvanced ? "Simple" : "Adv"}</span>
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => setIsAboutOpen(true)}
-                className="text-xs font-medium px-2.5 py-1.5 rounded-md text-[#A8A8A8] hover:text-white hover:bg-[#252525] transition-colors cursor-pointer"
+                className="text-xs font-medium px-2.5 py-1.5 rounded-md text-[#A8A8A8] hover:text-white hover:bg-[#252525] transition-colors cursor-pointer hidden sm:block"
               >
                 About
               </button>
@@ -1282,16 +1283,20 @@ function App() {
         archivePath={selectedArchive || ""}
       />
 
-      {/* Drag & Drop Visual Indicator Overlay */}
+      {/* Drag & Drop Visual Indicator Overlay with Blinking Watermark */}
       {isDraggingOver && (
-        <div className="fixed inset-0 z-50 pointer-events-none bg-[#0078D4]/10 backdrop-blur-[2px] border-2 border-dashed border-[#60CDFF] m-2 rounded-2xl flex flex-col items-center justify-center space-y-3">
-          <div className="w-16 h-16 rounded-2xl bg-[#1A2530]/90 border border-[#60CDFF]/50 flex items-center justify-center shadow-2xl text-[#60CDFF]">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-8 h-8 animate-pulse">
+        <div className="fixed inset-0 z-[100] pointer-events-none bg-[#059669]/10 backdrop-blur-[3px] border-2 border-dashed border-[#10B981] m-2 rounded-2xl flex flex-col items-center justify-center space-y-4">
+          {/* Semi-transparent blinking DROP watermark */}
+          <div className="text-7xl sm:text-9xl font-black tracking-widest text-[#10B981]/40 uppercase animate-pulse select-none drop-shadow-[0_0_35px_rgba(16,185,129,0.6)]">
+            DROP
+          </div>
+          <div className="w-16 h-16 rounded-2xl bg-[#1A2530]/95 border border-[#10B981]/60 flex items-center justify-center shadow-2xl text-[#10B981]">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-8 h-8 animate-bounce">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
             </svg>
           </div>
-          <p className="text-white font-semibold text-xs tracking-wide bg-[#202020]/95 px-4 py-1.5 rounded-full border border-[#3E3E3E] shadow-xl">
-            Drop files or archives here to {activeMode === "extract" ? "extract" : "compress"}
+          <p className="text-white font-semibold text-xs tracking-wide bg-[#202020]/95 px-5 py-2 rounded-full border border-[#3E3E3E] shadow-2xl">
+            Drop files or folders here to {activeMode === "extract" ? "extract" : "compress"}
           </p>
         </div>
       )}

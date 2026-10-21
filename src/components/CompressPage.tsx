@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { SystemSpecs, CompressProgress, ArchiveInfo, ArchiveEntryItem } from "../types";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
+import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
@@ -197,48 +198,11 @@ export function CompressPage({
     }
   }, [selectedFiles, stagedEntries]);
 
-  const compressStartTimeRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (isCompressing) {
-      if (!compressStartTimeRef.current) {
-        compressStartTimeRef.current = Date.now();
-      }
-    } else {
-      compressStartTimeRef.current = null;
-    }
-  }, [isCompressing]);
-
-  const { speedText, etaText } = useMemo(() => {
-    if (!isCompressing || !progress || progress.bytes_processed <= 0 || !compressStartTimeRef.current) {
-      return { speedText: null, etaText: null };
-    }
-    const elapsedSec = (Date.now() - compressStartTimeRef.current) / 1000;
-    if (elapsedSec < 0.5) {
-      return { speedText: null, etaText: null };
-    }
-    const speed = progress.bytes_processed / elapsedSec;
-    const speedFormatted = `${formatBytes(speed)}/s`;
-
-    let etaFormatted = null;
-    if (progress.total_bytes > progress.bytes_processed && speed > 0) {
-      const remainingBytes = progress.total_bytes - progress.bytes_processed;
-      const remainingSec = Math.round(remainingBytes / speed);
-      if (remainingSec < 60) {
-        etaFormatted = `ETA: ${remainingSec}s`;
-      } else if (remainingSec < 3600) {
-        const m = Math.floor(remainingSec / 60);
-        const s = remainingSec % 60;
-        etaFormatted = `ETA: ${m}m ${s}s`;
-      } else {
-        const h = Math.floor(remainingSec / 3600);
-        const m = Math.floor((remainingSec % 3600) / 60);
-        etaFormatted = `ETA: ${h}h ${m}m`;
-      }
-    }
-
-    return { speedText: speedFormatted, etaText: etaFormatted };
-  }, [isCompressing, progress]);
+  const { speedText, etaText } = useDynamicThroughput({
+    isActive: isCompressing,
+    bytesProcessed: progress?.bytes_processed ?? 0,
+    totalBytes: progress?.total_bytes ?? 0,
+  });
 
   const getEstimatedCores = () => {
     const val = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
@@ -1219,7 +1183,7 @@ export function CompressPage({
 
           <div className="w-full h-2 bg-[#202020] rounded-full overflow-hidden border border-[#3E3E3E]">
             <div
-              className="h-full bg-gradient-to-r from-[#0078D4] to-[#60CDFF] transition-all duration-150 ease-out rounded-full shadow-[0_0_10px_rgba(96,205,255,0.7)]"
+              className="h-full bg-gradient-to-r from-[#059669] via-[#10B981] to-[#34D399] transition-all duration-150 ease-out rounded-full shadow-[0_0_10px_rgba(16,185,129,0.7)]"
               style={{ width: `${progress ? Math.max(2, progress.percent) : 2}%` }}
             ></div>
           </div>

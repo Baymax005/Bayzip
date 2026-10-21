@@ -123,6 +123,19 @@ pub fn write_file_to_bay_archive<W: Write>(
         }
     }
 
+    // Ensure final byte count of file is emitted to UI
+    let pct = if total_original > 0 {
+        ((*bytes_processed as f64 / total_original as f64) * 100.0).min(99.0)
+    } else {
+        50.0
+    };
+    let _ = app.emit("compress_progress", CompressProgress {
+        percent: pct,
+        current_file: rel_name.to_string(),
+        bytes_processed: *bytes_processed,
+        total_bytes: total_original,
+    });
+
     Ok(())
 }
 
@@ -368,6 +381,12 @@ pub fn compress_bay(
                 return Err("Compression cancelled by user".to_string());
             }
             let _ = encoder.write_all(&[0u8]); // EOF
+            let _ = app.emit("compress_progress", CompressProgress {
+                percent: 99.0,
+                current_file: "Finalizing archive...".to_string(),
+                bytes_processed,
+                total_bytes: total_original,
+            });
             encoder.flush().map_err(|e| format!("Brotli flush error: {}", e))?;
             let finished_writer = encoder.into_inner();
             let mut file_writer = finished_writer.finish().map_err(|e| format!("Brotli finalize error: {}", e))?;
@@ -413,6 +432,12 @@ pub fn compress_bay(
                 return Err("Compression cancelled by user".to_string());
             }
             let _ = encoder.write_all(&[0u8]); // EOF
+            let _ = app.emit("compress_progress", CompressProgress {
+                percent: 99.0,
+                current_file: "Finalizing archive...".to_string(),
+                bytes_processed,
+                total_bytes: total_original,
+            });
             let finished_writer = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
             let mut file_writer = finished_writer.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
             write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
@@ -469,6 +494,12 @@ pub fn compress_bay(
                 return Err("Compression cancelled by user".to_string());
             }
             let _ = encoder.write_all(&[0u8]); // EOF
+            let _ = app.emit("compress_progress", CompressProgress {
+                percent: 99.0,
+                current_file: "Finalizing archive...".to_string(),
+                bytes_processed,
+                total_bytes: total_original,
+            });
             let finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
             let mut file_writer = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
             write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)

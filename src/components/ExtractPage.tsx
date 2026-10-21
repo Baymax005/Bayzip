@@ -1,7 +1,8 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState } from "react";
 import { ArchiveInfo, ExtractProgress } from "../types";
 import { ArchiveTreeInspector } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
+import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
 
 export interface ExtractPageProps {
   selectedArchive: string | null;
@@ -95,53 +96,12 @@ export function ExtractPage({
 }: ExtractPageProps) {
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
 
-  const extractStartTimeRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    if (isExtracting) {
-      if (!extractStartTimeRef.current) {
-        extractStartTimeRef.current = Date.now();
-      }
-    } else {
-      extractStartTimeRef.current = null;
-    }
-  }, [isExtracting]);
-
-  const { speedText, etaText } = useMemo(() => {
-    if (!isExtracting || !extractProgress || extractProgress.bytes_extracted <= 0 || !extractStartTimeRef.current) {
-      return { speedText: null, etaText: null };
-    }
-    const elapsedSec = (Date.now() - extractStartTimeRef.current) / 1000;
-    if (elapsedSec < 0.5) {
-      return { speedText: null, etaText: null };
-    }
-    const speed = extractProgress.bytes_extracted / elapsedSec;
-    const speedFormatted = `${formatBytes(speed)}/s`;
-
-    let etaFormatted = null;
-    const totalBytes =
-      archiveInfo && archiveInfo.total_uncompressed_size && archiveInfo.total_uncompressed_size > 0
-        ? archiveInfo.total_uncompressed_size
-        : 0;
-
-    if (totalBytes > extractProgress.bytes_extracted && speed > 0) {
-      const remainingBytes = totalBytes - extractProgress.bytes_extracted;
-      const remainingSec = Math.round(remainingBytes / speed);
-      if (remainingSec < 60) {
-        etaFormatted = `ETA: ${remainingSec}s`;
-      } else if (remainingSec < 3600) {
-        const m = Math.floor(remainingSec / 60);
-        const s = remainingSec % 60;
-        etaFormatted = `ETA: ${m}m ${s}s`;
-      } else {
-        const h = Math.floor(remainingSec / 3600);
-        const m = Math.floor((remainingSec % 3600) / 60);
-        etaFormatted = `ETA: ${h}h ${m}m`;
-      }
-    }
-
-    return { speedText: speedFormatted, etaText: etaFormatted };
-  }, [isExtracting, extractProgress, archiveInfo]);
+  const { speedText, etaText } = useDynamicThroughput({
+    isActive: isExtracting,
+    bytesProcessed: extractProgress?.bytes_extracted ?? 0,
+    totalBytes: archiveInfo?.total_uncompressed_size ?? 0,
+  });
 
   const renderExtractSidebar = () => (
     <div className="space-y-4 text-xs">
@@ -582,7 +542,7 @@ export function ExtractPage({
 
           <div className="w-full h-2 bg-[#202020] rounded-full overflow-hidden border border-[#3E3E3E]">
             <div
-              className="h-full bg-gradient-to-r from-[#0078D4] to-[#60CDFF] transition-all duration-150 ease-out rounded-full shadow-[0_0_10px_rgba(96,205,255,0.7)]"
+              className="h-full bg-gradient-to-r from-[#059669] via-[#10B981] to-[#34D399] transition-all duration-150 ease-out rounded-full shadow-[0_0_10px_rgba(16,185,129,0.7)]"
               style={{ width: `${extractProgress ? Math.max(2, extractProgress.percent) : 2}%` }}
             ></div>
           </div>

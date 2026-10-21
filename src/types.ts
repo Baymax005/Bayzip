@@ -73,3 +73,11 @@ export interface StartupCommand {
   action?: "compress" | "extract" | null;
   paths: string[];
 }
+
+export interface DriveInfo {
+  mount_point: string;
+  name: string;
+  total_bytes: number;
+  available_bytes: number;
+  is_removable: boolean;
+}
