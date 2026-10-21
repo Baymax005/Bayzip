@@ -26,6 +26,12 @@ All notable changes, version milestones, security fixes, and performance enhance
 - **Clean Registry & Shell Association Management**:
   - Consolidated shell association notification into `notify_shell_associations_changed()`, removed duplicate `SHChangeNotify` definitions, removed obsolete `ie4uinit.exe` calls, and added clean `Software\RegisteredApplications` removal during uninstallation.
 
+### 🏷️ UI Precision & Documentation Alignment
+- **Explicit `(ZIP)` Indicator for Smart Media Bypass**:
+  - Added a cyan `(ZIP)` badge to both `SettingsWindow` and `CompressPage` and refined the descriptions to clearly communicate that zero-CPU Fast Store mode directly applies to `.zip` archives, whereas continuous solid formats (`.bay` and `.7z`) apply dictionary protection grouping to keep sliding LZ77/Zstd dictionaries clean.
+- **Clarified Standard Unencrypted RAR Support**:
+  - Updated documentation and the supported formats matrix to explicitly clarify that RAR extraction in v2.1.1 supports standard, unencrypted archives via Windows `libarchive`, while password-protected AES-128/256 RAR5 and multi-volume spanning are tracked for v2.2.
+
 ## [v2.1.0] - 2026-10-21
 
 ### 📦 Windows Installer & Uninstaller Branding (NSIS)
