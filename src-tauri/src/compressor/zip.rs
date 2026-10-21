@@ -281,78 +281,95 @@ pub fn compress_zip(
 }
 
 pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), String> {
+    headless_quick_compress_zip_items(&[p], output_path)
+}
+
+pub fn headless_quick_compress_zip_items(paths: &[&Path], output_path: &Path) -> Result<(), String> {
     let write_buf_size = get_optimal_write_buffer(output_path, 1024 * 1024);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create zip file: {}", e))?;
     // Buffer scaled by destination bus to prevent disk thrashing and maximize sequential write speeds
     let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);
     let mut writer = zip::ZipWriter::new(buf_writer);
-    let parent = p.parent().unwrap_or(p);
 
-    if p.is_file() {
-        if let Ok(mut f) = File::open(p) {
-            let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-            let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            let is_precomp = is_precompressed_file(p);
-            let entry_method = if is_precomp {
-                zip::CompressionMethod::Stored
-            } else {
-                zip::CompressionMethod::Deflated
-            };
-            let file_opt = SimpleFileOptions::default()
-                .compression_method(entry_method)
-                .compression_level(if is_precomp { None } else { Some(6) })
-                .large_file(file_len >= 0xFFFF_FFFF);
-            writer.start_file(file_name, file_opt)
-                .map_err(|e| format!("Zip start error: {}", e))?;
-            std::io::copy(&mut f, &mut writer)
-                .map_err(|e| format!("Zip copy error: {}", e))?;
-        }
-    } else if p.is_dir() {
-        fn add_dir<W: Write + std::io::Seek>(
-            dir: &Path,
-            base: &Path,
-            writer: &mut zip::ZipWriter<W>,
-            depth: usize,
-        ) -> Result<(), String> {
-            if depth > 32 { return Ok(()); }
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if let Ok(m) = std::fs::symlink_metadata(&path) {
-                        let rel = path.strip_prefix(base).unwrap_or(&path);
-                        let rel_str = rel.to_string_lossy().replace('\\', "/");
-                        if m.is_dir() && !m.file_type().is_symlink() {
-                            let dir_opt = SimpleFileOptions::default()
-                                .compression_method(zip::CompressionMethod::Deflated)
-                                .compression_level(Some(6))
-                                .large_file(false);
-                            let _ = writer.add_directory(format!("{}/", rel_str), dir_opt);
-                            add_dir(&path, base, writer, depth + 1)?;
-                        } else if m.is_file() {
-                            if let Ok(mut f) = File::open(&path) {
-                                let is_precomp = is_precompressed_file(&path);
-                                let entry_method = if is_precomp {
-                                    zip::CompressionMethod::Stored
-                                } else {
-                                    zip::CompressionMethod::Deflated
-                                };
-                                let file_opt = SimpleFileOptions::default()
-                                    .compression_method(entry_method)
-                                    .compression_level(if is_precomp { None } else { Some(6) })
-                                    .large_file(m.len() >= 0xFFFF_FFFF);
-                                writer.start_file(&rel_str, file_opt)
-                                    .map_err(|e| format!("Zip start error: {}", e))?;
-                                std::io::copy(&mut f, writer)
-                                    .map_err(|e| format!("Zip write error: {}", e))?;
-                            }
+    fn add_dir<W: Write + std::io::Seek>(
+        dir: &Path,
+        base: &Path,
+        writer: &mut zip::ZipWriter<W>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > 32 { return Ok(()); }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Ok(m) = std::fs::symlink_metadata(&path) {
+                    let rel = path.strip_prefix(base).unwrap_or(&path);
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    if m.is_dir() && !m.file_type().is_symlink() {
+                        let dir_opt = SimpleFileOptions::default()
+                            .compression_method(zip::CompressionMethod::Deflated)
+                            .compression_level(Some(6))
+                            .large_file(false);
+                        let _ = writer.add_directory(format!("{}/", rel_str), dir_opt);
+                        add_dir(&path, base, writer, depth + 1)?;
+                    } else if m.is_file() {
+                        if let Ok(mut f) = File::open(&path) {
+                            let is_precomp = is_precompressed_file(&path);
+                            let entry_method = if is_precomp {
+                                zip::CompressionMethod::Stored
+                            } else {
+                                zip::CompressionMethod::Deflated
+                            };
+                            let file_opt = SimpleFileOptions::default()
+                                .compression_method(entry_method)
+                                .compression_level(if is_precomp { None } else { Some(6) })
+                                .large_file(m.len() >= 0xFFFF_FFFF);
+                            writer.start_file(&rel_str, file_opt)
+                                .map_err(|e| format!("Zip start error: {}", e))?;
+                            std::io::copy(&mut f, writer)
+                                .map_err(|e| format!("Zip write error: {}", e))?;
                         }
                     }
                 }
             }
-            Ok(())
         }
-        add_dir(p, parent, &mut writer, 0)?;
+        Ok(())
+    }
+
+    for &p in paths {
+        let parent = p.parent().unwrap_or(p);
+        if p.is_file() {
+            if let Ok(mut f) = File::open(p) {
+                let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                let is_precomp = is_precompressed_file(p);
+                let entry_method = if is_precomp {
+                    zip::CompressionMethod::Stored
+                } else {
+                    zip::CompressionMethod::Deflated
+                };
+                let file_opt = SimpleFileOptions::default()
+                    .compression_method(entry_method)
+                    .compression_level(if is_precomp { None } else { Some(6) })
+                    .large_file(file_len >= 0xFFFF_FFFF);
+                writer.start_file(file_name, file_opt)
+                    .map_err(|e| format!("Zip start error: {}", e))?;
+                std::io::copy(&mut f, &mut writer)
+                    .map_err(|e| format!("Zip copy error: {}", e))?;
+            }
+        } else if p.is_dir() {
+            let rel_name = p.strip_prefix(parent).unwrap_or(p);
+            let rel_str = rel_name.to_string_lossy().replace('\\', "/");
+            let clean_rel = rel_str.trim_start_matches('/').to_string();
+            if !clean_rel.is_empty() {
+                let dir_opt = SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated)
+                    .compression_level(Some(6))
+                    .large_file(false);
+                let _ = writer.add_directory(format!("{}/", clean_rel), dir_opt);
+            }
+            add_dir(p, parent, &mut writer, 0)?;
+        }
     }
 
     writer.finish().map_err(|e| format!("Failed to finalize zip: {}", e))?;

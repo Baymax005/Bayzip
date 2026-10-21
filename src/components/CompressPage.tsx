@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { SystemSpecs, CompressProgress, ArchiveInfo, ArchiveEntryItem } from "../types";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
@@ -196,6 +196,49 @@ export function CompressPage({
       prefetchFileIcons(stagedEntries.map((e) => e.name));
     }
   }, [selectedFiles, stagedEntries]);
+
+  const compressStartTimeRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isCompressing) {
+      if (!compressStartTimeRef.current) {
+        compressStartTimeRef.current = Date.now();
+      }
+    } else {
+      compressStartTimeRef.current = null;
+    }
+  }, [isCompressing]);
+
+  const { speedText, etaText } = useMemo(() => {
+    if (!isCompressing || !progress || progress.bytes_processed <= 0 || !compressStartTimeRef.current) {
+      return { speedText: null, etaText: null };
+    }
+    const elapsedSec = (Date.now() - compressStartTimeRef.current) / 1000;
+    if (elapsedSec < 0.5) {
+      return { speedText: null, etaText: null };
+    }
+    const speed = progress.bytes_processed / elapsedSec;
+    const speedFormatted = `${formatBytes(speed)}/s`;
+
+    let etaFormatted = null;
+    if (progress.total_bytes > progress.bytes_processed && speed > 0) {
+      const remainingBytes = progress.total_bytes - progress.bytes_processed;
+      const remainingSec = Math.round(remainingBytes / speed);
+      if (remainingSec < 60) {
+        etaFormatted = `ETA: ${remainingSec}s`;
+      } else if (remainingSec < 3600) {
+        const m = Math.floor(remainingSec / 60);
+        const s = remainingSec % 60;
+        etaFormatted = `ETA: ${m}m ${s}s`;
+      } else {
+        const h = Math.floor(remainingSec / 3600);
+        const m = Math.floor((remainingSec % 3600) / 60);
+        etaFormatted = `ETA: ${h}h ${m}m`;
+      }
+    }
+
+    return { speedText: speedFormatted, etaText: etaFormatted };
+  }, [isCompressing, progress]);
 
   const getEstimatedCores = () => {
     const val = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
@@ -1182,20 +1225,35 @@ export function CompressPage({
           </div>
 
           <div className="flex justify-between items-center text-[11px] text-[#8A8A8A]">
-            <span>
-              {progress && progress.bytes_processed > 0 ? (
-                progress.total_bytes > 0 ? (
-                  `${formatBytes(progress.bytes_processed)} / ${formatBytes(progress.total_bytes)}`
+            <div className="flex items-center space-x-2 min-w-0">
+              <span className="truncate">
+                {progress && progress.bytes_processed > 0 ? (
+                  progress.total_bytes > 0 ? (
+                    `${formatBytes(progress.bytes_processed)} / ${formatBytes(progress.total_bytes)}`
+                  ) : (
+                    `${formatBytes(progress.bytes_processed)} processed`
+                  )
                 ) : (
-                  `${formatBytes(progress.bytes_processed)} processed`
-                )
-              ) : (
-                "High-performance multithreading active"
+                  "High-performance multithreading active"
+                )}
+              </span>
+              {speedText && (
+                <>
+                  <span className="text-[#555]">•</span>
+                  <span className="font-mono text-[#D0D0D0] font-medium shrink-0">{speedText}</span>
+                </>
               )}
-            </span>
-            <span className="text-[#60CDFF] font-medium">
-              {activeCompressConfig ? activeCompressConfig.format : selectedFormat}
-            </span>
+            </div>
+            <div className="flex items-center space-x-2 shrink-0 ml-2">
+              {etaText && (
+                <span className="text-amber-400 font-mono font-medium">
+                  {etaText}
+                </span>
+              )}
+              <span className="text-[#60CDFF] font-medium">
+                {activeCompressConfig ? activeCompressConfig.format : selectedFormat}
+              </span>
+            </div>
           </div>
         </div>
       )}

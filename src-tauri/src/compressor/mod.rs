@@ -137,7 +137,7 @@ pub fn calculate_target_threads(slider_value: i32, total_cores: usize) -> usize 
 }
 
 /// Exact Zstd Level matrix:
-/// For .bayg: <= 25 -> Level -2 (fast acceleration), 50 -> Level 1, 75 & 100 -> Level 2
+/// For .bayg: <= 25 -> Level -2 (fast acceleration), 50 -> Level 1, 75 & 100 -> Level 3
 /// For standard .bay: 0 -> Level 1, 25 -> Level 3, 50 -> Level 6, 75 -> Level 9, 100 -> Level 19.
 pub fn calculate_zstd_level(slider_value: i32, is_gamer: bool) -> i32 {
     if is_gamer {
@@ -173,14 +173,39 @@ pub fn get_io_buffers(slider_value: i32) -> (usize, usize) {
 }
 
 pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<(), String> {
+    headless_quick_compress_targets(format, &[target_path_str])
+}
+
+pub fn headless_quick_compress_targets(format: &str, targets: &[&str]) -> Result<(), String> {
     let _priority_guard = ScopedPriorityGuard::new();
 
-    let p = Path::new(target_path_str);
-    if !p.exists() {
-        return Err("Target path does not exist".into());
+    let valid_paths: Vec<&Path> = targets
+        .iter()
+        .map(|s| Path::new(s.trim_matches('\"')))
+        .filter(|p| p.exists())
+        .collect();
+
+    if valid_paths.is_empty() {
+        return Err("No valid target paths exist to compress".into());
     }
-    let parent = p.parent().unwrap_or_else(|| Path::new("."));
-    let stem = archive_stem_name(p);
+
+    let parent = valid_paths[0].parent().unwrap_or_else(|| Path::new("."));
+    let stem = if valid_paths.len() == 1 {
+        archive_stem_name(valid_paths[0])
+    } else {
+        parent
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                valid_paths[0]
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Archive")
+            })
+            .to_string()
+    };
+
     let ext = if format.starts_with('.') {
         format.to_string()
     } else {
@@ -190,11 +215,11 @@ pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<()
 
     let fmt_clean = format.trim_start_matches('.').to_lowercase();
     match fmt_clean.as_str() {
-        "zip" => headless_quick_compress_zip(p, &output_path)?,
-        "7z" => headless_quick_compress_7z(p, &output_path)?,
-        "tar" => headless_quick_compress_tar(p, &output_path)?,
-        "bayg" => headless_quick_compress_bay(p, &output_path, true)?,
-        _ => headless_quick_compress_bay(p, &output_path, false)?,
+        "zip" => headless_quick_compress_zip_items(&valid_paths, &output_path)?,
+        "7z" => headless_quick_compress_7z_items(&valid_paths, &output_path)?,
+        "tar" => headless_quick_compress_tar_items(&valid_paths, &output_path)?,
+        "bayg" => headless_quick_compress_bay_items(&valid_paths, &output_path, true)?,
+        _ => headless_quick_compress_bay_items(&valid_paths, &output_path, false)?,
     }
 
     #[cfg(target_os = "windows")]

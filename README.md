@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.0.7)
+# 📦 Bayzip (v2.1.1)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -65,8 +65,8 @@
   - Live hardware specs detection (CPU cores and free RAM).
   - Slider controls compression intensity and core allocation (`0%` -> 1 core, `50%` -> half cores, `100%` -> full multi-threading).
   - **Source & Destination Hardware-Aware I/O Architecture**:
-    - **Physical Read Slicing**: Queries underlying drive bus via Win32 `IOCTL_STORAGE_QUERY_PROPERTY` to slice reads safely (1 MB for USB, 4 MB for SATA, 8 MB for NVMe).
-    - **Destination-Aware Write Capping**: Automatically caps output write buffers (16 MB for USB thumb drives under Windows Quick-Removal policy, 64 MB for SATA HDD/SSD, up to 128 MB for PCIe NVMe line rate), eliminating 20-second thread hangs on external flash while keeping progress bars at 20 FPS with instant cancellation.
+    - **Physical Read Slicing**: Queries underlying drive bus via Win32 `IOCTL_STORAGE_QUERY_PROPERTY` to slice reads safely (256 KB for USB, 512 KB for SATA, 1 MB for NVMe).
+    - **Destination-Aware Write Capping**: Automatically caps output write buffers (512 KB for USB thumb drives under Windows Quick-Removal policy, 1 MB for SATA HDD/SSD, up to 2 MB for PCIe NVMe line rate), eliminating 10-to-20-second thread hangs on external flash and NVMe queue stalls while keeping progress bars at 20 FPS with instant cancellation.
   - OS priority scheduling (`ScopedPriorityGuard`) sets background compression threads to below-normal priority to maintain 100% system and game responsiveness.
 - **Format Support**:
   - **`.bay`**: High-performance custom format supporting **Zstandard** (Levels 1–19), **Brotli**, and **LZ4**.
@@ -85,7 +85,7 @@
 
 ### 🛡️ Hardware-Aware Drive Protection & Safe Buffer Capping
 
-On Windows, uncapped write buffers (e.g., 128 MB dumps) on external flash drives or mechanical hard drives can lock operating system storage threads, freeze progress bars, and risk partition table/journal corruption (causing drives to appear as **RAW** file systems if interrupted).
+On Windows, uncapped write buffers (e.g., 64 MB – 128 MB dumps) on external flash drives or mechanical hard drives can lock operating system storage threads, freeze progress bars, and risk partition table/journal corruption (causing drives to appear as **RAW** file systems if interrupted). On fast NVMe drives, massive single-shot writes overwhelm dynamic SLC caches and drive controllers, freezing background workers for seconds.
 
 Bayzip actively queries the underlying drive bus via Win32 `IOCTL_STORAGE_QUERY_PROPERTY` and clamps sequential read slices and write buffers to safe, hardware-calibrated boundaries:
 
@@ -100,26 +100,26 @@ graph TD
     end
 
     subgraph Read Slicing ["Source Read Slicing (f.read)"]
-        USB --> R_USB["1 MB Read Slice<br/>(Instant Cancel / Zero Timeouts)"]
-        SATA --> R_SATA["4 MB Read Slice<br/>(Smooth Platter Throughput)"]
-        NVME --> R_NVME["8 MB Read Slice<br/>(Saturates PCIe Multi-GB Bus)"]
-        NET --> R_NET["2 MB Read Slice<br/>(Network Safe Buffer)"]
+        USB --> R_USB["256 KB Read Slice<br/>(Instant Cancel / Zero USB Stalls)"]
+        SATA --> R_SATA["512 KB Read Slice<br/>(Smooth Platter Throughput)"]
+        NVME --> R_NVME["1 MB Read Slice<br/>(Saturates PCIe Multi-GB Bus)"]
+        NET --> R_NET["256 KB Read Slice<br/>(Safe Network Buffer)"]
     end
 
     subgraph Safe Buffer Capping ["Destination Write Capping (BufWriter)"]
-        USB --> W_USB["16 MB Max Cap<br/>(Prevents RAW Disks & Quick-Removal Freezes)"]
-        SATA --> W_SATA["64 MB Max Cap<br/>(Prevents Mechanical Platter Thrashing)"]
-        NVME --> W_NVME["128 MB Full Burst<br/>(Flushes in 25–40 ms @ 3,000+ MB/s)"]
-        NET --> W_NET["32 MB Safe Cap<br/>(Prevents Network Buffer Drops)"]
+        USB --> W_USB["512 KB Safe Cap<br/>(Prevents RAW Disks & Quick-Removal Freezes)"]
+        SATA --> W_SATA["1 MB Safe Cap<br/>(Prevents Platter Thrashing & Queue Congestion)"]
+        NVME --> W_NVME["2 MB Calibrated Cap<br/>(Flushes in 1–2 ms; Zero NVMe Queue Stalls)"]
+        NET --> W_NET["512 KB Safe Cap<br/>(Prevents Packet Queue Overflows)"]
     end
 ```
 
 | Storage Medium | Bus Type | Read Slice | Write Buffer Cap | Flush Latency | Core Hardware Safeguard |
 |---|:---:|:---:|:---:|:---:|---|
-| **External USB / Flash Drive** | `BusTypeUsb` | **1 MB** | **16 MB** | ~1.0 – 1.8s | Prevents Windows Quick-Removal lockups, 20s stalls, and RAW partition corruption |
-| **Internal Mechanical HDD / SATA SSD** | `BusTypeSata` | **4 MB** | **64 MB** | ~0.4 – 0.6s | Prevents mechanical platter head thrashing and disk queue congestion |
-| **Internal PCIe NVMe SSD (M.2)** | `BusTypeNvme` | **8 MB** | **128 MB** | ~0.02 – 0.04s | Maximum multi-gigabyte PCIe Gen 3/4/5 line-rate burst ($3{,}000+\text{ MB/s}$) |
-| **Network Share / UNC / Fallback** | `DRIVE_REMOTE` | **2 MB** | **32 MB** | Safe generic | Prevents packet queue overflows and network driver latency |
+| **External USB / Flash Drive** | `BusTypeUsb` | **256 KB** | **512 KB** | ~0.04 – 0.08s | Prevents Windows Quick-Removal lockups, 20s stalls, and RAW partition corruption |
+| **Internal Mechanical HDD / SATA SSD** | `BusTypeSata` | **512 KB** | **1 MB** | ~0.01 – 0.02s | Prevents mechanical platter head thrashing and disk queue congestion |
+| **Internal PCIe NVMe SSD (M.2)** | `BusTypeNvme` | **1 MB** | **2 MB** | ~0.001 – 0.002s | Maximum PCIe line rate; flushes in 1–2ms without controller queue saturation |
+| **Network Share / UNC / Fallback** | `DRIVE_REMOTE` | **256 KB** | **512 KB** | Safe generic | Prevents packet queue overflows and network driver latency |
 
 
 ### 🔒 Zero-Allocation Streaming AES-256-GCM Encryption
@@ -170,7 +170,16 @@ graph TD
 
 ## 📋 Release Notes
 
-### v2.0.7 (Latest)
+### v2.1.1 (Latest)
+- **Windows 11 Shell Multi-Selection Archiving**: Right-clicking multiple selected files or folders in Windows File Explorer now creates a single unified archive (`ParentFolder.bay`, `.bayg`, `.zip`, `.7z`, or `.tar`) rather than spawning separate individual archives.
+- **Silent Headless Subprocess Spawning**: Added `CREATE_NO_WINDOW` (`0x08000000`) flag to Windows shell extension context menu actions, completely eliminating command prompt window flickers when compressing or extracting via right-click.
+- **Real-Time Live Speed & ETA Display**: Compression and extraction views now calculate and display real-time throughput transfer speed (e.g., `85.4 MB/s`) and dynamic completion time remaining (`ETA: 12s`).
+- **Interactive Drag & Drop Glow Feedback**: Added a Fluent dark overlay with illuminated cyan border glow and drop badge when dragging files or folders into the main window.
+- **Calibrated Non-Blocking I/O Streaming**: Calibrated physical read slices (256 KB–1 MB) and destination write caps (512 KB–2 MB) across NVMe, SATA, and USB, eliminating 10–20 second UI stalls and dynamic SLC queue starvation while keeping progress bars at a smooth 20 FPS.
+- **Enhanced Windows Shell Integration & Clean Uninstall**: Optimized Windows shell association notifications, removed legacy icon cache calls, added clean `Software\RegisteredApplications` deregistration, and added official Bayzip branding icon to the Windows Add/Remove Programs (Programs & Features) uninstaller entry.
+- **Subfolder Path Normalization**: Unified all folder display paths across Windows and cross-platform views using standard forward-slash (`/`) hierarchy formatting.
+
+### v2.0.7
 - **Quick Format Selector Dropdown**: Interactive format selector on the Archive Name card enabling 1-click format switching between `.bay`, `.bayg`, `.zip`, `.7z`, and `.tar` without opening Advanced Options.
 - **Authentic v2.0.0 UI Aesthetic**: Always-visible Archive Name card with glowing 3D Bayzip icon tile, clean Hardware Allocation layout (`[ ZSTANDARD MULTI-CORE ]` badge, cyan profile name, clean numeric `0`–`100` slider ticks, and `Target RAM Usage` subcard).
 - **Responsive Full-Screen Scaling**: Dynamically expands central layout from `max-w-2xl` (~672px) up to `max-w-5xl` (~1024px) when maximized, eliminating empty black voids on widescreen monitors while preserving a compact footprint on standard windows.
@@ -179,7 +188,7 @@ graph TD
 - **Fluent Yellow Folder Icons (`#F9D648`)**: Restored authentic Windows 11 Fluent Yellow folder icons across all tree nodes, active directory cards, and flat table views.
 - **Resilient Brand Assets**: Standalone `BayzipLogo` vector fallback component ensures brand tiles and logos never break or disappear on asset load failures.
 
-> 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases (v1.0.1 through v2.0.7), see [CHANGELOG.md](CHANGELOG.md).
+> 📖 **Full Changelog**: For comprehensive release notes, milestone summaries, and full version history across all releases (v1.0.1 through v2.1.1), see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

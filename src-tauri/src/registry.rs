@@ -6,6 +6,25 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+#[cfg(target_os = "windows")]
+#[link(name = "shell32")]
+extern "system" {
+    fn SHChangeNotify(
+        w_event_id: i32,
+        u_flags: u32,
+        dw_item1: *const std::ffi::c_void,
+        dw_item2: *const std::ffi::c_void,
+    );
+}
+
+#[cfg(target_os = "windows")]
+pub fn notify_shell_associations_changed() {
+    unsafe {
+        // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_FLUSH = 0x1000
+        SHChangeNotify(0x0800_0000, 0x1000, std::ptr::null(), std::ptr::null());
+    }
+}
+
 pub fn register_context_menu_sync() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
@@ -248,26 +267,12 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
                 // Refresh Windows Explorer shell & clear icon cache
                 let mut refresh_cmd = Command::new("cmd");
-                refresh_cmd.args(["/C", "ie4uinit.exe -ClearIconCache & ie4uinit.exe -show"]);
+                refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
                 refresh_cmd.creation_flags(CREATE_NO_WINDOW);
                 let _ = refresh_cmd.output();
 
                 #[cfg(target_os = "windows")]
-                {
-                    #[link(name = "shell32")]
-                    extern "system" {
-                        fn SHChangeNotify(
-                            w_event_id: i32,
-                            u_flags: u32,
-                            dw_item1: *const std::ffi::c_void,
-                            dw_item2: *const std::ffi::c_void,
-                        );
-                    }
-                    unsafe {
-                        // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_FLUSH = 0x1000
-                        SHChangeNotify(0x0800_0000, 0x1000, std::ptr::null(), std::ptr::null());
-                    }
-                }
+                notify_shell_associations_changed();
 
                 // Register Windows 11 Modern Context Menu (Sparse Package Identity)
                 let mut is_win11 = false;
@@ -299,14 +304,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 // Force Windows Shell and File Explorer to flush icon cache and reload associations
                 #[cfg(target_os = "windows")]
                 {
-                    #[link(name = "shell32")]
-                    extern "system" {
-                        fn SHChangeNotify(w_event_id: i32, u_flags: u32, dw_item1: *const std::ffi::c_void, dw_item2: *const std::ffi::c_void);
-                    }
-                    unsafe {
-                        // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_FLUSH = 0x1000
-                        SHChangeNotify(0x0800_0000, 0x1000, std::ptr::null(), std::ptr::null());
-                    }
+                    notify_shell_associations_changed();
 
                     let mut refresh_cmd = Command::new("cmd");
                     refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
@@ -345,7 +343,9 @@ pub fn unregister_context_menu_sync() -> Result<String, String> {
             [-HKEY_CURRENT_USER\\Software\\Classes\\.bayg]\r\n\
             [-HKEY_CURRENT_USER\\Software\\Classes\\Bayzip.GamerArchive]\r\n\
             [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bay]\r\n\
-            [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bayg]\r\n"
+            [-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.bayg]\r\n\
+            [HKEY_CURRENT_USER\\Software\\RegisteredApplications]\r\n\
+            \"Bayzip\"=-\r\n\r\n"
         );
 
         let archive_exts = [
@@ -371,15 +371,7 @@ pub fn unregister_context_menu_sync() -> Result<String, String> {
             let _ = std::fs::remove_file(temp_reg);
 
             #[cfg(target_os = "windows")]
-            {
-                #[link(name = "shell32")]
-                extern "system" {
-                    fn SHChangeNotify(w_event_id: i32, u_flags: u32, dw_item1: *const std::ffi::c_void, dw_item2: *const std::ffi::c_void);
-                }
-                unsafe {
-                    SHChangeNotify(0x0800_0000, 0x1000, std::ptr::null(), std::ptr::null());
-                }
-            }
+            notify_shell_associations_changed();
 
             return Ok("Context menu unregistered successfully!".into());
         }

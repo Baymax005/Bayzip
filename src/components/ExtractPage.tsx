@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { ArchiveInfo, ExtractProgress } from "../types";
 import { ArchiveTreeInspector } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
@@ -94,6 +94,54 @@ export function ExtractPage({
   handlePreviewEntry,
 }: ExtractPageProps) {
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+
+  const extractStartTimeRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isExtracting) {
+      if (!extractStartTimeRef.current) {
+        extractStartTimeRef.current = Date.now();
+      }
+    } else {
+      extractStartTimeRef.current = null;
+    }
+  }, [isExtracting]);
+
+  const { speedText, etaText } = useMemo(() => {
+    if (!isExtracting || !extractProgress || extractProgress.bytes_extracted <= 0 || !extractStartTimeRef.current) {
+      return { speedText: null, etaText: null };
+    }
+    const elapsedSec = (Date.now() - extractStartTimeRef.current) / 1000;
+    if (elapsedSec < 0.5) {
+      return { speedText: null, etaText: null };
+    }
+    const speed = extractProgress.bytes_extracted / elapsedSec;
+    const speedFormatted = `${formatBytes(speed)}/s`;
+
+    let etaFormatted = null;
+    const totalBytes =
+      archiveInfo && archiveInfo.total_uncompressed_size && archiveInfo.total_uncompressed_size > 0
+        ? archiveInfo.total_uncompressed_size
+        : 0;
+
+    if (totalBytes > extractProgress.bytes_extracted && speed > 0) {
+      const remainingBytes = totalBytes - extractProgress.bytes_extracted;
+      const remainingSec = Math.round(remainingBytes / speed);
+      if (remainingSec < 60) {
+        etaFormatted = `ETA: ${remainingSec}s`;
+      } else if (remainingSec < 3600) {
+        const m = Math.floor(remainingSec / 60);
+        const s = remainingSec % 60;
+        etaFormatted = `ETA: ${m}m ${s}s`;
+      } else {
+        const h = Math.floor(remainingSec / 3600);
+        const m = Math.floor((remainingSec % 3600) / 60);
+        etaFormatted = `ETA: ${h}h ${m}m`;
+      }
+    }
+
+    return { speedText: speedFormatted, etaText: etaFormatted };
+  }, [isExtracting, extractProgress, archiveInfo]);
 
   const renderExtractSidebar = () => (
     <div className="space-y-4 text-xs">
@@ -540,20 +588,35 @@ export function ExtractPage({
           </div>
 
           <div className="flex justify-between items-center text-[11px] text-[#8A8A8A]">
-            <span>
-              {extractProgress && extractProgress.bytes_extracted > 0 ? (
-                archiveInfo && (archiveInfo.total_uncompressed_size ?? 0) > 0 ? (
-                  `${formatBytes(extractProgress.bytes_extracted)} / ${formatBytes(archiveInfo.total_uncompressed_size!)}`
+            <div className="flex items-center space-x-2 min-w-0">
+              <span className="truncate">
+                {extractProgress && extractProgress.bytes_extracted > 0 ? (
+                  archiveInfo && (archiveInfo.total_uncompressed_size ?? 0) > 0 ? (
+                    `${formatBytes(extractProgress.bytes_extracted)} / ${formatBytes(archiveInfo.total_uncompressed_size!)}`
+                  ) : (
+                    `${formatBytes(extractProgress.bytes_extracted)} uncompressed`
+                  )
                 ) : (
-                  `${formatBytes(extractProgress.bytes_extracted)} uncompressed`
-                )
-              ) : (
-                "High-speed decompression active"
+                  "High-speed decompression active"
+                )}
+              </span>
+              {speedText && (
+                <>
+                  <span className="text-[#555]">•</span>
+                  <span className="font-mono text-[#D0D0D0] font-medium shrink-0">{speedText}</span>
+                </>
               )}
-            </span>
-            <span className="text-[#60CDFF] font-medium">
-              {archiveInfo?.format || "Archive"}
-            </span>
+            </div>
+            <div className="flex items-center space-x-2 shrink-0 ml-2">
+              {etaText && (
+                <span className="text-amber-400 font-mono font-medium">
+                  {etaText}
+                </span>
+              )}
+              <span className="text-[#60CDFF] font-medium">
+                {archiveInfo?.format || "Archive"}
+              </span>
+            </div>
           </div>
         </div>
       )}

@@ -112,6 +112,7 @@ function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   // Extraction State & Password
   const [extractPassword, setExtractPassword] = useState<string>("");
@@ -590,7 +591,12 @@ function App() {
     // 3. Listen to native Tauri file drop events
     getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (event.payload.type === "drop") {
+        if (event.payload.type === "over") {
+          setIsDraggingOver(true);
+        } else if (event.payload.type === "leave") {
+          setIsDraggingOver(false);
+        } else if (event.payload.type === "drop") {
+          setIsDraggingOver(false);
           const paths = event.payload.paths;
           if (paths && paths.length > 0) {
             if (activeModeRef.current === "compress") {
@@ -970,7 +976,8 @@ function App() {
         if (!hasSingleRoot) {
           const fallbackName = selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "archive";
           const stem = getArchiveStemName(archiveInfo?.filename || fallbackName);
-          finalDest = `${extractDest}\\${stem}`;
+          const cleanDest = extractDest.replace(/[/\\]+$/, "");
+          finalDest = `${cleanDest}/${stem}`;
         }
       }
 
@@ -1274,6 +1281,20 @@ function App() {
         error={previewError}
         archivePath={selectedArchive || ""}
       />
+
+      {/* Drag & Drop Visual Indicator Overlay */}
+      {isDraggingOver && (
+        <div className="fixed inset-0 z-50 pointer-events-none bg-[#0078D4]/10 backdrop-blur-[2px] border-2 border-dashed border-[#60CDFF] m-2 rounded-2xl flex flex-col items-center justify-center space-y-3">
+          <div className="w-16 h-16 rounded-2xl bg-[#1A2530]/90 border border-[#60CDFF]/50 flex items-center justify-center shadow-2xl text-[#60CDFF]">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-8 h-8 animate-pulse">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+            </svg>
+          </div>
+          <p className="text-white font-semibold text-xs tracking-wide bg-[#202020]/95 px-4 py-1.5 rounded-full border border-[#3E3E3E] shadow-xl">
+            Drop files or archives here to {activeMode === "extract" ? "extract" : "compress"}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

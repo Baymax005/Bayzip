@@ -134,42 +134,54 @@ pub fn compress_tar(
 }
 
 pub fn headless_quick_compress_tar(p: &Path, output_path: &Path) -> Result<(), String> {
+    headless_quick_compress_tar_items(&[p], output_path)
+}
+
+pub fn headless_quick_compress_tar_items(paths: &[&Path], output_path: &Path) -> Result<(), String> {
     let write_buf_size = get_optimal_write_buffer(output_path, 1024 * 1024);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create tar file: {}", e))?;
     let mut builder = ::tar::Builder::new(BufWriter::with_capacity(write_buf_size, out_file));
-    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-    let parent = p.parent().unwrap_or(p);
 
-    if p.is_file() {
-        builder.append_path_with_name(p, name)
-            .map_err(|e| format!("Tar append file error: {}", e))?;
-    } else if p.is_dir() {
-        fn add_dir_headless<W: Write>(dir: &Path, base: &Path, builder: &mut ::tar::Builder<W>, depth: usize) -> Result<(), String> {
-            if depth > 32 { return Ok(()); }
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if let Ok(m) = std::fs::symlink_metadata(&path) {
-                        let rel = path.strip_prefix(base).unwrap_or(&path);
-                        let clean = rel.to_string_lossy().replace('\\', "/");
-                        let trimmed = clean.trim_start_matches('/');
-                        if trimmed.is_empty() { continue; }
+    fn add_dir_headless<W: Write>(dir: &Path, base: &Path, builder: &mut ::tar::Builder<W>, depth: usize) -> Result<(), String> {
+        if depth > 32 { return Ok(()); }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Ok(m) = std::fs::symlink_metadata(&path) {
+                    let rel = path.strip_prefix(base).unwrap_or(&path);
+                    let clean = rel.to_string_lossy().replace('\\', "/");
+                    let trimmed = clean.trim_start_matches('/');
+                    if trimmed.is_empty() { continue; }
 
-                        if m.is_dir() && !m.file_type().is_symlink() {
-                            let _ = builder.append_dir(trimmed, &path);
-                            add_dir_headless(&path, base, builder, depth + 1)?;
-                        } else if m.is_file() {
-                            builder.append_path_with_name(&path, trimmed)
-                                .map_err(|e| format!("Tar append file error: {}", e))?;
-                        }
+                    if m.is_dir() && !m.file_type().is_symlink() {
+                        let _ = builder.append_dir(trimmed, &path);
+                        add_dir_headless(&path, base, builder, depth + 1)?;
+                    } else if m.is_file() {
+                        builder.append_path_with_name(&path, trimmed)
+                            .map_err(|e| format!("Tar append file error: {}", e))?;
                     }
                 }
             }
-            Ok(())
         }
-        let _ = builder.append_dir(name, p);
-        add_dir_headless(p, parent, &mut builder, 0)?;
+        Ok(())
+    }
+
+    for &p in paths {
+        let parent = p.parent().unwrap_or(p);
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+        if p.is_file() {
+            builder.append_path_with_name(p, name)
+                .map_err(|e| format!("Tar append file error: {}", e))?;
+        } else if p.is_dir() {
+            let rel_name = p.strip_prefix(parent).unwrap_or(p);
+            let clean = rel_name.to_string_lossy().replace('\\', "/");
+            let trimmed = clean.trim_start_matches('/');
+            if !trimmed.is_empty() {
+                let _ = builder.append_dir(trimmed, p);
+            }
+            add_dir_headless(p, parent, &mut builder, 0)?;
+        }
     }
     builder.finish().map_err(|e| format!("Tar finalize error: {}", e))?;
     Ok(())

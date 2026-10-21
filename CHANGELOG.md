@@ -2,6 +2,30 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.1.1] - 2026-10-21
+
+### 🪟 Windows 11 Shell Extension Multi-Selection Archiving
+- **Unified Multi-Item Context Menu Archiving**:
+  - Right-clicking multiple selected files or folders in Windows File Explorer now creates a single comprehensive archive (`ParentFolder.bay`, `.bayg`, `.zip`, `.7z`, or `.tar`) containing all selected items, instead of launching separate standalone archives.
+  - Implemented `headless_quick_compress_targets` across `.bay`, `.zip`, `.tar`, and `.7z` engines.
+- **Silent Headless Execution (`CREATE_NO_WINDOW`)**:
+  - Added the Windows process creation flag `CREATE_NO_WINDOW` (`0x08000000`) before spawning subprocesses from `bayzip_shell.dll`, completely eliminating command prompt window flashes during right-click actions.
+
+### ⚡ Real-Time Throughput Speed, Dynamic ETA & Drag-and-Drop Polish
+- **Live Transfer Speed & Dynamic ETA**:
+  - Active compression cards and extraction footers now calculate real-time transfer speed (`MB/s`) and dynamic completion time remaining (`ETA: Xs`) using elapsed execution timers and processed byte counts.
+- **Interactive Drag-and-Drop Fluent Overlay**:
+  - Main window listens to dragging events across child elements, displaying a Fluent dark backdrop with an illuminated cyan border glow and drag drop badge.
+- **Subfolder Path Normalization**:
+  - Unified subfolder path separators across Windows and cross-platform views using standard forward-slash (`/`) directory hierarchy formatting.
+
+### 🛡️ Calibrated Non-Blocking I/O Streaming & Clean Shell Uninstallation
+- **Hardware-Calibrated Storage I/O Boundaries**:
+  - Calibrated physical read slices (256 KB for USB, 512 KB for SATA, 1 MB for NVMe) and destination write caps (512 KB for USB, 1 MB for SATA, 2 MB for NVMe).
+  - Eliminates the Windows 11 NVMe dynamic SLC controller queue stall and USB Quick-Removal write locks while maintaining a responsive 20 FPS progress bar and instant cancellation.
+- **Clean Registry & Shell Association Management**:
+  - Consolidated shell association notification into `notify_shell_associations_changed()`, removed duplicate `SHChangeNotify` definitions, removed obsolete `ie4uinit.exe` calls, and added clean `Software\RegisteredApplications` removal during uninstallation.
+
 ## [v2.1.0] - 2026-10-21
 
 ### 📦 Windows Installer & Uninstaller Branding (NSIS)

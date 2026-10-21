@@ -14,7 +14,7 @@ pub use types::*;
 pub use priority::ScopedPriorityGuard;
 pub use registry::{register_context_menu_sync, unregister_context_menu_sync};
 pub use inspector::{detect_archive_type, inspect_archive, sanitize_archive_path, archive_stem_name, has_instant_bay_toc, safe_atomic_rename, get_single_root_dir, clear_readonly};
-pub use compressor::{headless_quick_compress, compress_files_sync, compute_path_size};
+pub use compressor::{headless_quick_compress, headless_quick_compress_targets, compress_files_sync, compute_path_size};
 pub use extractor::{headless_extract_here, headless_extract_to_subfolder, universal_extract, extract_archive_sync};
 
 #[tauri::command]

@@ -490,7 +490,10 @@ pub fn compress_bay(
 }
 
 pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool) -> Result<(), String> {
-    let parent = p.parent().unwrap_or(p);
+    headless_quick_compress_bay_items(&[p], output_path, is_gamer)
+}
+
+pub fn headless_quick_compress_bay_items(paths: &[&Path], output_path: &Path, is_gamer: bool) -> Result<(), String> {
     let mut toc_entries: Vec<ArchiveEntryItem> = Vec::new();
 
     let (read_buf_size, mut write_buf_size) = get_io_buffers(50);
@@ -514,138 +517,141 @@ pub fn headless_quick_compress_bay(p: &Path, output_path: &Path, is_gamer: bool)
 
     let mut read_buf = vec![0u8; read_buf_size];
 
-    if p.is_file() {
-        if let Ok(mut f) = File::open(p) {
-            let file_meta = f.metadata().ok();
-            let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
-            let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-            let filename_bytes = filename.as_bytes();
-            
-            let _ = encoder.write_all(&[1u8]); // 1 = file entry
-            let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
-            let _ = encoder.write_all(filename_bytes);
-            let _ = encoder.write_all(&file_size.to_le_bytes());
-            toc_entries.push(ArchiveEntryItem {
-                name: filename.to_string(),
-                size: file_size,
-                is_dir: false,
-            });
-
-            let slice_size = get_optimal_read_slice(p);
-            let mut written: u64 = 0;
-            while written < file_size {
-                let to_read = ((file_size - written) as usize).min(read_buf.len()).min(slice_size);
-                match f.read(&mut read_buf[..to_read]) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let _ = encoder.write_all(&read_buf[..n]);
-                        written += n as u64;
-                    }
-                    Err(_) => break,
-                }
-            }
-            if written < file_size {
-                let zeros = [0u8; 4096];
-                let mut rem = file_size - written;
-                while rem > 0 {
-                    let to_write = (rem as usize).min(zeros.len());
-                    let _ = encoder.write_all(&zeros[..to_write]);
-                    rem -= to_write as u64;
-                }
-            }
+    fn add_dir<W: Write>(dir: &Path, base_parent: &Path, encoder: &mut zstd::stream::Encoder<W>, read_buf: &mut [u8], depth: usize, toc_entries: &mut Vec<ArchiveEntryItem>) {
+        if depth > 32 {
+            return;
         }
-    } else if p.is_dir() {
-        let rel_name = p.strip_prefix(parent).unwrap_or(p);
-        let rel_str = rel_name.to_string_lossy().replace('\\', "/");
-        let clean_rel = rel_str.trim_start_matches('/').to_string();
-        if !clean_rel.is_empty() {
-            let dir_name = format!("{}/", clean_rel);
-            let dir_bytes = dir_name.as_bytes();
-            let _ = encoder.write_all(&[2u8]);
-            let _ = encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes());
-            let _ = encoder.write_all(dir_bytes);
-            let _ = encoder.write_all(&0u64.to_le_bytes());
-            toc_entries.push(ArchiveEntryItem {
-                name: dir_name,
-                size: 0,
-                is_dir: true,
-            });
-        }
-
-        fn add_dir<W: Write>(dir: &Path, base_parent: &Path, encoder: &mut zstd::stream::Encoder<W>, read_buf: &mut [u8], depth: usize, toc_entries: &mut Vec<ArchiveEntryItem>) {
-            if depth > 32 {
-                return;
-            }
-            if let Ok(read_dir) = std::fs::read_dir(dir) {
-                let mut entries: Vec<_> = read_dir.flatten().collect();
-                entries.sort_by_key(|e| is_precompressed_file(&e.path()));
-                for entry in entries {
-                    let entry_path = entry.path();
-                    if let Ok(m) = std::fs::symlink_metadata(&entry_path) {
-                        if m.is_file() {
-                            if let Ok(mut f) = File::open(&entry_path) {
-                                let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
-                                let rel_str = rel_name.to_string_lossy().replace('\\', "/");
-                                let clean_rel = rel_str.trim_start_matches('/').to_string();
-                                let bytes = clean_rel.as_bytes();
-                                let file_size = f.metadata().map(|m| m.len()).unwrap_or(m.len());
-                                let _ = encoder.write_all(&[1u8]);
-                                let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
-                                let _ = encoder.write_all(bytes);
-                                let _ = encoder.write_all(&file_size.to_le_bytes());
-                                toc_entries.push(ArchiveEntryItem {
-                                    name: clean_rel,
-                                    size: file_size,
-                                    is_dir: false,
-                                });
-
-                                let slice_size = get_optimal_read_slice(&entry_path);
-                                let mut written: u64 = 0;
-                                while written < file_size {
-                                    let to_read = ((file_size - written) as usize).min(read_buf.len()).min(slice_size);
-                                    match f.read(&mut read_buf[..to_read]) {
-                                        Ok(0) => break,
-                                        Ok(n) => { 
-                                            let _ = encoder.write_all(&read_buf[..n]); 
-                                            written += n as u64;
-                                        },
-                                        Err(_) => break,
-                                    }
-                                }
-                                if written < file_size {
-                                    let zeros = [0u8; 4096];
-                                    let mut rem = file_size - written;
-                                    while rem > 0 {
-                                        let to_write = (rem as usize).min(zeros.len());
-                                        let _ = encoder.write_all(&zeros[..to_write]);
-                                        rem -= to_write as u64;
-                                    }
-                                }
-                            }
-                        } else if m.is_dir() && !m.file_type().is_symlink() {
+        if let Ok(read_dir) = std::fs::read_dir(dir) {
+            let mut entries: Vec<_> = read_dir.flatten().collect();
+            entries.sort_by_key(|e| is_precompressed_file(&e.path()));
+            for entry in entries {
+                let entry_path = entry.path();
+                if let Ok(m) = std::fs::symlink_metadata(&entry_path) {
+                    if m.is_file() {
+                        if let Ok(mut f) = File::open(&entry_path) {
                             let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
                             let rel_str = rel_name.to_string_lossy().replace('\\', "/");
                             let clean_rel = rel_str.trim_start_matches('/').to_string();
-                            if !clean_rel.is_empty() {
-                                let dir_name = format!("{}/", clean_rel);
-                                let dir_bytes = dir_name.as_bytes();
-                                let _ = encoder.write_all(&[2u8]);
-                                let _ = encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes());
-                                let _ = encoder.write_all(dir_bytes);
-                                let _ = encoder.write_all(&0u64.to_le_bytes());
-                                toc_entries.push(ArchiveEntryItem {
-                                    name: dir_name,
-                                    size: 0,
-                                    is_dir: true,
-                                });
+                            let bytes = clean_rel.as_bytes();
+                            let file_size = f.metadata().map(|m| m.len()).unwrap_or(m.len());
+                            let _ = encoder.write_all(&[1u8]);
+                            let _ = encoder.write_all(&(bytes.len() as u32).to_le_bytes());
+                            let _ = encoder.write_all(bytes);
+                            let _ = encoder.write_all(&file_size.to_le_bytes());
+                            toc_entries.push(ArchiveEntryItem {
+                                name: clean_rel,
+                                size: file_size,
+                                is_dir: false,
+                            });
+
+                            let slice_size = get_optimal_read_slice(&entry_path);
+                            let mut written: u64 = 0;
+                            while written < file_size {
+                                let to_read = ((file_size - written) as usize).min(read_buf.len()).min(slice_size);
+                                match f.read(&mut read_buf[..to_read]) {
+                                    Ok(0) => break,
+                                    Ok(n) => { 
+                                        let _ = encoder.write_all(&read_buf[..n]); 
+                                        written += n as u64;
+                                    },
+                                    Err(_) => break,
+                                }
                             }
-                            add_dir(&entry_path, base_parent, encoder, read_buf, depth + 1, toc_entries);
+                            if written < file_size {
+                                let zeros = [0u8; 4096];
+                                let mut rem = file_size - written;
+                                while rem > 0 {
+                                    let to_write = (rem as usize).min(zeros.len());
+                                    let _ = encoder.write_all(&zeros[..to_write]);
+                                    rem -= to_write as u64;
+                                }
+                            }
                         }
+                    } else if m.is_dir() && !m.file_type().is_symlink() {
+                        let rel_name = entry_path.strip_prefix(base_parent).unwrap_or(&entry_path);
+                        let rel_str = rel_name.to_string_lossy().replace('\\', "/");
+                        let clean_rel = rel_str.trim_start_matches('/').to_string();
+                        if !clean_rel.is_empty() {
+                            let dir_name = format!("{}/", clean_rel);
+                            let dir_bytes = dir_name.as_bytes();
+                            let _ = encoder.write_all(&[2u8]);
+                            let _ = encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes());
+                            let _ = encoder.write_all(dir_bytes);
+                            let _ = encoder.write_all(&0u64.to_le_bytes());
+                            toc_entries.push(ArchiveEntryItem {
+                                name: dir_name,
+                                size: 0,
+                                is_dir: true,
+                            });
+                        }
+                        add_dir(&entry_path, base_parent, encoder, read_buf, depth + 1, toc_entries);
                     }
                 }
             }
         }
-        add_dir(p, parent, &mut encoder, &mut read_buf, 0, &mut toc_entries);
+    }
+
+    for &p in paths {
+        let parent = p.parent().unwrap_or(p);
+        if p.is_file() {
+            if let Ok(mut f) = File::open(p) {
+                let file_meta = f.metadata().ok();
+                let file_size = file_meta.map(|m| m.len()).unwrap_or(0);
+                let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                let filename_bytes = filename.as_bytes();
+                
+                let _ = encoder.write_all(&[1u8]); // 1 = file entry
+                let _ = encoder.write_all(&(filename_bytes.len() as u32).to_le_bytes());
+                let _ = encoder.write_all(filename_bytes);
+                let _ = encoder.write_all(&file_size.to_le_bytes());
+                toc_entries.push(ArchiveEntryItem {
+                    name: filename.to_string(),
+                    size: file_size,
+                    is_dir: false,
+                });
+
+                let slice_size = get_optimal_read_slice(p);
+                let mut written: u64 = 0;
+                while written < file_size {
+                    let to_read = ((file_size - written) as usize).min(read_buf.len()).min(slice_size);
+                    match f.read(&mut read_buf[..to_read]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let _ = encoder.write_all(&read_buf[..n]);
+                            written += n as u64;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if written < file_size {
+                    let zeros = [0u8; 4096];
+                    let mut rem = file_size - written;
+                    while rem > 0 {
+                        let to_write = (rem as usize).min(zeros.len());
+                        let _ = encoder.write_all(&zeros[..to_write]);
+                        rem -= to_write as u64;
+                    }
+                }
+            }
+        } else if p.is_dir() {
+            let rel_name = p.strip_prefix(parent).unwrap_or(p);
+            let rel_str = rel_name.to_string_lossy().replace('\\', "/");
+            let clean_rel = rel_str.trim_start_matches('/').to_string();
+            if !clean_rel.is_empty() {
+                let dir_name = format!("{}/", clean_rel);
+                let dir_bytes = dir_name.as_bytes();
+                let _ = encoder.write_all(&[2u8]);
+                let _ = encoder.write_all(&(dir_bytes.len() as u32).to_le_bytes());
+                let _ = encoder.write_all(dir_bytes);
+                let _ = encoder.write_all(&0u64.to_le_bytes());
+                toc_entries.push(ArchiveEntryItem {
+                    name: dir_name,
+                    size: 0,
+                    is_dir: true,
+                });
+            }
+            add_dir(p, parent, &mut encoder, &mut read_buf, 0, &mut toc_entries);
+        }
     }
 
     let _ = encoder.write_all(&[0u8]); // 0 = EOF

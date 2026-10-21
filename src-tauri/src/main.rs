@@ -5,9 +5,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 4 && args[1] == "--quick-compress" {
         let format = &args[2];
-        for target_file in &args[3..] {
-            let _ = bayzip_lib::headless_quick_compress(format, target_file.trim_matches('\"'));
-        }
+        let targets: Vec<&str> = args[3..].iter().map(|s| s.trim_matches('\"')).collect();
+        let _ = bayzip_lib::headless_quick_compress_targets(format, &targets);
         return;
     }
     if args.len() >= 3 && args[1] == "--extract-here" {
