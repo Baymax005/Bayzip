@@ -216,35 +216,36 @@ fn detect_drive_bus(drive_letter: char) -> DriveBusKind {
 }
 
 /// Query the optimal sequential read slice size for a given file path based on the underlying physical drive bus.
-/// - External USB / Flash Thumb Drives / Ext HDDs: Fixed 1 MB (safe against controller timeouts/retries)
-/// - Internal SATA (SSD / HDD): Fixed 4 MB (smooth OS throughput)
-/// - Internal PCIe NVMe SSD: Fixed 8 MB (maximum multi-gigabyte line speed)
-/// - Fallback / Unknown / Network share: Fixed 2 MB
+/// - External USB / Flash Thumb Drives / Ext HDDs: Fixed 256 KB (prevents USB controller saturation and high latency)
+/// - Internal SATA (SSD / HDD): Fixed 512 KB (smooth OS throughput without disk head thrashing)
+/// - Internal PCIe NVMe SSD: Fixed 1 MB (saturates multi-gigabyte PCIe burst line rate without cache pollution)
+/// - Fallback / Unknown / Network share: Fixed 256 KB
 #[cfg(target_os = "windows")]
 pub fn get_optimal_read_slice(path: &Path) -> usize {
     match get_drive_bus_kind(path) {
-        DriveBusKind::UsbRemovable => 1024 * 1024,       // 1 MB: External USB / Flash Thumb Drives
-        DriveBusKind::Sata => 4 * 1024 * 1024,          // 4 MB: Internal SATA (SSD / HDD)
-        DriveBusKind::Nvme => 8 * 1024 * 1024,          // 8 MB: Internal PCIe NVMe SSD
-        DriveBusKind::Unknown => 2 * 1024 * 1024,       // 2 MB: Network / UNC / Fallback
+        DriveBusKind::UsbRemovable => 256 * 1024,      // 256 KB: External USB / Flash Thumb Drives
+        DriveBusKind::Sata => 512 * 1024,              // 512 KB: Internal SATA (SSD / HDD)
+        DriveBusKind::Nvme => 1024 * 1024,             // 1 MB: Internal PCIe NVMe SSD
+        DriveBusKind::Unknown => 256 * 1024,          // 256 KB: Network / UNC / Fallback
     }
 }
 
 /// Query the optimal sequential write buffer size for a target output archive based on the destination drive bus.
-/// Prevents slow USB thumb drives from locking in multi-second synchronous write stalls under Windows Quick-Removal policy.
-/// - External USB / Flash Thumb Drives: Capped at 16 MB max (instant cancellation response & smooth progress bar)
-/// - Internal SATA SSD / HDD: Capped at 64 MB max (smooth sequential flushing without head thrashing)
-/// - Internal PCIe NVMe SSD: Full requested buffer up to 128 MB (unleashes multi-gigabyte PCIe burst line rate)
-/// - Fallback / Unknown / Network share: Capped at 32 MB max
+/// Prevents slow USB thumb drives from locking in multi-second synchronous write stalls under Windows Quick-Removal policy,
+/// and eliminates the 221ms queue depth latency spikes on NVMe drives caused by massive 128 MB monolithic flushes.
+/// - External USB / Flash Thumb Drives: Capped at 512 KB max (instant cancellation response & smooth progress updates)
+/// - Internal SATA SSD / HDD: Capped at 1 MB max (smooth sequential flushing without head thrashing)
+/// - Internal PCIe NVMe SSD: Capped at 2 MB max (optimal line rate without dirty-page stalls or latency spikes)
+/// - Fallback / Unknown / Network share: Capped at 512 KB max
 #[cfg(target_os = "windows")]
 pub fn get_optimal_write_buffer(output_path: &Path, requested_buffer: usize) -> usize {
     let cap = match get_drive_bus_kind(output_path) {
-        DriveBusKind::UsbRemovable => 16 * 1024 * 1024, // 16 MB max
-        DriveBusKind::Sata => 64 * 1024 * 1024,         // 64 MB max
-        DriveBusKind::Nvme => 128 * 1024 * 1024,        // 128 MB max
-        DriveBusKind::Unknown => 32 * 1024 * 1024,      // 32 MB max
+        DriveBusKind::UsbRemovable => 512 * 1024,       // 512 KB max
+        DriveBusKind::Sata => 1024 * 1024,              // 1 MB max
+        DriveBusKind::Nvme => 2 * 1024 * 1024,          // 2 MB max
+        DriveBusKind::Unknown => 512 * 1024,            // 512 KB max
     };
-    requested_buffer.min(cap).max(1024 * 1024)
+    requested_buffer.min(cap).max(64 * 1024)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -254,10 +255,10 @@ pub fn get_drive_bus_kind(_path: &Path) -> DriveBusKind {
 
 #[cfg(not(target_os = "windows"))]
 pub fn get_optimal_read_slice(_path: &Path) -> usize {
-    4 * 1024 * 1024
+    512 * 1024
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn get_optimal_write_buffer(_output_path: &Path, requested_buffer: usize) -> usize {
-    requested_buffer.min(64 * 1024 * 1024).max(1024 * 1024)
+    requested_buffer.min(2 * 1024 * 1024).max(64 * 1024)
 }

@@ -281,7 +281,7 @@ pub fn compress_zip(
 }
 
 pub fn headless_quick_compress_zip(p: &Path, output_path: &Path) -> Result<(), String> {
-    let write_buf_size = get_optimal_write_buffer(output_path, 32 * 1024 * 1024);
+    let write_buf_size = get_optimal_write_buffer(output_path, 1024 * 1024);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create zip file: {}", e))?;
     // Buffer scaled by destination bus to prevent disk thrashing and maximize sequential write speeds

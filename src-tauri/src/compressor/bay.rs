@@ -296,13 +296,10 @@ pub fn compress_bay(
         let mut last_emit = Instant::now();
 
         let (read_buf_size, mut write_buf_size) = get_io_buffers(slider_value);
-        if zstd_level >= 19 {
-            write_buf_size = write_buf_size.min(32 * 1024 * 1024);
-        }
         write_buf_size = get_optimal_write_buffer(&temp_final, write_buf_size);
         let out_file = File::create(&temp_final)
             .map_err(|e| format!("Failed to create intermediate file: {}", e))?;
-        // Buffer capacity scaled by Hardware Allocation slider & destination drive bus
+        // Buffer capacity scaled by destination drive bus (512 KB USB / 1 MB SATA / 2 MB NVMe)
         let buf_out = BufWriter::with_capacity(write_buf_size, out_file);
 
         let out_writer = if let Some(pwd) = pwd_trimmed {

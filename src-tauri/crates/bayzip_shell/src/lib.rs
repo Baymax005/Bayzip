@@ -182,7 +182,23 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
 
         match self.action {
             CommandAction::Root | CommandAction::OpenGui => {
-                cmd.arg("--gui-extract");
+                let is_all_archives = !paths.is_empty() && paths.iter().all(|p| {
+                    let path = std::path::Path::new(p);
+                    if path.is_dir() {
+                        return false;
+                    }
+                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    matches!(
+                        ext.as_str(),
+                        "bay" | "bayg" | "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "iso" | "cab"
+                    )
+                });
+
+                if is_all_archives {
+                    cmd.arg("--gui-extract");
+                } else {
+                    cmd.arg("--gui-compress");
+                }
                 for p in &paths {
                     cmd.arg(p);
                 }

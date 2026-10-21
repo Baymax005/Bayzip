@@ -32,7 +32,7 @@ pub fn compress_7z(
     ));
 
     let res = (|| -> Result<(), String> {
-        let write_buf_size = get_optimal_write_buffer(&temp_output, 16 * 1024 * 1024);
+        let write_buf_size = get_optimal_write_buffer(&temp_output, 1024 * 1024);
         let out_file = File::create(&temp_output)
             .map_err(|e| format!("Failed to create 7z archive: {}", e))?;
         let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);
@@ -179,7 +179,7 @@ pub fn compress_7z(
 }
 
 pub fn headless_quick_compress_7z(p: &Path, output_path: &Path) -> Result<(), String> {
-    let write_buf_size = get_optimal_write_buffer(output_path, 16 * 1024 * 1024);
+    let write_buf_size = get_optimal_write_buffer(output_path, 1024 * 1024);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create 7z: {}", e))?;
     let buf_writer = BufWriter::with_capacity(write_buf_size, out_file);

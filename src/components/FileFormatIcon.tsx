@@ -1,10 +1,60 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+
+// In-memory frontend cache for native Windows Shell extracted icons (base64 data URLs)
+const WINDOWS_ICON_CACHE = new Map<string, string>();
+const PENDING_REQUESTS = new Set<string>();
+const LISTENERS = new Set<() => void>();
+
+function notifyListeners() {
+  LISTENERS.forEach((fn) => fn());
+}
+
+/**
+ * Pre-fetch native Windows icons for a batch of filenames/extensions in the background
+ */
+export function prefetchFileIcons(fileNamesOrExts: string[]) {
+  const missing = fileNamesOrExts
+    .map((name) => {
+      const clean = (name || "").trim().replace(/^["']|["']$/g, "");
+      const baseName = clean.split(/[/\\]/).pop() || clean;
+      const dotIndex = baseName.lastIndexOf(".");
+      return dotIndex !== -1 ? baseName.slice(dotIndex + 1).toLowerCase() : "";
+    })
+    .filter((ext) => ext && !WINDOWS_ICON_CACHE.has(ext) && !PENDING_REQUESTS.has(ext));
+
+  if (missing.length === 0) return;
+
+  const unique = Array.from(new Set(missing));
+  unique.forEach((ext) => PENDING_REQUESTS.add(ext));
+
+  invoke<Record<string, string>>("get_file_icons", { extensions: unique })
+    .then((icons) => {
+      let updated = false;
+      for (const [ext, dataUrl] of Object.entries(icons)) {
+        if (dataUrl) {
+          WINDOWS_ICON_CACHE.set(ext.toLowerCase(), dataUrl);
+          updated = true;
+        }
+      }
+      if (updated) {
+        notifyListeners();
+      }
+    })
+    .catch((err) => {
+      console.warn("Failed to prefetch native Windows icons:", err);
+    })
+    .finally(() => {
+      unique.forEach((ext) => PENDING_REQUESTS.delete(ext));
+    });
+}
 
 export type FileCategory =
   | "pdf"
   | "word"
   | "excel"
   | "powerpoint"
+  | "packet"
   | "image"
   | "code"
   | "archive"
@@ -15,7 +65,11 @@ export type FileCategory =
 
 export function getFileCategory(name: string): FileCategory {
   if (!name) return "doc";
-  const ext = name.split(".").pop()?.toLowerCase() || "";
+  const clean = name.trim().replace(/^["']|["']$/g, "");
+  const fileName = clean.split(/[/\\]/).pop() || clean;
+  const dotIndex = fileName.lastIndexOf(".");
+  if (dotIndex === -1 || dotIndex === 0) return "doc";
+  const ext = fileName.slice(dotIndex + 1).toLowerCase();
 
   // 1. Security restricted binaries & dangerous scripts
   if (
@@ -28,46 +82,51 @@ export function getFileCategory(name: string): FileCategory {
   }
 
   // 2. Adobe Acrobat & PDF Documents
-  if (ext === "pdf") {
+  if (["pdf", "oxps", "xps"].includes(ext)) {
     return "pdf";
   }
 
   // 3. Microsoft Word Documents
-  if (["doc", "docx", "docm", "dot", "dotx", "rtf", "odt", "wps"].includes(ext)) {
+  if (["doc", "docx", "docm", "dot", "dotx", "dotm", "rtf", "odt", "wps", "pages"].includes(ext)) {
     return "word";
   }
 
   // 4. Microsoft Excel Spreadsheets
-  if (["xls", "xlsx", "xlsm", "xlsb", "xlt", "xltx", "csv", "tsv", "ods"].includes(ext)) {
+  if (["xls", "xlsx", "xlsm", "xlsb", "xlt", "xltx", "xltm", "csv", "tsv", "ods", "numbers"].includes(ext)) {
     return "excel";
   }
 
   // 5. Microsoft PowerPoint Presentations
-  if (["ppt", "pptx", "pptm", "pot", "potx", "pps", "ppsx", "odp"].includes(ext)) {
+  if (["ppt", "pptx", "pptm", "pot", "potx", "pps", "ppsx", "odp", "key"].includes(ext)) {
     return "powerpoint";
   }
 
-  // 6. Visual Media / Images
+  // 6. Packet Tracer & Network Traces / Labs
+  if (["pkt", "pka", "pkz", "cap", "pcap", "pcapng"].includes(ext)) {
+    return "packet";
+  }
+
+  // 7. Visual Media / Images
   if (
     [
       "png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "svg",
-      "tiff", "tif", "avif", "heic", "raw", "psd"
+      "tiff", "tif", "avif", "heic", "raw", "psd", "ai", "eps"
     ].includes(ext)
   ) {
     return "image";
   }
 
-  // 7. Archives & Compressed Packages
+  // 8. Archives & Compressed Packages
   if (
     [
       "zip", "7z", "bay", "bayg", "tar", "gz", "tgz", "rar",
-      "bz2", "xz", "iso", "cab", "zst", "lz4", "dmg", "apk"
+      "bz2", "xz", "iso", "cab", "zst", "lz4", "dmg", "apk", "jar"
     ].includes(ext)
   ) {
     return "archive";
   }
 
-  // 8. Audio / Video Media
+  // 9. Audio / Video Media
   if (
     [
       "mp3", "wav", "flac", "ogg", "m4a", "aac", "wma",
@@ -77,7 +136,7 @@ export function getFileCategory(name: string): FileCategory {
     return "media";
   }
 
-  // 9. Source Code, Markup & Configs
+  // 10. Source Code, Markup & Configs
   if (
     [
       "js", "ts", "jsx", "tsx", "rs", "py", "c", "cpp", "cc", "cxx", "h", "hpp", "cs",
@@ -88,7 +147,7 @@ export function getFileCategory(name: string): FileCategory {
     return "code";
   }
 
-  // 10. Plain text / Markdown / Notes
+  // 11. Plain text / Markdown / Notes
   if (
     [
       "txt", "md", "markdown", "log", "ini", "cfg", "conf", "env",
@@ -114,6 +173,73 @@ export const FileFormatIcon: React.FC<FileFormatIconProps> = ({
   size = "sm",
   className = "",
 }) => {
+  const clean = (fileName || "").trim().replace(/^["']|["']$/g, "");
+  const baseName = clean.split(/[/\\]/).pop() || clean;
+  const dotIndex = baseName.lastIndexOf(".");
+  const ext = dotIndex !== -1 ? baseName.slice(dotIndex + 1).toLowerCase() : "";
+
+  const [winIcon, setWinIcon] = useState<string | null>(() => {
+    return ext ? WINDOWS_ICON_CACHE.get(ext) || null : null;
+  });
+
+  useEffect(() => {
+    if (!ext) return;
+
+    if (WINDOWS_ICON_CACHE.has(ext)) {
+      setWinIcon(WINDOWS_ICON_CACHE.get(ext)!);
+      return;
+    }
+
+    const onUpdate = () => {
+      if (WINDOWS_ICON_CACHE.has(ext)) {
+        setWinIcon(WINDOWS_ICON_CACHE.get(ext)!);
+      }
+    };
+    LISTENERS.add(onUpdate);
+
+    if (!PENDING_REQUESTS.has(ext)) {
+      PENDING_REQUESTS.add(ext);
+      invoke<string | null>("get_file_icon", { extension: ext })
+        .then((iconUrl) => {
+          if (iconUrl) {
+            WINDOWS_ICON_CACHE.set(ext, iconUrl);
+            setWinIcon(iconUrl);
+            notifyListeners();
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          PENDING_REQUESTS.delete(ext);
+        });
+    }
+
+    return () => {
+      LISTENERS.delete(onUpdate);
+    };
+  }, [ext]);
+
+  // If native Windows Shell icon is available, render the authentic OS icon!
+  if (winIcon) {
+    const sizeClasses =
+      size === "md"
+        ? "w-6 h-6 shrink-0 object-contain"
+        : size === "lg"
+        ? "w-12 h-12 shrink-0 object-contain"
+        : size === "xl"
+        ? "w-16 h-16 shrink-0 object-contain"
+        : "w-4 h-4 shrink-0 object-contain";
+
+    return (
+      <img
+        src={winIcon}
+        alt={ext}
+        className={`${sizeClasses} ${className}`}
+        loading="lazy"
+        draggable={false}
+      />
+    );
+  }
+
   const cat = category || getFileCategory(fileName);
 
   // Large / Hero View (Used for Preview modal centers & detailed cards)
@@ -293,6 +419,50 @@ export const FileFormatIcon: React.FC<FileFormatIconProps> = ({
         </div>
       );
     }
+
+    if (cat === "packet") {
+      return (
+        <div className={`relative flex items-center justify-center shrink-0 ${className}`}>
+          <div className="absolute w-24 h-24 bg-cyan-600/25 rounded-full blur-2xl pointer-events-none" />
+          <svg viewBox="0 0 64 64" className={`${iconDim} drop-shadow-xl shrink-0`} fill="none">
+            <defs>
+              <linearGradient id="pktGradLg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#06B6D4" />
+                <stop offset="55%" stopColor="#0891B2" />
+                <stop offset="100%" stopColor="#0E7490" />
+              </linearGradient>
+              <linearGradient id="pktFoldGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#A5F3FC" />
+                <stop offset="100%" stopColor="#67E8F9" />
+              </linearGradient>
+              <linearGradient id="pktTileGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#0891B2" />
+                <stop offset="100%" stopColor="#155E75" />
+              </linearGradient>
+            </defs>
+            <path d="M14 6a6 6 0 0 1 6-6h22l16 16v40a6 6 0 0 1-6 6H20a6 6 0 0 1-6-6V6z" fill="url(#pktGradLg)" />
+            <path d="M42 0l16 16H46a4 4 0 0 1-4-4V0z" fill="url(#pktFoldGrad)" />
+            <rect x="22" y="22" width="20" height="2.5" rx="1.25" fill="rgba(255,255,255,0.35)" />
+            <rect x="22" y="28" width="14" height="2.5" rx="1.25" fill="rgba(255,255,255,0.35)" />
+            <g transform="translate(14, 33)">
+              <rect x="0" y="0" width="36" height="23" rx="4.5" fill="url(#pktTileGrad)" stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
+              <text
+                x="18"
+                y="16.5"
+                textAnchor="middle"
+                fill="#FFFFFF"
+                fontSize="12.5"
+                fontWeight="900"
+                fontFamily="Segoe UI, Inter, Arial, sans-serif"
+                letterSpacing="0.5"
+              >
+                PKT
+              </text>
+            </g>
+          </svg>
+        </div>
+      );
+    }
   }
 
   // Small (16x16 / w-4 h-4) & Medium (24x24 / w-6 h-6 or 32x32)
@@ -417,6 +587,37 @@ export const FileFormatIcon: React.FC<FileFormatIconProps> = ({
             fontFamily="Segoe UI, Inter, -apple-system, sans-serif"
           >
             P
+          </text>
+        </svg>
+      );
+
+    case "packet":
+      return (
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          className={`${sizeClasses} ${className}`}
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          {/* Main Document Body */}
+          <path
+            d="M4 4a2 2 0 0 1 2-2h8.5L20 7.5V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"
+            fill="#0891B2"
+          />
+          {/* Folded Corner Tab */}
+          <path d="M14.5 2v5.5H20L14.5 2z" fill="#67E8F9" />
+          {/* Crisp White PKT Emblem */}
+          <text
+            x="12"
+            y="17"
+            textAnchor="middle"
+            fill="#FFFFFF"
+            fontSize="6.2"
+            fontWeight="900"
+            fontFamily="Segoe UI, Inter, -apple-system, sans-serif"
+            letterSpacing="-0.2"
+          >
+            PKT
           </text>
         </svg>
       );

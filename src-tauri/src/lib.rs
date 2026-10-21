@@ -8,7 +8,7 @@ pub mod extractor;
 
 use std::path::Path;
 use sysinfo::System;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 pub use types::*;
 pub use priority::ScopedPriorityGuard;
@@ -34,6 +34,17 @@ fn get_background_priority_shield() -> bool {
 #[tauri::command]
 fn set_background_priority_shield(enabled: bool) {
     priority::set_background_shield(enabled);
+}
+
+#[tauri::command]
+fn get_smart_media_bypass() -> bool {
+    compressor::utils::is_smart_bypass_enabled()
+}
+
+#[tauri::command]
+fn set_smart_media_bypass(app: AppHandle, enabled: bool) {
+    compressor::utils::set_smart_bypass(enabled);
+    let _ = app.emit("smart_media_bypass_changed", enabled);
 }
 
 #[tauri::command]
@@ -241,6 +252,24 @@ async fn minimize_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn get_file_icon(extension: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(inspector::get_cached_icon(&extension))
+    })
+    .await
+    .map_err(|e| format!("Icon extraction failed: {}", e))?
+}
+
+#[tauri::command]
+async fn get_file_icons(extensions: Vec<String>) -> Result<std::collections::HashMap<String, String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(inspector::get_cached_icons_batch(extensions))
+    })
+    .await
+    .map_err(|e| format!("Batch icon extraction failed: {}", e))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -269,8 +298,12 @@ pub fn run() {
             preview_archive_entry,
             inspect_staged_items,
             preview_staged_file,
+            get_file_icon,
+            get_file_icons,
             get_background_priority_shield,
             set_background_priority_shield,
+            get_smart_media_bypass,
+            set_smart_media_bypass,
             open_settings_window,
             close_settings_window,
             minimize_settings_window

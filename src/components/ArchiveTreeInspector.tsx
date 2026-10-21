@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { ArchiveInfo, ArchiveEntryItem } from "../types";
-import { FileFormatIcon } from "./FileFormatIcon";
+import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 
 export interface ArchiveTreeInspectorProps {
   archiveInfo: ArchiveInfo;
@@ -17,6 +17,7 @@ export interface ArchiveTreeInspectorProps {
   onOpenExpandedModal?: () => void;
   sidebar?: React.ReactNode;
   sidebarTitle?: string;
+  inspectorTitle?: string;
 }
 
 export function normalizeArchiveEntryPath(p: string): string {
@@ -137,6 +138,7 @@ export function ArchiveTreeInspector({
   onOpenExpandedModal,
   sidebar,
   sidebarTitle,
+  inspectorTitle,
 }: ArchiveTreeInspectorProps) {
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [internalExpandedModal, setInternalExpandedModal] = useState<boolean>(false);
@@ -155,30 +157,81 @@ export function ArchiveTreeInspector({
   const [selectedEntryName, setSelectedEntryName] = useState<string | null>(null);
   const [isExclusionMode, setIsExclusionMode] = useState<boolean>(false);
 
+  // Draggable Split Panel Widths for large screens
+  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(288); // Default 288px (w-72)
+  const [rightPanelWidth, setRightPanelWidth] = useState<number>(320); // Default 320px (w-80)
+  const [isDraggingLeft, setIsDraggingLeft] = useState<boolean>(false);
+  const [isDraggingRight, setIsDraggingRight] = useState<boolean>(false);
+
+  const dragLeftStartRef = useRef<{ startX: number; startWidth: number }>({ startX: 0, startWidth: 288 });
+  const dragRightStartRef = useRef<{ startX: number; startWidth: number }>({ startX: 0, startWidth: 320 });
+
+  const handleMouseDownLeft = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingLeft(true);
+    dragLeftStartRef.current = { startX: e.clientX, startWidth: leftPanelWidth };
+  };
+
+  const handleMouseDownRight = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingRight(true);
+    dragRightStartRef.current = { startX: e.clientX, startWidth: rightPanelWidth };
+  };
+
+  useEffect(() => {
+    if (!isDraggingLeft && !isDraggingRight) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingLeft) {
+        const delta = e.clientX - dragLeftStartRef.current.startX;
+        const newWidth = Math.max(180, Math.min(650, dragLeftStartRef.current.startWidth + delta));
+        setLeftPanelWidth(newWidth);
+      } else if (isDraggingRight) {
+        const delta = dragRightStartRef.current.startX - e.clientX;
+        const newWidth = Math.max(240, Math.min(700, dragRightStartRef.current.startWidth + delta));
+        setRightPanelWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingLeft(false);
+      setIsDraggingRight(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDraggingLeft, isDraggingRight]);
+
   const excludedCount = excludedPaths.size;
 
   const isFileExcluded = (filePath: string): boolean => {
     if (!excludedPaths || excludedPaths.size === 0) return false;
-    const clean = normalizeArchiveEntryPath(filePath);
+    const clean = normalizeArchiveEntryPath(filePath).replace(/\/+$/, "");
     if (excludedPaths.has(clean)) return true;
     for (const exc of Array.from(excludedPaths)) {
-      const parentPrefix = exc.endsWith("/") ? exc : exc + "/";
-      if (clean.startsWith(parentPrefix)) return true;
+      const excClean = exc.replace(/\/+$/, "");
+      if (clean.startsWith(excClean + "/")) return true;
     }
     return false;
   };
 
   const isDirExcluded = (dirPath: string): boolean => {
     if (!excludedPaths || excludedPaths.size === 0) return false;
-    const cleanDir = normalizeArchiveEntryPath(dirPath);
+    const cleanDir = normalizeArchiveEntryPath(dirPath).replace(/\/+$/, "");
     if (excludedPaths.has(cleanDir)) return true;
     for (const exc of Array.from(excludedPaths)) {
-      const parentPrefix = exc.endsWith("/") ? exc : exc + "/";
-      if (cleanDir.startsWith(parentPrefix)) return true;
+      const excClean = exc.replace(/\/+$/, "");
+      if (cleanDir.startsWith(excClean + "/")) return true;
     }
     const prefix = cleanDir ? `${cleanDir}/` : "";
     const allEntries = archiveInfo?.entries || [];
-    const filesInDir = allEntries.filter((e) => !e.is_dir && normalizeArchiveEntryPath(e.name).startsWith(prefix));
+    const filesInDir = allEntries.filter((e) => !e.is_dir && normalizeArchiveEntryPath(e.name).replace(/\/+$/, "").startsWith(prefix));
     if (filesInDir.length > 0 && filesInDir.every((f) => isFileExcluded(f.name))) {
       return true;
     }
@@ -193,6 +246,13 @@ export function ArchiveTreeInspector({
   }, [archiveInfo, excludedPaths]);
 
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Batch prefetch native Windows icons for all entries
+  useEffect(() => {
+    if (archiveInfo.entries && archiveInfo.entries.length > 0) {
+      prefetchFileIcons(archiveInfo.entries.map((e) => e.name));
+    }
+  }, [archiveInfo.entries]);
 
   // Close full-screen expand mode on Escape
   useEffect(() => {
@@ -495,7 +555,9 @@ export function ArchiveTreeInspector({
         <svg className="w-4 h-4 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
         </svg>
-        <span className="text-xs font-semibold text-white tracking-wide">Archive Explorer</span>
+        <span className="text-xs font-semibold text-white tracking-wide">
+          {inspectorTitle || (archiveInfo.is_archive === false ? "Staged Items Inspector" : "Archive Explorer")}
+        </span>
         <span className="text-[10px] font-mono bg-[#333333] text-[#A8A8A8] px-2 py-0.5 rounded-full border border-[#444444]">
           {archiveInfo.file_count || 0} item{archiveInfo.file_count !== 1 ? "s" : ""}
         </span>
@@ -628,8 +690,8 @@ export function ArchiveTreeInspector({
               : "text-[#A8A8A8] hover:text-white hover:bg-[#2A2A2A]"
           }`}
         >
-          <span>📦</span>
-          <span>{archiveInfo.filename || "Archive"}</span>
+          <span>{archiveInfo.is_archive === false ? "📁" : "📦"}</span>
+          <span>{archiveInfo.filename || (archiveInfo.is_archive === false ? "Staged Root" : "Archive")}</span>
         </button>
 
         {/* Nested segments */}
@@ -666,7 +728,13 @@ export function ArchiveTreeInspector({
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={viewMode === "tree" ? "Filter files in current folder..." : "Search all files in archive..."}
+          placeholder={
+            viewMode === "tree"
+              ? "Filter files in current folder..."
+              : archiveInfo.is_archive === false
+              ? "Search all staged files..."
+              : "Search all files in archive..."
+          }
           className="w-full bg-[#161616] text-xs text-white pl-8 pr-7 py-1.5 rounded border border-[#333333] focus:border-[#60CDFF] outline-none font-mono placeholder-[#666]"
         />
         <svg className="w-3.5 h-3.5 text-[#777] absolute left-2.5 top-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -823,7 +891,7 @@ export function ArchiveTreeInspector({
 
           const file = item.data;
           const isSelected = selectedEntryName === file.name;
-          const fileNameOnly = file.name.split("/").pop() || file.name;
+          const fileNameOnly = file.name.split(/[/\\]/).pop() || file.name;
           const isExcluded = isFileExcluded(file.name);
 
           return (
@@ -934,7 +1002,7 @@ export function ArchiveTreeInspector({
         className="flex-1 h-full"
         renderRow={(entry, idx) => {
           const isSelected = selectedEntryName === entry.name;
-          const fileNameOnly = entry.name.split("/").pop() || entry.name;
+          const fileNameOnly = entry.name.split(/[/\\]/).pop() || entry.name;
           const isExcluded = !entry.is_dir && isFileExcluded(entry.name);
           const isFolderSkipped = entry.is_dir && isDirExcluded(entry.name);
           const isDimmed = isExcluded || isFolderSkipped;
@@ -1104,7 +1172,7 @@ export function ArchiveTreeInspector({
             onClick={(e) => e.stopPropagation()}
             className={`bg-[#1E1E1E] border border-[#3E3E3E] rounded-xl shadow-2xl flex flex-col w-full ${
               sidebar ? "max-w-[96vw] h-[92vh]" : "max-w-6xl h-[88vh]"
-            } overflow-hidden relative`}
+            } overflow-hidden relative ${isDraggingLeft || isDraggingRight ? "cursor-col-resize select-none" : ""}`}
           >
             {renderToolbar(true)}
 
@@ -1114,7 +1182,7 @@ export function ArchiveTreeInspector({
               </div>
             ) : (
               <div className="flex-1 flex overflow-hidden">
-                <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 flex flex-col overflow-hidden min-w-0">
                   {viewMode === "tree" ? (
                     <>
                       {renderBreadcrumbs()}
@@ -1122,15 +1190,27 @@ export function ArchiveTreeInspector({
                       {/* Dual-Pane Layout: Left Folder Tree, Right Folder Files */}
                       <div className="flex-1 flex overflow-hidden">
                         {/* Left Pane: Hierarchical Tree */}
-                        <div className="w-72 bg-[#1A1A1A] border-r border-[#333333] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0">
+                        <div
+                          style={{ width: `${leftPanelWidth}px` }}
+                          className="bg-[#1A1A1A] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0"
+                        >
                           <div className="text-[10px] font-bold tracking-wider uppercase text-[#888888] px-2 py-1 mb-1">
                             Folder Hierarchy
                           </div>
                           {renderTreeFolderNode(treeRoot)}
                         </div>
 
+                        {/* Draggable Resizer: Left Folder Tree */}
+                        <div
+                          onMouseDown={handleMouseDownLeft}
+                          className="w-1.5 hover:w-1.5 bg-[#262626] hover:bg-[#60CDFF] active:bg-[#60CDFF] cursor-col-resize transition-colors shrink-0 z-20 flex items-center justify-center group select-none"
+                          title="Drag to resize Folder Hierarchy panel"
+                        >
+                          <div className="w-0.5 h-8 bg-[#444444] group-hover:bg-white rounded-full transition-colors"></div>
+                        </div>
+
                         {/* Right Pane: Files inside selected folder */}
-                        <div className="flex-1 bg-[#181818] overflow-hidden flex flex-col">
+                        <div className="flex-1 bg-[#181818] overflow-hidden flex flex-col min-w-0">
                           <div className="px-3 py-1.5 bg-[#222222] border-b border-[#2E2E2E] text-[11px] font-mono text-[#A8A8A8] flex justify-between shrink-0">
                             <span>Folder: <span className="text-white font-semibold">/{currentFolderPath || ""}</span></span>
                             <span>Double-click or Spacebar to Preview</span>
@@ -1153,16 +1233,30 @@ export function ArchiveTreeInspector({
 
                 {/* Right Options Sidebar (WinRAR / Pro Archiver style) */}
                 {sidebar && (
-                  <div className="w-80 bg-[#202020] border-l border-[#333333] flex flex-col shrink-0 overflow-y-auto custom-scrollbar p-4 space-y-4">
-                    {sidebarTitle && (
-                      <div className="flex items-center justify-between border-b border-[#3E3E3E] pb-2 mb-1 shrink-0">
-                        <span className="text-xs uppercase tracking-wider font-semibold text-[#60CDFF]">
-                          {sidebarTitle}
-                        </span>
-                      </div>
-                    )}
-                    {sidebar}
-                  </div>
+                  <>
+                    {/* Draggable Resizer: Right Sidebar */}
+                    <div
+                      onMouseDown={handleMouseDownRight}
+                      className="w-1.5 hover:w-1.5 bg-[#262626] hover:bg-[#60CDFF] active:bg-[#60CDFF] cursor-col-resize transition-colors shrink-0 z-20 flex items-center justify-center group select-none"
+                      title="Drag to resize Options panel"
+                    >
+                      <div className="w-0.5 h-8 bg-[#444444] group-hover:bg-white rounded-full transition-colors"></div>
+                    </div>
+
+                    <div
+                      style={{ width: `${rightPanelWidth}px` }}
+                      className="bg-[#202020] flex flex-col shrink-0 overflow-y-auto custom-scrollbar p-4 space-y-4"
+                    >
+                      {sidebarTitle && (
+                        <div className="flex items-center justify-between border-b border-[#3E3E3E] pb-2 mb-1 shrink-0">
+                          <span className="text-xs uppercase tracking-wider font-semibold text-[#60CDFF]">
+                            {sidebarTitle}
+                          </span>
+                        </div>
+                      )}
+                      {sidebar}
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -1184,7 +1278,7 @@ export function ArchiveTreeInspector({
                 {selectedEntryName && (
                   <>
                     <span>•</span>
-                    <span className="text-[#60CDFF] truncate max-w-xs">Selected: {selectedEntryName.split("/").pop()}</span>
+                    <span className="text-[#60CDFF] truncate max-w-xs">Selected: {selectedEntryName.split(/[/\\]/).pop()}</span>
                   </>
                 )}
               </div>

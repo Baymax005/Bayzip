@@ -1,6 +1,17 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub static SMART_BYPASS_ENABLED: AtomicBool = AtomicBool::new(true);
+
+pub fn is_smart_bypass_enabled() -> bool {
+    SMART_BYPASS_ENABLED.load(Ordering::Relaxed)
+}
+
+pub fn set_smart_bypass(enabled: bool) {
+    SMART_BYPASS_ENABLED.store(enabled, Ordering::SeqCst);
+}
 
 /// Smart Pre-Compressed Media Bypass:
 /// Detects formats that are already compressed with specialized lossless or lossy codecs

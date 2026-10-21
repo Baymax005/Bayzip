@@ -7,11 +7,16 @@ export function SettingsWindow() {
   const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
   const [backgroundShield, setBackgroundShield] = useState<boolean>(true);
+  const [smartMediaBypass, setSmartMediaBypass] = useState<boolean>(true);
 
   useEffect(() => {
     invoke<boolean>("get_background_priority_shield")
       .then((val) => setBackgroundShield(val))
       .catch((err) => console.error("Error reading priority shield:", err));
+
+    invoke<boolean>("get_smart_media_bypass")
+      .then((val) => setSmartMediaBypass(val))
+      .catch((err) => console.error("Error reading smart media bypass:", err));
   }, []);
 
   const handleToggleBackgroundShield = async () => {
@@ -21,6 +26,16 @@ export function SettingsWindow() {
       await invoke("set_background_priority_shield", { enabled: newVal });
     } catch (err) {
       console.error("Error updating priority shield:", err);
+    }
+  };
+
+  const handleToggleSmartMediaBypass = async () => {
+    const newVal = !smartMediaBypass;
+    setSmartMediaBypass(newVal);
+    try {
+      await invoke("set_smart_media_bypass", { enabled: newVal });
+    } catch (err) {
+      console.error("Error updating smart media bypass:", err);
     }
   };
 
@@ -241,18 +256,36 @@ export function SettingsWindow() {
               </svg>
               <span className="text-xs font-semibold text-white">Smart Pre-Compressed Media Bypass</span>
             </div>
-            <span className="text-[10px] text-[#60CDFF] bg-[#22394A]/60 px-2 py-0.5 rounded-full border border-[#60CDFF]/40 font-medium">
-              Enabled (Default)
-            </span>
+            <button
+              type="button"
+              onClick={handleToggleSmartMediaBypass}
+              className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors cursor-pointer border flex items-center space-x-1.5 ${
+                smartMediaBypass
+                  ? "bg-emerald-950/60 text-emerald-400 border-emerald-800/70"
+                  : "bg-amber-950/60 text-amber-300 border-amber-800/70"
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${smartMediaBypass ? "bg-emerald-400" : "bg-amber-400"}`}></span>
+              <span>{smartMediaBypass ? "Enabled (Fast Store)" : "Disabled (Recompress Media)"}</span>
+            </button>
           </div>
 
           <p className="text-xs text-[#9E9E9E] leading-relaxed">
-            Automatically switches pre-compressed video, audio, image, and archive formats directly to high-throughput Store mode. Prevents 100% CPU lockups on incompressible streams and achieves full sequential drive read/write saturation.
+            {smartMediaBypass
+              ? "Automatically switches pre-compressed video, audio, image, and archive formats directly to high-throughput Store mode. Prevents 100% CPU lockups on incompressible streams and achieves full sequential drive read/write saturation."
+              : "Disabled: All files will be forcefully re-compressed through the selected compression engine, which uses full CPU even on pre-compressed media."}
           </p>
 
           <div className="flex flex-wrap gap-1.5 pt-1">
             {["mp4", "mkv", "avi", "mov", "mp3", "flac", "ogg", "jpg", "png", "webp", "zip", "7z", "rar", "zst", "docx"].map((ext) => (
-              <span key={ext} className="font-mono text-[10px] text-[#A8A8A8] bg-[#181818] px-2 py-0.5 rounded border border-[#333333]">
+              <span
+                key={ext}
+                className={`font-mono text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                  smartMediaBypass
+                    ? "text-[#A8A8A8] bg-[#181818] border-[#333333]"
+                    : "text-[#666666] bg-[#181818] border-[#2A2A2A] opacity-60 line-through"
+                }`}
+              >
                 .{ext}
               </span>
             ))}

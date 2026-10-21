@@ -157,19 +157,18 @@ pub fn calculate_zstd_level(slider_value: i32, is_gamer: bool) -> i32 {
     }
 }
 
-/// RAM-Scaled Read and Write Buffers by Hardware Allocation Slider:
-/// 0%   -> 2 MB read / 16 MB write
-/// 25%  -> 4 MB read / 32 MB write
-/// 50%  -> 8 MB read / 64 MB write
-/// 75%  -> 16 MB read / 96 MB write
-/// 100% -> 16 MB read / 128 MB write
+/// Calibrated I/O Stream Buffers for Smooth Throughput & Responsiveness:
+/// Keeps chunks in the optimal sweet spot for modern file systems (NTFS/FAT32/exFAT)
+/// and CPU L2/L3 caches, preventing massive dirty-page flushes that stall the UI.
+/// Final write buffer size is bounded by the target drive bus via `get_optimal_write_buffer`.
+/// 0% - 25%  -> 256 KB read / 512 KB write
+/// 50% - 75% -> 512 KB read / 1 MB write
+/// 100%      -> 1 MB read / 2 MB write
 pub fn get_io_buffers(slider_value: i32) -> (usize, usize) {
     match slider_value {
-        s if s <= 0 => (2 * 1024 * 1024, 16 * 1024 * 1024),
-        s if s <= 25 => (4 * 1024 * 1024, 32 * 1024 * 1024),
-        s if s <= 50 => (8 * 1024 * 1024, 64 * 1024 * 1024),
-        s if s <= 75 => (16 * 1024 * 1024, 96 * 1024 * 1024),
-        _ => (16 * 1024 * 1024, 128 * 1024 * 1024),
+        s if s <= 25 => (256 * 1024, 512 * 1024),
+        s if s <= 75 => (512 * 1024, 1024 * 1024),
+        _ => (1024 * 1024, 2 * 1024 * 1024),
     }
 }
 
@@ -280,7 +279,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
     let pwd_ref = payload.password.as_deref();
     let enc_ref = payload.encryption.as_deref();
     let fmt_clean = payload.format.trim_start_matches('.').to_lowercase();
-    let smart_bypass = payload.smart_bypass.unwrap_or(true);
+    let smart_bypass = payload.smart_bypass.unwrap_or_else(utils::is_smart_bypass_enabled);
     let compress_res = match fmt_clean.as_str() {
         "zip" => {
             compress_zip(

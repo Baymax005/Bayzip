@@ -2,24 +2,69 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
-## [v2.0.8] - (Unreleased / In Development)
+## [v2.1.0] - 2026-10-21
 
-### 🎨 Authentic Document Icons, Rich Previewer Cards & Enhanced File Detection
-- **Authentic Recognized File Format Icons (`FileFormatIcon.tsx`)**:
-  - Replaced generic gray document icons with authentic, recognizable logos matching the visual standard of Windows File Explorer, WinRAR, and Bandizip.
-  - **Adobe PDF (`.pdf`)**: Dedicated Adobe Crimson Red (`#E5252A`) folded sheet with crisp white `PDF` typography at 16px, and a high-definition layered Acrobat document with folded corner and ambient glow at larger preview sizes.
-  - **Microsoft Word (`.docx`, `.doc`, `.docm`, `.rtf`, `.odt`)**: Distinctive Microsoft Word Royal Blue (`#185ABD`) folded document with bold white `W` emblem at 16px, and a 3D layered Office tile at larger preview sizes.
-  - **Microsoft Excel (`.xlsx`, `.xls`, `.csv`)**: Microsoft Excel Green (`#107C41`) folded sheet with crisp white `X` emblem and spreadsheet grid motif.
-  - **Microsoft PowerPoint (`.pptx`, `.ppt`)**: PowerPoint Orange/Red (`#D24726`) folded sheet with crisp white `P` emblem.
-  - Centralized categorization engine mapping 40+ common document, code, archive, and media extensions into appropriate visual categories.
-- **Enhanced Archive Tree Inspector (`ArchiveTreeInspector.tsx`)**:
-  - Integrated `FileFormatIcon` into both the **Folder Tree** and **Flat Table / Search** views, instantly revealing document identities at a glance.
-- **Rich Document Preview Hero Cards (`FilePreviewModal.tsx`)**:
-  - Upgraded the Safe In-Memory File Previewer: when inspecting binary documents (PDF, Word, Excel, PowerPoint), instead of a generic "No Direct Preview Available" box, Bayzip presents a rich Document Hero Card with large glowing branded insignia, verified standard format badges, exact file sizes, and security scan status.
-  - Added clear viewing instructions informing users how to extract or open the file with their native desktop applications.
-  - Updated the top modal header bar to display the authentic format icon matching the file extension.
-- **Compress Staged Items View (`CompressPage.tsx`)**:
-  - Updated staged files list to display authentic PDF, Word, and media format icons beside file paths prior to compression.
+### 📦 Windows Installer & Uninstaller Branding (NSIS)
+- **Installer & Uninstaller Wizard Branding**:
+  - Added official Bayzip branding bitmaps: 150x57 `installer-header.bmp` for wizard page headers and 164x314 `installer-sidebar.bmp` for Welcome and Finish pages.
+  - Added `uninstallerIcon` (`icons/icon.ico`) so `uninstall.exe` and the Windows "Installed Apps" / "Apps & Features" uninstall page in Windows Settings display the authentic Bayzip icon.
+
+### 🪟 Native Windows Shell Icon Extraction & WinRAR/Bandizip-Style Architecture
+- **Direct Windows Shell Icon Extraction (`SHGetFileInfoW`)**:
+  - Implemented authentic system icon extraction via Win32 Shell API (`SHGetFileInfoW`), adopting the proven native architecture used by WinRAR and Bandizip.
+  - Automatically queries the Windows shell association cache for each file extension, extracting the user's authentic desktop application icons for **Microsoft Word (`.docx`, `.doc`)**, **Adobe Acrobat / PDF (`.pdf`)**, **Cisco Packet Tracer (`.pkt`, `.pka`)**, **Microsoft Excel (`.xlsx`)**, **PowerPoint (`.pptx`)**, and any registered system file type.
+  - Converts native 32-bit Windows `HICON` handles to 32-bit RGBA pixel buffers and encodes them into memory-efficient, transparent base64 PNG data URLs using `flate2`.
+  - **Thread-Safe In-Memory Icon Caching (`icon.rs` & `FileFormatIcon.tsx`)**:
+    - Dual-layer caching: in-memory `ICON_CACHE` in Rust and `WINDOWS_ICON_CACHE` in React. Each unique extension is extracted from Windows exactly once in microseconds.
+    - Added batch prefetching (`get_file_icons`) that preloads all unique file extensions across an entire archive or staged directory tree in a single asynchronous IPC call.
+  - **Resilient Fallback Design**:
+    - Gracefully falls back to high-fidelity, Fluent dark-mode vector SVG icons during asynchronous loading or when running on non-Windows environments.
+
+### 🛡️ Strict Archive Detection & Prevention of False Extractions
+- **Office Document & Folder Filtering (`format.rs`)**:
+  - Excluded directories (`path.is_dir()`) and known non-archive file formats (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.pdf`, `.pkt`, `.txt`, `.png`, `.jpg`, `.mp4`, `.exe`, etc.) from being falsely detected as `.zip` archives by raw `PK\x03\x04` magic bytes.
+  - Office files like `imp points.docx` or `payment_record.xlsx` are no longer misidentified as ZIP archives, preventing unwanted extraction and exposure of internal XML directory structures (`_rels/`, `word/`, etc.).
+- **Folder Error Guard in Inspector (`inspector/mod.rs`)**:
+  - Added strict validation rejecting directory paths in `inspect_archive`, returning a clear error if a folder is passed for extraction.
+- **Intelligent Windows 11 Context Menu Shell Routing (`bayzip_shell.dll`)**:
+  - Updated context menu execution logic: right-clicking folders or non-archive files now executes `--gui-compress` to stage them for compression. Only genuine archive extensions (`.bay`, `.bayg`, `.zip`, `.7z`, `.rar`, `.tar`, `.gz`, `.xz`, `.zst`, `.iso`, `.cab`) invoke `--gui-extract`.
+- **Mode-Preserving Drag-and-Drop & CLI Handling (`App.tsx`)**:
+  - Dropping files or folders while on the **Compress** tab now always stages them for compression, eliminating unexpected tab switching to Extract mode.
+  - Added safety redirection in `selectArchive`: passing non-archive files or folders automatically switches to Compress mode and stages the items.
+  - CLI argument router guards `--gui-extract` against non-archive files and directories, preserving the user's intended workflow.
+
+### 🗂️ Staged Items vs Archive Explorer UI Distinction
+- **Dynamic Workspace Header & Icons (`ArchiveTreeInspector.tsx` & `CompressPage.tsx`)**:
+  - Added `inspectorTitle` property distinguishing between staged compression items (`Staged Items & Folders` with 📁 folder root icon) and archive extraction (`Archive Explorer` with 📦 archive box root icon).
+  - Search input placeholder dynamically adjusts between filtering files in the current folder vs searching archive contents.
+  - Fixed cross-platform path segment parsing using `split(/[/\\]/).pop()` across tree and flat table views to resolve Windows backslash issues.
+
+### ⚙️ Hardware Slider Alignment, Media Bypass Toggle & Draggable Split Panels
+- **Mathematical Slider Tick Centering (`CompressPage.tsx` & `App.css`)**:
+  - Fixed numeric tick alignment (`0`, `25`, `50`, `75`, `100`) beneath the Hardware Allocation slider using offset formula `calc(${val}% + ${(50 - val) * 0.16}px)` with `transform: translateX(-50%)`.
+  - Added clean Windows 11 circular thumb styling (`16px`) with cyan border hover and glow effects.
+- **Global Smart Media Bypass Setting (`SettingsWindow.tsx`, `App.tsx`, `utils.rs`)**:
+  - Added persistent global setting and interactive toggle button in the Settings window allowing users to enable or disable automatic media pass-through.
+  - Cross-window event synchronization updates compression engines and frontend state immediately.
+- **Draggable Split Panels in Workspace Mode (`ArchiveTreeInspector.tsx`)**:
+  - Implemented interactive column resizers (`cursor-col-resize`) between Folder Hierarchy, File Explorer, and Action Sidebar for seamless navigation on widescreen displays.
+- **Individual File Un-Exclusion Logic (`App.tsx`)**:
+  - Fixed path exclusion toggle so un-excluding an individual file inside an excluded folder removes ancestor exclusion while preserving sibling exclusions.
+
+### ⚡ Storage-Aware Streaming I/O Calibration & Zero-Stall Buffer Architecture
+- **Eliminated Monolithic 128 MB Write Stall (`hardware.rs`, `mod.rs`, `bay.rs`)**:
+  - Resolved critical queue depth stalls where 128 MB synchronous `WriteFile` calls on NVMe SSDs caused latency to spike to 221 ms and locked compression threads for 6–10 seconds.
+  - Decoupled physical disk streaming buffer sizes from CPU worker thread counts: CPU slider strictly dictates worker thread count and compression level, while I/O buffer sizing is governed by physical storage bus type.
+- **Physical Drive Bus Calibration (`get_optimal_read_slice` & `get_optimal_write_buffer`)**:
+  - **External USB / Flash Thumb Drives**: Read slice calibrated to **256 KB**, write buffer capped to **512 KB** (guarantees fluid progress and eliminates multi-second hangs under Windows Quick-Removal policy).
+  - **Internal SATA SSD / HDD**: Read slice calibrated to **512 KB**, write buffer capped to **1 MB** (prevents head thrashing on mechanical drives).
+  - **Internal PCIe NVMe SSD**: Read slice calibrated to **1 MB**, write buffer capped to **2 MB** (saturates multi-gigabyte PCIe burst line rate while keeping disk response latency under 2 ms).
+- **Universal Multi-Algorithm Calibration (`bay.rs`, `zip.rs`, `tar.rs`, `sevenz.rs`)**:
+  - Standardized optimal streaming chunks across all supported container formats: Zstandard, LZ4, Brotli, ZIP (Deflate / Bzip2), TAR, and 7-Zip (LZMA2).
+- **Optimized Stream Extraction Architecture (`extractor.rs`)**:
+  - Standardized decompression transfer buffers to **256 KB** (aligned with `ZSTD_DStreamOutSize`, `flate2`, and CPU L2 cache boundaries).
+  - Reduced archive input `BufReader` from 16 MB to **1 MB**.
+  - Calibrated extracted file `BufWriter` from 16 MB down to **32 KB** for tiny files ($\le 64\text{ KB}$), **256 KB** for medium files ($\le 1\text{ MB}$), and **512 KB** for large files, completely preventing dirty-page write stalls during multi-gigabyte extractions.
 
 ---
 

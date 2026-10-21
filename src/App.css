@@ -25,3 +25,30 @@ html, body {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #60CDFF;
 }
+
+/* Custom Sleek Range Slider Thumb (Exact 16px for pixel-perfect tick alignment) */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #60CDFF;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 6px rgba(96, 205, 255, 0.4);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 10px rgba(96, 205, 255, 0.7);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #60CDFF;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 6px rgba(96, 205, 255, 0.4);
+}

@@ -141,8 +141,8 @@ pub fn extract_bay_stream<R: Read>(
         Err(e) => return Err(format!("Error reading archive header: {}", e)),
     }
 
-    // Allocate single 4 MB reusable I/O buffer outside the entry loop
-    let mut io_buf = vec![0u8; 4 * 1024 * 1024];
+    // Allocate single 256 KB reusable I/O buffer outside the entry loop (optimal for L2/L3 cache)
+    let mut io_buf = vec![0u8; 256 * 1024];
 
     loop {
         if is_extraction_cancelled() {
@@ -286,11 +286,13 @@ pub fn extract_bay_stream<R: Read>(
             let out_file = File::create(&part_path)
                 .map_err(|e| format!("Failed to create temporary output file {:?}: {}", part_path, e))?;
 
-            // Adaptive buffer capacity: 2 MB for medium files, 16 MB for large files (maximizes sequential throughput without zero-fill penalty)
-            let cap = if file_size <= 16 * 1024 * 1024 {
-                2 * 1024 * 1024
+            // Optimal buffer capacity: 32 KB for small files, 256 KB for medium, 512 KB for large files
+            let cap = if file_size <= 64 * 1024 {
+                32 * 1024
+            } else if file_size <= 1024 * 1024 {
+                256 * 1024
             } else {
-                16 * 1024 * 1024
+                512 * 1024
             };
             let mut writer = BufWriter::with_capacity(cap, out_file);
 
@@ -382,7 +384,7 @@ pub fn extract_bay_archive(
 
     let raw_file = File::open(archive_path)
         .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
-    let mut file = BufReader::with_capacity(16 * 1024 * 1024, raw_file);
+    let mut file = BufReader::with_capacity(1024 * 1024, raw_file);
 
     let mut magic = [0u8; 8];
     let n = file.read(&mut magic)
@@ -522,7 +524,7 @@ pub fn extract_zip_archive(
     let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
 
     // Single 2 MB reusable buffer outside the zip loop
-    let mut io_buf = vec![0u8; 2 * 1024 * 1024];
+    let mut io_buf = vec![0u8; 256 * 1024];
 
     for i in 0..total_entries {
         if is_extraction_cancelled() {
@@ -604,10 +606,12 @@ pub fn extract_zip_archive(
                 };
 
                 let out_file = File::create(&part_path).map_err(|e| format!("Create temporary file error: {}", e))?;
-                let cap = if file_size <= 16 * 1024 * 1024 {
-                    2 * 1024 * 1024
+                let cap = if file_size <= 64 * 1024 {
+                    32 * 1024
+                } else if file_size <= 1024 * 1024 {
+                    256 * 1024
                 } else {
-                    16 * 1024 * 1024
+                    512 * 1024
                 };
                 let mut writer = BufWriter::with_capacity(cap, out_file);
                 let mut remaining = file_size;
@@ -690,7 +694,7 @@ fn extract_tar_entries<R: Read>(
     let mut extracted_files = Vec::new();
     let mut total_extracted: u64 = 0;
     let mut last_emit = Instant::now();
-    let mut io_buf = vec![0u8; 2 * 1024 * 1024];
+    let mut io_buf = vec![0u8; 256 * 1024];
 
     let entries = archive.entries().map_err(|e| format!("Tar read entries error: {}", e))?;
     for entry_res in entries {
@@ -761,10 +765,12 @@ fn extract_tar_entries<R: Read>(
                 };
 
                 let out_file = File::create(&part_path).map_err(|e| format!("Create temporary file error: {}", e))?;
-                let cap = if file_size <= 16 * 1024 * 1024 {
-                    2 * 1024 * 1024
+                let cap = if file_size <= 64 * 1024 {
+                    32 * 1024
+                } else if file_size <= 1024 * 1024 {
+                    256 * 1024
                 } else {
-                    16 * 1024 * 1024
+                    512 * 1024
                 };
                 let mut writer = BufWriter::with_capacity(cap, out_file);
                 let mut remaining = file_size;
@@ -930,8 +936,8 @@ pub fn extract_7z_archive(
     let mut last_emit = Instant::now();
     let mut total_extracted: u64 = 0;
 
-    // Single 2 MB reusable buffer outside the 7z entry loop
-    let mut io_buf = vec![0u8; 2 * 1024 * 1024];
+    // Single 256 KB reusable buffer outside the 7z entry loop
+    let mut io_buf = vec![0u8; 256 * 1024];
 
     let res = sz_reader.for_each_entries(|entry, reader| {
         if is_extraction_cancelled() {
@@ -991,10 +997,12 @@ pub fn extract_7z_archive(
 
                 let out_file = File::create(&part_path)
                     .map_err(sevenz_rust2::Error::from)?;
-                let cap = if file_size <= 16 * 1024 * 1024 {
-                    2 * 1024 * 1024
+                let cap = if file_size <= 64 * 1024 {
+                    32 * 1024
+                } else if file_size <= 1024 * 1024 {
+                    256 * 1024
                 } else {
-                    16 * 1024 * 1024
+                    512 * 1024
                 };
                 let mut writer = BufWriter::with_capacity(cap, out_file);
                 let mut remaining = file_size;

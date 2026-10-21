@@ -9,6 +9,7 @@ pub mod tar;
 pub mod rar;
 pub mod preview;
 pub mod staged;
+pub mod icon;
 
 pub use hardware::*;
 pub use format::*;
@@ -19,6 +20,7 @@ pub use tar::*;
 pub use rar::*;
 pub use preview::*;
 pub use staged::*;
+pub use icon::*;
 
 use crate::types::{ArchiveEntryItem, ArchiveInfo, ArchiveFormat};
 
@@ -161,6 +163,9 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
     if !p.exists() {
         return Err("File not found".into());
     }
+    if p.is_dir() {
+        return Err("Path is a directory, not an archive".into());
+    }
     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("archive").to_string();
     let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     
@@ -267,6 +272,10 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
             }
         }
     };
+
+    if !is_archive {
+        return Err("The selected file is not a supported archive format".into());
+    }
 
     Ok(ArchiveInfo {
         path: path.to_string(),

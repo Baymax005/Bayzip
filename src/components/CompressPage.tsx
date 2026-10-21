@@ -1,8 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { SystemSpecs, CompressProgress, ArchiveInfo, ArchiveEntryItem } from "../types";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
-import { FileFormatIcon } from "./FileFormatIcon";
+import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
@@ -188,6 +188,15 @@ export function CompressPage({
     };
   }, [selectedFiles, customArchiveName, effectiveTotalSize, selectedFormat, stagedEntries, totalStagedFilesCount]);
 
+  useEffect(() => {
+    if (selectedFiles.length > 0) {
+      prefetchFileIcons(selectedFiles);
+    }
+    if (stagedEntries.length > 0) {
+      prefetchFileIcons(stagedEntries.map((e) => e.name));
+    }
+  }, [selectedFiles, stagedEntries]);
+
   const getEstimatedCores = () => {
     const val = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
     if (val === 0) return 1;
@@ -291,22 +300,44 @@ export function CompressPage({
             {getSliderLabel()}
           </span>
         </div>
-        <input
-          type="range"
-          min="0"
-          max="100"
-          step="25"
-          disabled={isCompressing}
-          value={sliderValue}
-          onChange={(e) => setSliderValue(Number(e.target.value))}
-          className="w-full h-1.5 bg-[#333333] rounded-lg appearance-none cursor-pointer accent-[#60CDFF]"
-        />
-        <div className="flex justify-between text-[9px] text-[#777777] font-mono">
-          <span>Eco</span>
-          <span>Fast</span>
-          <span>Balanced</span>
-          <span>High</span>
-          <span>Max</span>
+        <div className="relative pt-1">
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="25"
+            disabled={isCompressing}
+            value={sliderValue}
+            onChange={(e) => setSliderValue(Number(e.target.value))}
+            className="w-full h-1.5 bg-[#333333] rounded-lg appearance-none cursor-pointer accent-[#60CDFF] block"
+          />
+          <div className="relative w-full h-4 mt-1.5 text-[9px] font-mono select-none">
+            {[
+              { val: 0, label: "Eco" },
+              { val: 25, label: "Fast" },
+              { val: 50, label: "Balanced" },
+              { val: 75, label: "High" },
+              { val: 100, label: "Max" },
+            ].map((tier) => {
+              const isSelected = sliderValue === tier.val;
+              return (
+                <span
+                  key={tier.val}
+                  onClick={() => !isCompressing && setSliderValue(tier.val)}
+                  style={{
+                    left: `calc(${tier.val}% + ${(50 - tier.val) * 0.16}px)`,
+                    transform: "translateX(-50%)",
+                  }}
+                  className={`absolute transition-colors cursor-pointer whitespace-nowrap ${
+                    isSelected ? "text-[#60CDFF] font-bold" : "text-[#777777] hover:text-[#C8C8C8]"
+                  }`}
+                  title={`Set Compression Profile to ${tier.label}`}
+                >
+                  {tier.label}
+                </span>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -507,6 +538,7 @@ export function CompressPage({
                 onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
                 sidebar={renderWorkspaceSidebar()}
                 sidebarTitle="Compression Options"
+                inspectorTitle="Staged Items & Folders"
               />
             </div>
           ) : (
@@ -582,6 +614,7 @@ export function CompressPage({
               onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
               sidebar={renderWorkspaceSidebar()}
               sidebarTitle="Compression Options"
+              inspectorTitle="Staged Items & Folders"
             />
           )}
 
@@ -743,14 +776,29 @@ export function CompressPage({
             disabled={isCompressing}
             value={isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue}
             onChange={(e) => setSliderValue(Number(e.target.value))}
-            className="w-full h-1.5 bg-[#202020] rounded-lg appearance-none cursor-pointer accent-[#60CDFF] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full h-1.5 bg-[#202020] rounded-lg appearance-none cursor-pointer accent-[#60CDFF] disabled:opacity-50 disabled:cursor-not-allowed block"
           />
-          <div className="flex justify-between text-[11px] text-[#A8A8A8] px-0.5">
-            <span>0</span>
-            <span>25</span>
-            <span>50</span>
-            <span>75</span>
-            <span>100</span>
+          <div className="relative w-full h-4 text-[11px] font-mono select-none">
+            {[0, 25, 50, 75, 100].map((val) => {
+              const currentVal = isCompressing && activeCompressConfig ? activeCompressConfig.sliderValue : sliderValue;
+              const isSelected = currentVal === val;
+              return (
+                <span
+                  key={val}
+                  onClick={() => !isCompressing && setSliderValue(val)}
+                  style={{
+                    left: `calc(${val}% + ${(50 - val) * 0.16}px)`,
+                    transform: "translateX(-50%)",
+                  }}
+                  className={`absolute transition-colors cursor-pointer whitespace-nowrap ${
+                    isSelected ? "text-[#60CDFF] font-bold" : "text-[#A8A8A8] hover:text-white"
+                  }`}
+                  title={`Set Allocation to ${val}%`}
+                >
+                  {val}
+                </span>
+              );
+            })}
           </div>
         </div>
 

@@ -5,6 +5,23 @@ use sevenz_rust2::Password;
 use crate::types::ArchiveFormat;
 
 pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
+    if path.is_dir() {
+        return ArchiveFormat::Unknown;
+    }
+
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    // Exclude common non-archive document & media formats that might contain ZIP containers
+    if matches!(
+        ext.as_str(),
+        "docx" | "docm" | "dotx" | "dotm" | "xlsx" | "xlsm" | "xlsb" | "xltx" | "xltm"
+            | "pptx" | "pptm" | "ppsx" | "potx" | "odt" | "ods" | "odp" | "epub"
+            | "pages" | "numbers" | "key" | "pdf" | "doc" | "xls" | "ppt" | "pkt"
+            | "txt" | "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "mp4" | "mkv"
+            | "mp3" | "wav" | "flac" | "exe" | "dll"
+    ) {
+        return ArchiveFormat::Unknown;
+    }
+
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(_) => return ArchiveFormat::Unknown,

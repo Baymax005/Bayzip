@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -82,6 +82,10 @@ function isArchiveFile(filePath: string): boolean {
 function App() {
   // Navigation Mode: "compress" or "extract"
   const [activeMode, setActiveMode] = useState<"compress" | "extract">("compress");
+  const activeModeRef = useRef<"compress" | "extract">(activeMode);
+  useEffect(() => {
+    activeModeRef.current = activeMode;
+  }, [activeMode]);
 
   // System Specs
   const [specs, setSpecs] = useState<SystemSpecs | null>(null);
@@ -138,29 +142,61 @@ function App() {
   const [excludedPaths, setExcludedPaths] = useState<Set<string>>(new Set());
 
   const handleToggleExclude = (rawPath: string, isDir?: boolean) => {
-    const norm = normalizeArchiveEntryPath(rawPath);
-    const prefix = norm.endsWith("/") ? norm : norm + "/";
+    const norm = normalizeArchiveEntryPath(rawPath).replace(/\/+$/, "");
+    const prefix = norm + "/";
 
     setExcludedPaths((prev) => {
       const next = new Set(prev);
-      const isCurrentlyExcluded =
-        next.has(norm) ||
-        (isDir && Array.from(next).some((p) => p === norm || p.startsWith(prefix)));
+      const allEntries = archiveInfo?.entries || [];
+
+      const isDirectlyExcluded = next.has(norm);
+      const isAncestorExcluded = Array.from(next).some((exc) => {
+        const excClean = exc.replace(/\/+$/, "");
+        return norm.startsWith(excClean + "/");
+      });
+      const isDescendantExcluded = isDir && Array.from(next).some((exc) => {
+        const excClean = exc.replace(/\/+$/, "");
+        return excClean.startsWith(prefix);
+      });
+
+      const isCurrentlyExcluded = isDirectlyExcluded || isAncestorExcluded || isDescendantExcluded;
 
       if (isCurrentlyExcluded) {
+        // User wants to INCLUDE this item back
         next.delete(norm);
+        next.delete(norm + "/");
+
+        // If an umbrella ancestor was in next, remove the ancestor and retain sibling items
+        for (const exc of Array.from(next)) {
+          const excClean = exc.replace(/\/+$/, "");
+          if (norm.startsWith(excClean + "/")) {
+            next.delete(exc);
+            next.delete(excClean);
+            const ancPrefix = excClean + "/";
+            for (const entry of allEntries) {
+              const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
+              if (entryNorm.startsWith(ancPrefix) && entryNorm !== norm && !entryNorm.startsWith(prefix)) {
+                next.add(entryNorm);
+              }
+            }
+          }
+        }
+
+        // If it's a directory, un-exclude all descendants
         if (isDir) {
-          for (const p of Array.from(next)) {
-            if (p === norm || p.startsWith(prefix)) {
-              next.delete(p);
+          for (const exc of Array.from(next)) {
+            const excClean = exc.replace(/\/+$/, "");
+            if (excClean === norm || excClean.startsWith(prefix)) {
+              next.delete(exc);
             }
           }
         }
       } else {
+        // User wants to EXCLUDE this item
         next.add(norm);
-        if (isDir && archiveInfo?.entries) {
-          for (const entry of archiveInfo.entries) {
-            const entryNorm = normalizeArchiveEntryPath(entry.name);
+        if (isDir) {
+          for (const entry of allEntries) {
+            const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
             if (entryNorm.startsWith(prefix) || entryNorm === norm) {
               next.add(entryNorm);
             }
@@ -282,29 +318,61 @@ function App() {
   }, [selectedFiles]);
 
   const handleToggleCompressExclude = (rawPath: string, isDir?: boolean) => {
-    const norm = normalizeArchiveEntryPath(rawPath);
-    const prefix = norm.endsWith("/") ? norm : norm + "/";
+    const norm = normalizeArchiveEntryPath(rawPath).replace(/\/+$/, "");
+    const prefix = norm + "/";
 
     setExcludedCompressPaths((prev) => {
       const next = new Set(prev);
-      const isCurrentlyExcluded =
-        next.has(norm) ||
-        (isDir && Array.from(next).some((p) => p === norm || p.startsWith(prefix)));
+      const allEntries = stagedEntries;
+
+      const isDirectlyExcluded = next.has(norm);
+      const isAncestorExcluded = Array.from(next).some((exc) => {
+        const excClean = exc.replace(/\/+$/, "");
+        return norm.startsWith(excClean + "/");
+      });
+      const isDescendantExcluded = isDir && Array.from(next).some((exc) => {
+        const excClean = exc.replace(/\/+$/, "");
+        return excClean.startsWith(prefix);
+      });
+
+      const isCurrentlyExcluded = isDirectlyExcluded || isAncestorExcluded || isDescendantExcluded;
 
       if (isCurrentlyExcluded) {
+        // User wants to INCLUDE this item back
         next.delete(norm);
+        next.delete(norm + "/");
+
+        // If an umbrella ancestor was in next, remove the ancestor and retain sibling items
+        for (const exc of Array.from(next)) {
+          const excClean = exc.replace(/\/+$/, "");
+          if (norm.startsWith(excClean + "/")) {
+            next.delete(exc);
+            next.delete(excClean);
+            const ancPrefix = excClean + "/";
+            for (const entry of allEntries) {
+              const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
+              if (entryNorm.startsWith(ancPrefix) && entryNorm !== norm && !entryNorm.startsWith(prefix)) {
+                next.add(entryNorm);
+              }
+            }
+          }
+        }
+
+        // If it's a directory, un-exclude all descendants
         if (isDir) {
-          for (const p of Array.from(next)) {
-            if (p === norm || p.startsWith(prefix)) {
-              next.delete(p);
+          for (const exc of Array.from(next)) {
+            const excClean = exc.replace(/\/+$/, "");
+            if (excClean === norm || excClean.startsWith(prefix)) {
+              next.delete(exc);
             }
           }
         }
       } else {
+        // User wants to EXCLUDE this item
         next.add(norm);
-        if (isDir && stagedEntries.length > 0) {
-          for (const entry of stagedEntries) {
-            const entryNorm = normalizeArchiveEntryPath(entry.name);
+        if (isDir) {
+          for (const entry of allEntries) {
+            const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
             if (entryNorm.startsWith(prefix) || entryNorm === norm) {
               next.add(entryNorm);
             }
@@ -377,6 +445,12 @@ function App() {
 
   // Select Archive Handler (with metadata inquiry)
   const selectArchive = async (filePath: string, pwd?: string) => {
+    if (!isArchiveFile(filePath)) {
+      setActiveMode("compress");
+      setSelectedFiles((prev) => [...new Set([...prev, filePath])]);
+      return;
+    }
+
     setSelectedArchive(filePath);
     setExcludedPaths(new Set());
     setExtractResult(null);
@@ -459,6 +533,24 @@ function App() {
     let unlistenDrop: (() => void) | undefined;
     let unlistenCompress: (() => void) | undefined;
     let unlistenExtract: (() => void) | undefined;
+    let unlistenBypass: (() => void) | undefined;
+
+    // 0. Query initial smart media bypass global preference
+    invoke<boolean>("get_smart_media_bypass")
+      .then((enabled) => {
+        if (isMounted) setSmartMediaBypass(enabled);
+      })
+      .catch(() => {});
+
+    // Listen for cross-window smart media bypass updates
+    listen<boolean>("smart_media_bypass_changed", (event) => {
+      if (isMounted) setSmartMediaBypass(event.payload);
+    })
+      .then((fn) => {
+        if (isMounted) unlistenBypass = fn;
+        else fn();
+      })
+      .catch(() => {});
 
     // 1. Instant hardware specs query
     invoke<SystemSpecs>("get_system_specs")
@@ -475,8 +567,13 @@ function App() {
             setActiveMode("compress");
             setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
           } else if (cmd.action === "extract") {
-            setActiveMode("extract");
-            selectArchive(cmd.paths[0]);
+            if (cmd.paths.length === 1 && isArchiveFile(cmd.paths[0])) {
+              setActiveMode("extract");
+              selectArchive(cmd.paths[0]);
+            } else {
+              setActiveMode("compress");
+              setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
+            }
           } else {
             if (cmd.paths.length === 1 && isArchiveFile(cmd.paths[0])) {
               setActiveMode("extract");
@@ -496,11 +593,15 @@ function App() {
         if (event.payload.type === "drop") {
           const paths = event.payload.paths;
           if (paths && paths.length > 0) {
-            if (paths.length === 1 && isArchiveFile(paths[0])) {
-              setActiveMode("extract");
-              selectArchive(paths[0]);
-            } else {
+            if (activeModeRef.current === "compress") {
               setSelectedFiles((prev) => [...new Set([...prev, ...paths])]);
+            } else {
+              if (paths.length === 1 && isArchiveFile(paths[0])) {
+                selectArchive(paths[0]);
+              } else {
+                setActiveMode("compress");
+                setSelectedFiles((prev) => [...new Set([...prev, ...paths])]);
+              }
             }
           }
         }
@@ -542,8 +643,18 @@ function App() {
       if (unlistenDrop) unlistenDrop();
       if (unlistenCompress) unlistenCompress();
       if (unlistenExtract) unlistenExtract();
+      if (unlistenBypass) unlistenBypass();
     };
   }, []);
+
+  const handleUpdateSmartMediaBypass = async (val: boolean) => {
+    setSmartMediaBypass(val);
+    try {
+      await invoke("set_smart_media_bypass", { enabled: val });
+    } catch (e) {
+      console.error("Failed to update smart media bypass:", e);
+    }
+  };
 
   useEffect(() => {
     setSelectedAlgorithm(FORMAT_ALGORITHMS[selectedFormat][0]);
@@ -1033,7 +1144,7 @@ function App() {
               separateArchives={separateArchives}
               setSeparateArchives={setSeparateArchives}
               smartMediaBypass={smartMediaBypass}
-              setSmartMediaBypass={setSmartMediaBypass}
+              setSmartMediaBypass={handleUpdateSmartMediaBypass}
               isAdvanced={isAdvanced}
               setIsAdvanced={setIsAdvanced}
               sliderValue={sliderValue}

@@ -29,7 +29,7 @@ pub fn compress_tar(
     ));
 
     let res = (|| -> Result<(), String> {
-        let write_buf_size = get_optimal_write_buffer(&temp_output, 32 * 1024 * 1024);
+        let write_buf_size = get_optimal_write_buffer(&temp_output, 1024 * 1024);
         let out_file = File::create(&temp_output)
             .map_err(|e| format!("Failed to create tar file: {}", e))?;
         let mut builder = ::tar::Builder::new(BufWriter::with_capacity(write_buf_size, out_file));
@@ -134,7 +134,7 @@ pub fn compress_tar(
 }
 
 pub fn headless_quick_compress_tar(p: &Path, output_path: &Path) -> Result<(), String> {
-    let write_buf_size = get_optimal_write_buffer(output_path, 32 * 1024 * 1024);
+    let write_buf_size = get_optimal_write_buffer(output_path, 1024 * 1024);
     let out_file = File::create(output_path)
         .map_err(|e| format!("Failed to create tar file: {}", e))?;
     let mut builder = ::tar::Builder::new(BufWriter::with_capacity(write_buf_size, out_file));
