@@ -1167,14 +1167,14 @@ export function CompressPage({
               <div className="ml-3 flex flex-col">
                 <div className="flex items-center space-x-2">
                   <span className="text-sm text-[#A8A8A8] group-hover:text-white transition-colors">
-                    Smart media bypass (Fast Store)
+                    Smart media bypass <span className="text-[#60CDFF] font-semibold">(ZIP)</span>
                   </span>
                   <span className="text-[10px] font-semibold uppercase tracking-wider bg-[#142330] text-[#60CDFF] px-2 py-0.5 rounded border border-[#20495f]">
                     Fast Store
                   </span>
                 </div>
                 <span className="text-[11px] text-[#7A7A7A] mt-0.5">
-                  Stores already-compressed media (mp4, mkv, mp3, jpg, png, zip, 7z) with 0% CPU overhead, maximizing NVMe write speeds
+                  Stores already-compressed media (mp4, mkv, mp3, jpg, png, zip, 7z) with 0% CPU overhead in ZIP, and protects solid dictionaries in .bay/.7z
                 </span>
               </div>
             </label>

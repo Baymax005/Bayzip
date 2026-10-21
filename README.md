@@ -8,16 +8,16 @@
 ## ⚡ Key Features
 
 ### 🚀 Smart Pre-Compressed Media Bypass (High-Throughput Store Mode)
-- **Zero-CPU Dynamic Store Mode (`zip::CompressionMethod::Stored`)**:
-  - Automatically identifies pre-compressed video, audio, image, and archive formats (`.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.mp3`, `.flac`, `.ogg`, `.opus`, `.aac`, `.jpg`, `.jpeg`, `.png`, `.webp`, `.avif`, `.gif`, `.zip`, `.7z`, `.rar`, `.gz`, `.bz2`, `.xz`, `.zst`, `.docx`, `.xlsx`, `.pptx`, `.apk`, `.vpk`, `.pak`).
-  - Directly streams already-compressed files to disk uncompressed in Store mode, completely bypassing CPU compression loops.
+- **Zero-CPU Dynamic Store Mode (`zip::CompressionMethod::Stored`) [ZIP & TAR]**:
+  - Automatically identifies pre-compressed video, audio, image, and archive formats (`.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.mp3`, `.flac`, `.ogg`, `.opus`, `.aac`, `.jpg`, `.jpeg`, `.png`, `.webp`, `.avif`, `.gif`, `.zip`, `.7z`, `.rar`, `.gz`, `.bz2`, `.xz`, `.zst`, `.docx`, `.xlsx`, `.pptx`, `.apk`, `.vpk`, `.pak`, `.iso`).
+  - When creating `.zip` archives, directly streams already-compressed files to disk uncompressed in Store mode, completely bypassing CPU compression loops.
   - Saturates PCIe Gen4/Gen5 NVMe read/write speeds (1,000–3,000+ MB/s), archiving media directories and downloads in seconds instead of minutes.
-  - Highly compressible assets (`.txt`, `.json`, `.xml`, `.exe`, `.dll`, code, game maps) remain fully compressed with multi-threaded Deflate, Zstandard, Brotli, or LZMA2 for maximum space reduction.
-- **Solid Archiving Dictionary Protection**:
-  - In continuous solid archives (`.bay`, `.bayg`, `.7z`), automatically groups compressible files together first.
-  - Prevents random, high-entropy media bitstreams from evicting useful LZ77/Zstd dictionary history, improving both compression speed and compression ratio by 5%–15%.
+  - Highly compressible assets (`.txt`, `.json`, `.xml`, `.exe`, `.dll`, code, game maps) remain fully compressed with multi-threaded Deflate for maximum space reduction.
+- **Solid Archiving Dictionary Protection (`.bay`, `.bayg`, `.7z`)**:
+  - In continuous solid archives (`.bay`, `.bayg`, `.7z`), all files are part of a continuous compression block; Smart Bypass automatically groups compressible files together first and places pre-compressed media and ISOs at the end.
+  - Prevents random, high-entropy media bitstreams from evicting useful LZ77/Zstd dictionary history, improving both compression speed and compression ratio by 5%–15%. (Per-file raw Store blocks for `.bay` are planned for Container v4).
 - **Interactive UI Toggle & Windows Explorer Shell Integration**:
-  - Added a toggle switch in the Compression Options view (`Smart media bypass [Fast Store]`), active by default.
+  - Added a toggle switch in the Compression Options view (`Smart media bypass (ZIP) [Fast Store]`), active by default.
   - Right-click quick zip via Windows 11 context menu automatically leverages Store mode for instant media archiving.
   - Dedicated preferences status card in Settings.
 
@@ -164,7 +164,7 @@ graph TD
 | **Zstandard Tar** | `.zst`, `.tar.zst` | — | ✅ | ✅ | Zstandard / Tar |
 | **ISO Image** | `.iso` | — | ✅ | ✅ | ISO 9660 Disc Image |
 | **Cabinet** | `.cab` | — | ✅ | ✅ | Microsoft Cabinet |
-| **RAR** | `.rar` | — | ✅ | ✅ | Decompress / Preview only |
+| **RAR** | `.rar` | — | ✅ (Standard / Unencrypted) | ✅ | Uncompressed & Standard RAR via libarchive (Encrypted RAR5 deferred to v2.2) |
 
 ---
 

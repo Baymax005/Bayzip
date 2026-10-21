@@ -254,7 +254,9 @@ export function SettingsWindow() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-4 h-4 text-[#60CDFF]">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
-              <span className="text-xs font-semibold text-white">Smart Pre-Compressed Media Bypass</span>
+              <span className="text-xs font-semibold text-white">
+                Smart Pre-Compressed Media Bypass <span className="text-[#60CDFF] font-bold">(ZIP)</span>
+              </span>
             </div>
             <button
               type="button"
@@ -272,7 +274,7 @@ export function SettingsWindow() {
 
           <p className="text-xs text-[#9E9E9E] leading-relaxed">
             {smartMediaBypass
-              ? "Automatically switches pre-compressed video, audio, image, and archive formats directly to high-throughput Store mode. Prevents 100% CPU lockups on incompressible streams and achieves full sequential drive read/write saturation."
+              ? "Automatically switches pre-compressed video, audio, image, and archive formats directly to high-throughput Store mode for ZIP archives. In solid archives (.bay / .7z), it groups media to protect the compression dictionary."
               : "Disabled: All files will be forcefully re-compressed through the selected compression engine, which uses full CPU even on pre-compressed media."}
           </p>
 
