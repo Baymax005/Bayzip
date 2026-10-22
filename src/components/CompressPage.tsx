@@ -75,6 +75,8 @@ export interface CompressPageProps {
   onToggleCompressExclude: (path: string, isDir?: boolean) => void;
   onCompressIncludeAll: () => void;
   onPreviewStagedEntry: (entryName: string) => void;
+  isWorkspaceOpen?: boolean;
+  setIsWorkspaceOpen?: (open: boolean) => void;
 }
 
 export function CompressPage({
@@ -123,7 +125,12 @@ export function CompressPage({
   onToggleCompressExclude,
   onCompressIncludeAll,
   onPreviewStagedEntry,
+  isWorkspaceOpen: isWorkspaceOpenProp,
+  setIsWorkspaceOpen: setIsWorkspaceOpenProp,
 }: CompressPageProps) {
+  const [internalWorkspaceOpen, setInternalWorkspaceOpen] = useState(false);
+  const isWorkspaceOpen = isWorkspaceOpenProp !== undefined ? isWorkspaceOpenProp : internalWorkspaceOpen;
+  const setIsWorkspaceOpen = setIsWorkspaceOpenProp || setInternalWorkspaceOpen;
   const totalSelectedSize = useMemo(() => {
     return selectedFiles.reduce((acc, f) => acc + (itemsInfo[f]?.size || 0), 0);
   }, [selectedFiles, itemsInfo]);
@@ -246,8 +253,6 @@ export function CompressPage({
     if (val === 75) return "High Performance";
     return "Maximum Power";
   };
-
-  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
 
   const renderWorkspaceSidebar = () => (
     <div className="space-y-4 text-xs">
@@ -472,13 +477,13 @@ export function CompressPage({
               <button
                 type="button"
                 onClick={() => setIsWorkspaceOpen(true)}
-                className="px-2.5 py-1 text-xs font-semibold rounded transition-all flex items-center space-x-1.5 cursor-pointer bg-[#202020] hover:bg-[#282828] text-[#60CDFF] hover:text-[#90DCFF] border border-[#3E3E3E] hover:border-[#60CDFF]/50 shadow-sm"
-                title="Open full workspace with folder hierarchy, file selection, and options sidebar"
+                className="px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center space-x-1.5 cursor-pointer bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/40 hover:border-[#60CDFF]/70 shadow-[0_0_10px_rgba(96,205,255,0.15)]"
+                title="Open full workspace with folder hierarchy, drive browsing, and options sidebar"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                 </svg>
-                <span>Workspace Mode</span>
+                <span>Workspace</span>
               </button>
 
               {/* View Switcher: Tree vs List */}
@@ -540,12 +545,12 @@ export function CompressPage({
                 excludedPaths={excludedCompressPaths}
                 onToggleExclude={onToggleCompressExclude}
                 onIncludeAll={onCompressIncludeAll}
-                isExpandedModal={isWorkspaceOpen}
-                onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
+                isExpandedModal={false}
                 onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
                 sidebar={renderWorkspaceSidebar()}
                 sidebarTitle="Compression Options"
                 inspectorTitle="Staged Items & Folders"
+                mode="compress"
               />
             </div>
           ) : (
@@ -607,24 +612,6 @@ export function CompressPage({
             </div>
           )}
 
-          {compressViewMode !== "tree" && isWorkspaceOpen && (
-            <ArchiveTreeInspector
-              archiveInfo={stagedArchiveInfo}
-              selectedArchive={selectedFiles[0] || "staged"}
-              isLoading={isInspectingStaged}
-              onPreviewEntry={onPreviewStagedEntry}
-              excludedPaths={excludedCompressPaths}
-              onToggleExclude={onToggleCompressExclude}
-              onIncludeAll={onCompressIncludeAll}
-              isExpandedModal={true}
-              onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
-              onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
-              sidebar={renderWorkspaceSidebar()}
-              sidebarTitle="Compression Options"
-              inspectorTitle="Staged Items & Folders"
-            />
-          )}
-
           <div className="flex justify-between items-center pt-2">
             <div className="flex space-x-2">
               <button
@@ -677,7 +664,7 @@ export function CompressPage({
             <p className="text-sm font-medium text-white mb-1">Drag & drop files or folders here</p>
             <p className="text-xs text-[#A8A8A8]">Native hardware-accelerated multithreaded engine</p>
           </div>
-          <div className="flex space-x-2">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             <button
               type="button"
               onClick={(e) => {
@@ -697,6 +684,20 @@ export function CompressPage({
               className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer"
             >
               Select Folder
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsWorkspaceOpen(true);
+              }}
+              className="text-xs font-semibold px-4 py-2 bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/40 hover:border-[#60CDFF]/70 rounded-md transition-all cursor-pointer flex items-center space-x-1.5 shadow-[0_0_12px_rgba(96,205,255,0.15)]"
+              title="Open full workspace with folder hierarchy, drive browsing, and options sidebar"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+              </svg>
+              <span>Workspace</span>
             </button>
           </div>
         </div>
@@ -1275,6 +1276,24 @@ export function CompressPage({
           onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
           sidebar={renderWorkspaceSidebar()}
           sidebarTitle="Compression Options"
+          inspectorTitle="Staged Items & Folders"
+          operationProgress={
+            isCompressing && progress
+              ? {
+                  percent: progress.percent,
+                  label: "Compressing Files...",
+                  current_file: progress.current_file,
+                  bytes_processed: progress.bytes_processed,
+                  total_bytes: progress.total_bytes,
+                  onCancel: handleCancelCompress,
+                  isCancelling: isCancellingCompress,
+                }
+              : null
+          }
+          onStageItem={(path) => {
+            setSelectedFiles((prev) => (prev.includes(path) ? prev : [...prev, path]));
+          }}
+          mode="compress"
         />
       )}
     </>

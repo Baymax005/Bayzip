@@ -52,3 +52,17 @@ input[type="range"]::-moz-range-thumb {
   border: none;
   box-shadow: 0 0 6px rgba(96, 205, 255, 0.4);
 }
+
+/* Energetic Emerald Progress Shimmer */
+@keyframes shimmerSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmerSweep 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}

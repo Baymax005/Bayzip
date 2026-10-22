@@ -81,3 +81,20 @@ export interface DriveInfo {
   available_bytes: number;
   is_removable: boolean;
 }
+
+export interface DirectoryItem {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+}
+
+export interface OperationProgressInfo {
+  percent: number;
+  label: string;
+  current_file?: string;
+  bytes_processed?: number;
+  total_bytes?: number;
+  onCancel?: () => void;
+  isCancelling?: boolean;
+}

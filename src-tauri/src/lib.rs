@@ -280,6 +280,15 @@ async fn get_system_drives() -> Result<Vec<DriveInfo>, String> {
 }
 
 #[tauri::command]
+async fn browse_directory(path: String) -> Result<Vec<DirectoryItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        inspector::browse_directory_sync(&path)
+    })
+    .await
+    .map_err(|e| format!("Browse directory failed: {}", e))?
+}
+
+#[tauri::command]
 async fn delete_to_recycle_bin(path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         inspector::delete_to_recycle_bin_sync(&path)
@@ -346,6 +355,7 @@ pub fn run() {
             get_file_icon,
             get_file_icons,
             get_system_drives,
+            browse_directory,
             delete_to_recycle_bin,
             create_directory,
             rename_path,

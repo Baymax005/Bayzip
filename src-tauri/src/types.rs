@@ -64,6 +64,14 @@ pub struct DriveInfo {
     pub is_removable: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DirectoryItem {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct ArchiveInfo {
     pub path: String,

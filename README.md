@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.2.0)
+# 📦 Bayzip (v2.2.1)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -6,6 +6,27 @@
 ---
 
 ## ⚡ Key Features
+
+### 🖥️ Full-Screen Workspace Takeover & Multi-Drive File Navigator (v2.2.1)
+- **True Screen Takeover Interface**:
+  - Replaced the constrained modal overlay with an immersive, full-screen canvas (`fixed inset-0 w-screen h-screen bg-[#141414] z-50`).
+  - Integrated native-styled Windows caption controls (Minimize, Maximize, and Exit Workspace with `Esc` key shortcut) along with seamless `data-tauri-drag-region` multi-monitor dragging.
+- **System Drives Selector & Visual Storage Gauges (Left Panel)**:
+  - Interactive drive cards displaying drive letter, volume label, and storage usage gauges with percentage bars and available/total GB.
+  - Dual source mode: easily switch between **Staged / Archive Tree** and **Drive Files**.
+- **Asynchronous Disk Directory Browsing**:
+  - Asynchronous `browse_directory` backend command (`tauri::async_runtime::spawn_blocking`) for fluid directory exploration without UI lockups.
+  - Interactive breadcrumbs with parent directory jumping and root resets.
+  - Double-click folder exploration, zero-disk safe file previewing, and 1-click direct staging (`+ Stage`) to queue files from any drive directly into the archive.
+- **In-Workspace Advanced Options Sidebar (Right Panel)**:
+  - Accessible Advance Section drawer right inside the workspace canvas.
+  - Real-time archive name editing and destination directory targeting.
+  - Format selection (`.bay`, `.bay_gamer`, `.zip`, `.tar.zst`, `.7z`), hardware core allocation slider, solid compression settings, encryption passwords, and smart media bypass.
+- **Dual Real-Time Progress & Loading Indicators**:
+  - **Running Emerald Bottom Progress Line**: High-visibility glowing emerald line across the bottom viewport edge (`h-1.5 bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.7)]`) with smooth shimmer sweep animation during active operations.
+  - **Floating Pop-up / Pop-down Progress HUD**: Docked card in the bottom-right corner (`fixed bottom-6 right-6`) displaying active operation status, current filename, processed/total byte telemetry, and one-click operation cancellation.
+- **Dedicated Quick-Access Buttons**:
+  - Dedicated glowing **Workspace** buttons on the top navigation bar, empty drop zones, and staging/loaded archive headers across both Compress and Extract modes.
 
 ### 🚀 Smart Pre-Compressed Media Bypass (High-Throughput Store Mode)
 - **Zero-CPU Dynamic Store Mode (`zip::CompressionMethod::Stored`) [ZIP & TAR]**:

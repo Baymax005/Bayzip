@@ -2,6 +2,47 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.2.1] - 2026-10-22
+
+### 🖥️ Full-Screen Workspace Takeover & Competitor-Grade UX
+- **Border-Free Full Canvas Mode**:
+  - Replaced the constrained modal overlay with a borderless, immersive full-screen takeover workspace (`fixed inset-0 w-screen h-screen bg-[#141414] z-50`).
+  - Integrated custom Windows-style caption/titlebar controls: Minimize, Maximize, and Exit Workspace (with `Esc` key shortcut) along with seamless `data-tauri-drag-region` multi-monitor dragging.
+- **Dedicated "Workspace" Access Buttons**:
+  - Added dedicated glowing **Workspace** buttons across primary views:
+    - Top navigation bar next to Compress/Extract mode tabs.
+    - Prominent trigger buttons in the central drag-and-drop zone of both Compress and Extract pages.
+    - Quick-access buttons in the staged files header and loaded archive header.
+
+### 🧭 System Drives Selector & Multi-Drive Disk Hierarchy Navigator
+- **Visual Storage Capacity Gauges (Left Panel)**:
+  - Added interactive system drive cards displaying drive letter, volume label, and storage usage gauges with percentage bars and available/total GB.
+  - Dual source mode: easily toggle between **Staged / Archive Tree** and **Drive Files**.
+- **Asynchronous Disk Directory Browsing**:
+  - Implemented async `browse_directory` Tauri command (`tauri::async_runtime::spawn_blocking`) for lightning-fast directory traversal without UI stutter.
+  - Interactive breadcrumbs with parent directory jumping and root resets.
+  - Double-click folder exploration and zero-disk safe file previewing.
+  - **1-Click Direct Staging (`+ Stage`)**: Queue individual files or entire folders from any local drive directly into the archive without leaving the workspace.
+
+### ⚙️ In-Workspace Advanced Options Sidebar (Right Panel)
+- **Direct Workspace Configuration**:
+  - In-workspace access to the Advance Section drawer without leaving the full-screen view.
+  - Real-time archive name editing and destination directory targeting.
+  - Format selection (`.bay`, `.bay_gamer`, `.zip`, `.tar.zst`, `.7z`), hardware core allocation slider, solid compression settings, encryption passwords, and smart media bypass.
+
+### 🟢 Dual Real-Time Progress & Loading Indicators
+- **High-Visibility Emerald Bottom Progress Line**:
+  - Running glowing emerald line across the bottom viewport edge (`h-1.5 bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.7)]`) with smooth `@keyframes shimmerSweep` animation during active operations.
+- **Floating Pop-up / Pop-down Progress HUD**:
+  - Docked toast card in the bottom-right corner (`fixed bottom-6 right-6`) providing detailed operation feedback:
+    - Active operation status, current filename, processed/total byte telemetry, and smooth percentage progress.
+    - One-click immediate operation cancellation.
+
+### 🛠️ Stability & Architecture Improvements
+- **Resolved Duplicate Tree Inspector Mounting**: Fixed an issue in `CompressPage.tsx` where multiple overlapping instances of the inspector mounted simultaneously when toggling workspace mode.
+- **Safe Fallback State Handling**: Added graceful fallback initialization in `ExtractPage.tsx` allowing workspace mode exploration even when no archive has been loaded yet.
+- **Cleaned Unused Variables**: Removed dead state variables (`isDriveMenuOpen`) and verified 100% clean builds across TypeScript and Rust.
+
 ## [v2.2.0] - 2026-10-22
 
 ### 🗂️ Advanced In-App File Management Suite & Live Hierarchy Engine
