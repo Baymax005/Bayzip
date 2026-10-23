@@ -3,6 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArchiveInfo, ArchiveEntryItem, DriveInfo, DirectoryItem, OperationProgressInfo } from "../types";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
+import { WorkspaceNavBar } from "./workspace/WorkspaceNavBar";
+import { WorkspaceStagedQueue } from "./workspace/WorkspaceStagedQueue";
+import { WorkspaceHeaderProgressHUD } from "./workspace/WorkspaceHeaderProgressHUD";
 
 export interface ArchiveTreeInspectorProps {
   archiveInfo: ArchiveInfo;
@@ -23,6 +26,11 @@ export interface ArchiveTreeInspectorProps {
   operationProgress?: OperationProgressInfo | null;
   onStageItem?: (path: string) => void;
   mode?: "compress" | "extract";
+  onSwitchMode?: (newMode: "compress" | "extract") => void;
+  stagedItems?: string[];
+  itemsInfo?: Record<string, { size: number; is_dir: boolean }>;
+  onUnstageItem?: (path: string) => void;
+  onClearStagedItems?: () => void;
 }
 
 export function normalizeArchiveEntryPath(p: string): string {
@@ -147,6 +155,11 @@ export function ArchiveTreeInspector({
   operationProgress,
   onStageItem,
   mode = "compress",
+  onSwitchMode,
+  stagedItems,
+  itemsInfo,
+  onUnstageItem,
+  onClearStagedItems,
 }: ArchiveTreeInspectorProps) {
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [internalExpandedModal, setInternalExpandedModal] = useState<boolean>(false);
@@ -164,6 +177,13 @@ export function ArchiveTreeInspector({
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedEntryName, setSelectedEntryName] = useState<string | null>(null);
   const [isExclusionMode, setIsExclusionMode] = useState<boolean>(false);
+
+  // Staged files drawer state
+  const [isStagedQueueOpen, setIsStagedQueueOpen] = useState<boolean>(true);
+  const [stagedQueueHeight, setStagedQueueHeight] = useState<number>(180);
+
+  // Top Titlebar Progress HUD dropdown state
+  const [isHeaderHUDOpen, setIsHeaderHUDOpen] = useState<boolean>(false);
 
   // Dynamic responsive window width tracking
   const [windowWidth, setWindowWidth] = useState<number>(() =>
@@ -191,6 +211,31 @@ export function ArchiveTreeInspector({
   const [isLoadingDisk, setIsLoadingDisk] = useState<boolean>(false);
   const [diskError, setDiskError] = useState<string | null>(null);
 
+  // Disk Navigation History
+  const [diskHistory, setDiskHistory] = useState<string[]>(["C:\\"]);
+  const [diskHistoryIndex, setDiskHistoryIndex] = useState<number>(0);
+
+  // Helper to resolve an archive/tree entry to its absolute path in stagedItems (if staged for compression)
+  const findStagedItemPath = (entryPath: string): string | null => {
+    if (!stagedItems || stagedItems.length === 0) return null;
+    const clean = entryPath.replace(/\\/g, "/").replace(/\/+$/, "").trim();
+    for (const item of stagedItems) {
+      const cleanItem = item.replace(/\\/g, "/").replace(/\/+$/, "").trim();
+      if (cleanItem.toLowerCase() === clean.toLowerCase()) {
+        return item;
+      }
+      const base = cleanItem.split("/").pop() || "";
+      if (base.toLowerCase() === clean.toLowerCase()) {
+        return item;
+      }
+      const rootSeg = clean.split("/")[0] || "";
+      if (base.toLowerCase() === rootSeg.toLowerCase() && clean === rootSeg) {
+        return item;
+      }
+    }
+    return null;
+  };
+
   const loadDiskDirectory = async (dirPath: string) => {
     setIsLoadingDisk(true);
     setDiskError(null);
@@ -203,6 +248,53 @@ export function ArchiveTreeInspector({
     } finally {
       setIsLoadingDisk(false);
     }
+  };
+
+  const navigateToDiskDirectory = (dirPath: string, pushHistory = true) => {
+    let clean = dirPath.trim();
+    if (/^[a-zA-Z]:$/.test(clean)) {
+      clean = `${clean}\\`;
+    }
+    loadDiskDirectory(clean);
+    if (pushHistory) {
+      setDiskHistory((prev) => {
+        const next = prev.slice(0, diskHistoryIndex + 1);
+        next.push(clean);
+        return next;
+      });
+      setDiskHistoryIndex((prev) => prev + 1);
+    }
+  };
+
+  const handleDiskBack = () => {
+    if (diskHistoryIndex > 0) {
+      const target = diskHistory[diskHistoryIndex - 1];
+      setDiskHistoryIndex((prev) => prev - 1);
+      loadDiskDirectory(target);
+    }
+  };
+
+  const handleDiskForward = () => {
+    if (diskHistoryIndex < diskHistory.length - 1) {
+      const target = diskHistory[diskHistoryIndex + 1];
+      setDiskHistoryIndex((prev) => prev + 1);
+      loadDiskDirectory(target);
+    }
+  };
+
+  const handleDiskUp = () => {
+    const clean = diskCurrentPath.replace(/[/\\]+$/, "");
+    const lastSlash = Math.max(clean.lastIndexOf("\\"), clean.lastIndexOf("/"));
+    if (lastSlash > 0) {
+      const parent = clean.substring(0, lastSlash + 1);
+      navigateToDiskDirectory(parent);
+    } else if (clean.length >= 2 && clean[1] === ":") {
+      navigateToDiskDirectory(`${clean.slice(0, 2)}\\`);
+    }
+  };
+
+  const handleDiskRefresh = () => {
+    loadDiskDirectory(diskCurrentPath);
   };
 
   useEffect(() => {
@@ -942,66 +1034,6 @@ export function ArchiveTreeInspector({
     );
   };
 
-  // Breadcrumbs for Disk File System Browsing
-  const renderDiskBreadcrumbs = () => {
-    const normalized = diskCurrentPath.replace(/\\/g, "/");
-    const segments = normalized.split("/").filter(Boolean);
-
-    return (
-      <div className="px-3.5 py-1.5 bg-[#202020] border-b border-[#2C2C2C] flex items-center space-x-1 text-xs font-mono text-[#A8A8A8] overflow-x-auto custom-scrollbar shrink-0">
-        <button
-          type="button"
-          onClick={() => {
-            const root = activeDrive ? `${activeDrive}\\` : "C:\\";
-            loadDiskDirectory(root);
-          }}
-          className="hover:text-white flex items-center space-x-1 px-1.5 py-0.5 rounded hover:bg-[#2A2A2A] transition-colors cursor-pointer shrink-0 font-bold text-[#60CDFF]"
-        >
-          <span>🖴</span>
-          <span>{activeDrive}</span>
-        </button>
-        {segments.map((seg, idx) => {
-          if (idx === 0 && seg.includes(":")) return null;
-          const subPath = segments.slice(0, idx + 1).join("\\") + "\\";
-          const isLast = idx === segments.length - 1;
-
-          return (
-            <div key={`${seg}-${idx}`} className="flex items-center space-x-1 shrink-0">
-              <span className="text-[#555555]">/</span>
-              <button
-                type="button"
-                onClick={() => loadDiskDirectory(subPath)}
-                className={`px-1.5 py-0.5 rounded transition-colors cursor-pointer truncate max-w-[140px] ${
-                  isLast ? "text-white font-semibold bg-[#2A2A2A]" : "hover:text-white hover:bg-[#282828]"
-                }`}
-                title={subPath}
-              >
-                {seg}
-              </button>
-            </div>
-          );
-        })}
-        {/* Navigate Up button */}
-        <button
-          type="button"
-          onClick={() => {
-            const clean = diskCurrentPath.replace(/[/\\]+$/, "");
-            const lastSlash = Math.max(clean.lastIndexOf("\\"), clean.lastIndexOf("/"));
-            if (lastSlash > 0) {
-              const parent = clean.substring(0, lastSlash + 1);
-              loadDiskDirectory(parent);
-            } else if (clean.length > 2) {
-              loadDiskDirectory(`${clean.slice(0, 2)}\\`);
-            }
-          }}
-          className="ml-auto text-[10px] px-2 py-0.5 bg-[#2A2A2A] hover:bg-[#333333] text-[#A8A8A8] hover:text-white rounded border border-[#3E3E3E] transition-colors cursor-pointer shrink-0 flex items-center space-x-1"
-          title="Go Up One Folder Level"
-        >
-          <span>⬆️ Up</span>
-        </button>
-      </div>
-    );
-  };
 
   // Center Table for Disk Filesystem Browsing
   const renderDiskFolderContents = () => {
@@ -1047,58 +1079,78 @@ export function ArchiveTreeInspector({
         items={filtered}
         rowHeight={34}
         className="flex-1 h-full"
-        renderRow={(item) => (
-          <div
-            key={item.path}
-            onDoubleClick={() => {
-              if (item.is_dir) {
-                loadDiskDirectory(item.path);
-              } else {
-                invoke("preview_staged_file", { path: item.path })
-                  .then(() => {
-                    if (onPreviewEntry) onPreviewEntry(item.name);
-                  })
-                  .catch(() => {});
-              }
-            }}
-            style={{ height: "34px" }}
-            className="flex items-center justify-between px-3 text-xs hover:bg-[#242424] transition-colors cursor-pointer group box-border border-b border-[#222222]"
-          >
-            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-              {item.is_dir ? (
-                <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                </svg>
-              ) : (
-                <FileFormatIcon fileName={item.name} size="sm" />
-              )}
-              <span className="font-mono text-[11px] truncate text-white" title={item.path}>
-                {item.name}
-              </span>
-            </div>
+        renderRow={(item) => {
+          const isAlreadyStaged = Boolean(stagedItems && stagedItems.includes(item.path));
+          return (
+            <div
+              key={item.path}
+              onDoubleClick={() => {
+                if (item.is_dir) {
+                  navigateToDiskDirectory(item.path);
+                } else {
+                  invoke("preview_staged_file", { path: item.path })
+                    .then(() => {
+                      if (onPreviewEntry) onPreviewEntry(item.name);
+                    })
+                    .catch(() => {});
+                }
+              }}
+              style={{ height: "34px" }}
+              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
+                isAlreadyStaged
+                  ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
+                  : "hover:bg-[#242424]"
+              }`}
+            >
+              <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                {item.is_dir ? (
+                  <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                ) : (
+                  <FileFormatIcon fileName={item.name} size="sm" />
+                )}
+                <span className={`font-mono text-[11px] truncate ${isAlreadyStaged ? "text-emerald-300 font-medium" : "text-white"}`} title={item.path}>
+                  {item.name}
+                </span>
+                {isAlreadyStaged && (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-950/90 border border-emerald-600/80 text-emerald-300 font-bold shrink-0">
+                    Staged
+                  </span>
+                )}
+              </div>
 
-            <div className="flex items-center space-x-3 shrink-0">
-              <span className="font-mono text-[11px] text-[#888888] w-20 text-right">
-                {item.is_dir ? "Folder" : formatBytes(item.size)}
-              </span>
+              <div className="flex items-center space-x-3 shrink-0">
+                <span className="font-mono text-[11px] text-[#888888] w-20 text-right">
+                  {item.is_dir ? "Folder" : formatBytes(item.size)}
+                </span>
 
-              {/* Stage button in Compress mode */}
-              {onStageItem && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onStageItem(item.path);
-                  }}
-                  className="px-2 py-0.5 bg-[#173042] hover:bg-[#1C3E56] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/30 hover:border-[#60CDFF]/70 rounded text-[10px] font-semibold transition-all cursor-pointer opacity-70 group-hover:opacity-100 flex items-center space-x-1"
-                  title={`Stage "${item.name}" for archive`}
-                >
-                  <span>+ Stage</span>
-                </button>
-              )}
+                {/* Stage / Unstage toggle button in Compress mode */}
+                {onStageItem && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isAlreadyStaged && onUnstageItem) {
+                        onUnstageItem(item.path);
+                      } else {
+                        onStageItem(item.path);
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer flex items-center space-x-1 ${
+                      isAlreadyStaged
+                        ? "bg-emerald-950/80 hover:bg-rose-950/80 text-emerald-300 hover:text-rose-300 border border-emerald-500/70 hover:border-rose-500/70 shadow-sm"
+                        : "bg-[#173042] hover:bg-[#1C3E56] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/30 hover:border-[#60CDFF]/70 opacity-70 group-hover:opacity-100"
+                    }`}
+                    title={isAlreadyStaged ? `Remove "${item.name}" from archive staging` : `Stage "${item.name}" for archive`}
+                  >
+                    <span>{isAlreadyStaged ? "✓ Staged" : "+ Stage"}</span>
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        }}
       />
     );
   };
@@ -1257,9 +1309,40 @@ export function ArchiveTreeInspector({
             <span className="font-bold text-xs tracking-wider text-white uppercase font-sans">
               BAYZIP WORKSPACE
             </span>
-            <span className="text-[10px] uppercase font-mono font-semibold px-2 py-0.5 rounded bg-[#173042] text-[#60CDFF] border border-[#60CDFF]/40">
-              {mode === "compress" ? "Compress Mode" : "Extract Mode"}
-            </span>
+            {onSwitchMode ? (
+              <div className="flex items-center bg-[#141414] p-0.5 rounded-lg border border-[#3E3E3E]" data-tauri-drag-region="false">
+                <button
+                  type="button"
+                  onClick={() => onSwitchMode("compress")}
+                  className={`px-2.5 py-0.5 text-[10px] font-semibold rounded transition-all cursor-pointer flex items-center space-x-1 ${
+                    mode === "compress"
+                      ? "bg-[#173042] text-[#60CDFF] border border-[#60CDFF]/50 shadow-[0_0_8px_rgba(96,205,255,0.25)]"
+                      : "text-[#888888] hover:text-white hover:bg-[#202020] border border-transparent"
+                  }`}
+                  title="Switch to Compress Workspace"
+                >
+                  <span>📦</span>
+                  <span>Compress</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSwitchMode("extract")}
+                  className={`px-2.5 py-0.5 text-[10px] font-semibold rounded transition-all cursor-pointer flex items-center space-x-1 ${
+                    mode === "extract"
+                      ? "bg-[#25394A] text-[#60CDFF] border border-[#60CDFF]/50 shadow-[0_0_8px_rgba(96,205,255,0.25)]"
+                      : "text-[#888888] hover:text-white hover:bg-[#202020] border border-transparent"
+                  }`}
+                  title="Switch to Extract Workspace"
+                >
+                  <span>📂</span>
+                  <span>Extract</span>
+                </button>
+              </div>
+            ) : (
+              <span className="text-[10px] uppercase font-mono font-semibold px-2 py-0.5 rounded bg-[#173042] text-[#60CDFF] border border-[#60CDFF]/40">
+                {mode === "compress" ? "Compress Mode" : "Extract Mode"}
+              </span>
+            )}
           </div>
         ) : (
           <>
@@ -1275,6 +1358,18 @@ export function ArchiveTreeInspector({
           {archiveInfo.file_count || 0} item{archiveInfo.file_count !== 1 ? "s" : ""}
         </span>
       </div>
+
+      {/* Center Dynamic Titlebar Progress HUD (Pill with Dropdown Details) */}
+      {operationProgress && (
+        <div className="flex-1 flex justify-center items-center min-w-0 px-2" data-tauri-drag-region="false">
+          <WorkspaceHeaderProgressHUD
+            progress={operationProgress}
+            isOpen={isHeaderHUDOpen}
+            onToggleOpen={() => setIsHeaderHUDOpen((prev) => !prev)}
+            onClose={() => setIsHeaderHUDOpen(false)}
+          />
+        </div>
+      )}
 
       <div className="flex items-center space-x-2">
         {/* Responsive Folder Tree Toggle (in full modal when window width < 850px) */}
@@ -1690,6 +1785,7 @@ export function ArchiveTreeInspector({
               const sub = item.data;
               const isFolderSkipped = isDirExcluded(sub.path);
               const isRenaming = renamingItem && renamingItem.originalName === sub.path;
+              const matchedStagedPath = mode === "compress" ? findStagedItemPath(sub.path) : null;
               return (
                 <div
                   key={`folder-${sub.path}`}
@@ -1763,7 +1859,20 @@ export function ArchiveTreeInspector({
                     <span className="text-[#777777] font-mono text-[10px]">
                       {sub.totalItemCount} item{sub.totalItemCount !== 1 ? "s" : ""}
                     </span>
-                    {isExclusionMode && onToggleExclude && (
+                    {matchedStagedPath && onUnstageItem ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onUnstageItem(matchedStagedPath);
+                        }}
+                        className="text-[10px] px-2 py-0.5 rounded bg-rose-950/40 hover:bg-rose-900/70 text-rose-300 hover:text-white border border-rose-800/60 hover:border-rose-600 transition-colors flex items-center space-x-1 cursor-pointer"
+                        title="Remove this folder from archive selection"
+                      >
+                        <span className="font-bold">✕</span>
+                        <span>Remove</span>
+                      </button>
+                    ) : onToggleExclude ? (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -1780,7 +1889,7 @@ export function ArchiveTreeInspector({
                         <span className="text-rose-400 font-bold">{isFolderSkipped ? "↺" : "✕"}</span>
                         <span>{isFolderSkipped ? "Include" : "Skip Dir"}</span>
                       </button>
-                    )}
+                    ) : null}
                     <button
                       type="button"
                       onClick={(e) => {
@@ -1801,6 +1910,7 @@ export function ArchiveTreeInspector({
             const fileNameOnly = file.name.split(/[/\\]/).pop() || file.name;
             const isExcluded = isFileExcluded(file.name);
             const isRenaming = renamingItem && renamingItem.originalName === file.name;
+            const matchedStagedFilePath = mode === "compress" ? findStagedItemPath(file.name) : null;
 
             return (
               <div
@@ -1878,7 +1988,20 @@ export function ArchiveTreeInspector({
                   <span className={`font-mono text-[11px] ${isExcluded ? "text-rose-400 font-semibold" : "text-[#888888]"}`}>
                     {isExcluded ? "(Skipped)" : formatBytes(file.size)}
                   </span>
-                  {isExclusionMode && onToggleExclude ? (
+                  {matchedStagedFilePath && onUnstageItem ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onUnstageItem(matchedStagedFilePath);
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-rose-950/40 hover:bg-rose-900/70 text-rose-300 hover:text-white border border-rose-800/60 hover:border-rose-600 transition-colors flex items-center space-x-1 cursor-pointer"
+                      title="Remove this file from archive selection"
+                    >
+                      <span className="font-bold">✕</span>
+                      <span>Remove</span>
+                    </button>
+                  ) : onToggleExclude ? (
                     <button
                       type="button"
                       onClick={(e) => {
@@ -1895,20 +2018,19 @@ export function ArchiveTreeInspector({
                       <span className="text-rose-400 font-bold">{isExcluded ? "↺" : "✕"}</span>
                       <span>{isExcluded ? "Include" : "Skip"}</span>
                     </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onPreviewEntry(file.name);
-                      }}
-                      className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
-                      title="In-memory safe preview (Zero-disk)"
-                    >
-                      <span>👁️</span>
-                      <span>Preview</span>
-                    </button>
-                  )}
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPreviewEntry(file.name);
+                    }}
+                    className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
+                    title="In-memory safe preview (Zero-disk)"
+                  >
+                    <span>👁️</span>
+                    <span>Preview</span>
+                  </button>
                 </div>
               </div>
             );
@@ -1953,6 +2075,7 @@ export function ArchiveTreeInspector({
             const isExcluded = !entry.is_dir && isFileExcluded(entry.name);
             const isFolderSkipped = entry.is_dir && isDirExcluded(entry.name);
             const isDimmed = isExcluded || isFolderSkipped;
+            const matchedStagedEntryPath = mode === "compress" ? findStagedItemPath(entry.name) : null;
 
             return (
               <div
@@ -2016,7 +2139,20 @@ export function ArchiveTreeInspector({
                         ? "Directory"
                         : formatBytes(entry.size)}
                 </span>
-                {isExclusionMode && onToggleExclude ? (
+                {matchedStagedEntryPath && onUnstageItem ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUnstageItem(matchedStagedEntryPath);
+                    }}
+                    className="text-[10px] px-2 py-0.5 rounded bg-rose-950/40 hover:bg-rose-900/70 text-rose-300 hover:text-white border border-rose-800/60 hover:border-rose-600 transition-colors flex items-center space-x-1 cursor-pointer"
+                    title="Remove this item from archive selection"
+                  >
+                    <span className="font-bold">✕</span>
+                    <span>Remove</span>
+                  </button>
+                ) : onToggleExclude ? (
                   <button
                     type="button"
                     onClick={(e) => {
@@ -2033,21 +2169,20 @@ export function ArchiveTreeInspector({
                     <span className="text-rose-400 font-bold">{isDimmed ? "↺" : "✕"}</span>
                     <span>{isDimmed ? "Include" : "Skip"}</span>
                   </button>
-                ) : (
-                  !entry.is_dir && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onPreviewEntry(entry.name);
-                      }}
-                      className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
-                      title="In-memory safe preview"
-                    >
-                      <span>👁️</span>
-                      <span>Preview</span>
-                    </button>
-                  )
+                ) : null}
+                {!entry.is_dir && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPreviewEntry(entry.name);
+                    }}
+                    className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
+                    title="In-memory safe preview"
+                  >
+                    <span>👁️</span>
+                    <span>Preview</span>
+                  </button>
                 )}
               </div>
             </div>
@@ -2137,8 +2272,26 @@ export function ArchiveTreeInspector({
                 <div className="flex-1 flex flex-col overflow-hidden min-w-0">
                   {viewMode === "tree" ? (
                     <>
-                      {browserSource === "filesystem" ? renderDiskBreadcrumbs() : renderBreadcrumbs()}
-                      {renderSearchInput()}
+                      {browserSource === "filesystem" ? (
+                        <WorkspaceNavBar
+                          currentPath={diskCurrentPath}
+                          onNavigate={(newPath) => navigateToDiskDirectory(newPath)}
+                          onRefresh={handleDiskRefresh}
+                          searchQuery={searchQuery}
+                          onSearchChange={setSearchQuery}
+                          canGoBack={diskHistoryIndex > 0}
+                          canGoForward={diskHistoryIndex < diskHistory.length - 1}
+                          onBack={handleDiskBack}
+                          onForward={handleDiskForward}
+                          onUp={handleDiskUp}
+                          isLoading={isLoadingDisk}
+                        />
+                      ) : (
+                        <>
+                          {renderBreadcrumbs()}
+                          {renderSearchInput()}
+                        </>
+                      )}
                       {/* Dual-Pane Layout: Left Folder Tree, Right Folder Files */}
                       <div className="flex-1 flex overflow-hidden relative">
                         {/* Left Pane: Hierarchical Tree & Drives */}
@@ -2199,9 +2352,30 @@ export function ArchiveTreeInspector({
                             </div>
                           )}
 
-                          <div className="flex-1 flex flex-col overflow-hidden">
+                          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
                             {browserSource === "filesystem" ? renderDiskFolderContents() : renderCurrentFolderContents()}
                           </div>
+
+                          {/* Staged Items Queue Drawer (Visible in Compress mode when stagedItems is passed) */}
+                          {mode === "compress" && stagedItems && (
+                            <WorkspaceStagedQueue
+                              stagedItems={stagedItems}
+                              itemsInfo={itemsInfo || {}}
+                              onRemoveItem={(path) => onUnstageItem && onUnstageItem(path)}
+                              onClearAll={() => onClearStagedItems && onClearStagedItems()}
+                              isOpen={isStagedQueueOpen}
+                              onToggleOpen={() => setIsStagedQueueOpen((prev) => !prev)}
+                              height={stagedQueueHeight}
+                              onHeightChange={(h) => setStagedQueueHeight(h)}
+                              onPreviewItem={(path) => {
+                                invoke("preview_staged_file", { path })
+                                  .then(() => {
+                                    if (onPreviewEntry) onPreviewEntry(path.split(/[/\\]/).pop() || path);
+                                  })
+                                  .catch(() => {});
+                              }}
+                            />
+                          )}
                         </div>
                       </div>
                     </>
@@ -2263,58 +2437,6 @@ export function ArchiveTreeInspector({
                 <div className="h-full bg-gradient-to-r from-[#059669] via-[#10B981] to-[#34D399] shadow-[0_0_12px_rgba(16,185,129,0.8)] animate-pulse w-full" />
               </div>
             ) : null}
-
-            {/* Floating Pop-Up / Pop-Down Progress Toast */}
-            {operationProgress && (
-              <div className="absolute bottom-6 right-6 z-50 w-84 bg-[#1C1C1C]/95 backdrop-blur-xl border border-[#3E3E3E] rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.8)] p-4 space-y-3 animate-in slide-in-from-bottom duration-300">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2 min-w-0">
-                    <span className="relative flex h-2.5 w-2.5 shrink-0">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#10B981] opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#10B981]"></span>
-                    </span>
-                    <span className="text-xs font-semibold text-white tracking-wide truncate">
-                      {operationProgress.label}
-                    </span>
-                  </div>
-                  <span className="font-mono text-sm font-bold text-[#60CDFF] shrink-0 ml-2">
-                    {Math.round(operationProgress.percent)}%
-                  </span>
-                </div>
-
-                <div className="w-full h-2 bg-[#282828] rounded-full overflow-hidden border border-[#383838] relative">
-                  <div
-                    className="h-full bg-gradient-to-r from-[#059669] via-[#10B981] to-[#34D399] rounded-full shadow-[0_0_10px_rgba(16,185,129,0.7)] transition-all duration-150 relative overflow-hidden"
-                    style={{ width: `${Math.max(operationProgress.percent, 3)}%` }}
-                  >
-                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent animate-shimmer" />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] text-[#A8A8A8]">
-                  <span className="truncate max-w-[190px] font-mono text-[10px]" title={operationProgress.current_file}>
-                    {operationProgress.current_file || "Processing..."}
-                  </span>
-                  {operationProgress.bytes_processed !== undefined && (
-                    <span className="font-mono text-[10px] text-[#60CDFF] shrink-0">
-                      {formatBytes(operationProgress.bytes_processed)}
-                      {operationProgress.total_bytes ? ` / ${formatBytes(operationProgress.total_bytes)}` : ""}
-                    </span>
-                  )}
-                </div>
-
-                {operationProgress.onCancel && (
-                  <button
-                    type="button"
-                    onClick={operationProgress.onCancel}
-                    disabled={operationProgress.isCancelling}
-                    className="w-full py-1 text-center text-xs font-medium text-rose-400 hover:text-white bg-rose-950/30 hover:bg-rose-900/60 border border-rose-800/50 rounded transition-colors cursor-pointer"
-                  >
-                    {operationProgress.isCancelling ? "Cancelling..." : "Cancel Operation"}
-                  </button>
-                )}
-              </div>
-            )}
 
             {/* Modal Bottom Status Bar */}
             <div className="px-4 py-2 bg-[#1A1A1A] border-t border-[#2A2A2A] flex items-center justify-between text-xs font-mono text-[#888888] shrink-0 gap-2">
@@ -2382,6 +2504,59 @@ export function ArchiveTreeInspector({
                   </button>
                 )}
 
+                {/* Primary Action in Compress Mode: Remove from selection / unstage */}
+                {contextMenu.target && mode === "compress" && findStagedItemPath(contextMenu.target.name) && onUnstageItem && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const matched = findStagedItemPath(contextMenu.target!.name);
+                      if (matched) onUnstageItem(matched);
+                      setContextMenu((prev) => ({ ...prev, isOpen: false }));
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/70 hover:text-white text-rose-300 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <span className="text-sm font-bold text-rose-400">✕</span>
+                      <span className="font-semibold">Remove from Archive</span>
+                    </div>
+                    <span className="text-[10px] text-rose-400/80 font-mono">Unstage</span>
+                  </button>
+                )}
+
+                {/* Primary Action in Extract Mode or Inner File: Exclude / Skip */}
+                {onToggleExclude && (!findStagedItemPath(contextMenu.target.name) || mode === "extract") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (contextMenu.target) {
+                        onToggleExclude(contextMenu.target.name, contextMenu.target.isDir);
+                      }
+                      setContextMenu((prev) => ({ ...prev, isOpen: false }));
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/70 hover:text-white text-rose-300 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <span className="text-sm font-bold text-rose-400">
+                        {contextMenu.target.isDir
+                          ? isDirExcluded(contextMenu.target.name) ? "↺" : "✕"
+                          : isFileExcluded(contextMenu.target.name) ? "↺" : "✕"}
+                      </span>
+                      <span className="font-semibold">
+                        {contextMenu.target.isDir
+                          ? isDirExcluded(contextMenu.target.name) ? "Include Folder" : "Exclude Folder"
+                          : isFileExcluded(contextMenu.target.name) ? "Include in Extraction" : "Exclude from Extraction"}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-rose-400/80 font-mono">
+                      {contextMenu.target.isDir
+                        ? isDirExcluded(contextMenu.target.name) ? "Include" : "Skip"
+                        : isFileExcluded(contextMenu.target.name) ? "Include" : "Skip"}
+                    </span>
+                  </button>
+                )}
+
+                <div className="my-1 border-t border-[#2E2E2E]" />
+
                 <button
                   type="button"
                   onClick={() => {
@@ -2418,22 +2593,26 @@ export function ArchiveTreeInspector({
                   <span className="text-[10px] text-[#777777] font-mono">Ctrl+C</span>
                 </button>
 
-                <div className="my-1 border-t border-[#2E2E2E]" />
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (contextMenu.target) handleDeleteItem(contextMenu.target.name, contextMenu.target.isDir);
-                    setContextMenu((prev) => ({ ...prev, isOpen: false }));
-                  }}
-                  className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/60 hover:text-rose-300 text-rose-400 transition-colors cursor-pointer"
-                >
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm">🗑️</span>
-                    <span>Delete (Recycle Bin)</span>
-                  </div>
-                  <span className="text-[10px] text-rose-400/80 font-mono">Del</span>
-                </button>
+                {/* Only offer physical deletion to Recycle Bin when exploring real disk filesystem */}
+                {browserSource === "filesystem" && (
+                  <>
+                    <div className="my-1 border-t border-[#2E2E2E]" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (contextMenu.target) handleDeleteItem(contextMenu.target.name, contextMenu.target.isDir);
+                        setContextMenu((prev) => ({ ...prev, isOpen: false }));
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/60 hover:text-rose-300 text-rose-400 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <span className="text-sm">🗑️</span>
+                        <span>Delete from Disk (Recycle Bin)</span>
+                      </div>
+                      <span className="text-[10px] text-rose-400/80 font-mono">Del</span>
+                    </button>
+                  </>
+                )}
 
                 <div className="my-1 border-t border-[#2E2E2E]" />
               </>

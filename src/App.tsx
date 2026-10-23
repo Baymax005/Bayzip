@@ -306,6 +306,19 @@ function App() {
         if (entries.some((e) => e.is_dir)) {
           setCompressViewMode("tree");
         }
+        // Prune orphaned excluded paths that no longer exist in stagedEntries
+        setExcludedCompressPaths((prev) => {
+          if (prev.size === 0) return prev;
+          const entryNorms = new Set(entries.map((e) => normalizeArchiveEntryPath(e.name).replace(/\/+$/, "")));
+          const pruned = new Set<string>();
+          for (const exc of prev) {
+            const clean = exc.replace(/\/+$/, "");
+            if (entryNorms.has(clean)) {
+              pruned.add(exc);
+            }
+          }
+          return pruned;
+        });
       })
       .catch((err) => {
         if (isCurrent) console.error("Failed to inspect staged items:", err);
@@ -1195,6 +1208,7 @@ function App() {
               onPreviewStagedEntry={handlePreviewStagedEntry}
               isWorkspaceOpen={isWorkspaceOpen}
               setIsWorkspaceOpen={setIsWorkspaceOpen}
+              onSwitchMode={(m) => setActiveMode(m)}
             />
           )}
 
@@ -1237,6 +1251,7 @@ function App() {
               handlePreviewEntry={handlePreviewEntry}
               isWorkspaceOpen={isWorkspaceOpen}
               setIsWorkspaceOpen={setIsWorkspaceOpen}
+              onSwitchMode={(m) => setActiveMode(m)}
             />
           )}
         </div>

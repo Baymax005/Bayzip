@@ -4,6 +4,7 @@ import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeIn
 import { BayzipLogo } from "./BayzipLogo";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
+import { WorkspaceAdvanceSidebar } from "./workspace/WorkspaceAdvanceSidebar";
 
 const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
@@ -77,6 +78,7 @@ export interface CompressPageProps {
   onPreviewStagedEntry: (entryName: string) => void;
   isWorkspaceOpen?: boolean;
   setIsWorkspaceOpen?: (open: boolean) => void;
+  onSwitchMode?: (newMode: "compress" | "extract") => void;
 }
 
 export function CompressPage({
@@ -127,6 +129,7 @@ export function CompressPage({
   onPreviewStagedEntry,
   isWorkspaceOpen: isWorkspaceOpenProp,
   setIsWorkspaceOpen: setIsWorkspaceOpenProp,
+  onSwitchMode,
 }: CompressPageProps) {
   const [internalWorkspaceOpen, setInternalWorkspaceOpen] = useState(false);
   const isWorkspaceOpen = isWorkspaceOpenProp !== undefined ? isWorkspaceOpenProp : internalWorkspaceOpen;
@@ -159,6 +162,8 @@ export function CompressPage({
     return stagedEntries.filter((e) => !e.is_dir).length;
   }, [stagedEntries]);
 
+  const totalFilesCount = stagedEntries.length > 0 ? totalStagedFilesCount : selectedFiles.length;
+
   const includedFilesCount = useMemo(() => {
     if (stagedEntries.length === 0) return selectedFiles.length;
     if (excludedCompressPaths.size === 0) return totalStagedFilesCount;
@@ -178,6 +183,8 @@ export function CompressPage({
     }
     return count;
   }, [stagedEntries, excludedCompressPaths, totalStagedFilesCount, selectedFiles.length]);
+
+  const excludedFilesCount = Math.max(0, totalFilesCount - includedFilesCount);
 
   const stagedArchiveInfo = useMemo<ArchiveInfo>(() => {
     const targetName =
@@ -255,188 +262,42 @@ export function CompressPage({
   };
 
   const renderWorkspaceSidebar = () => (
-    <div className="space-y-4 text-xs">
-      {/* Archive Name Card */}
-      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-1.5">
-        <label className="text-[11px] font-medium text-[#C8C8C8]">Archive Name</label>
-        <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 rounded-md bg-[#252525] border border-[#3E3E3E] flex items-center justify-center shrink-0">
-            <BayzipLogo className="w-4 h-4" />
-          </div>
-          <div className="flex-1 flex items-center bg-[#252525] rounded-md border border-[#3E3E3E] focus-within:border-[#60CDFF] px-2 py-1">
-            <input
-              type="text"
-              disabled={isCompressing}
-              value={isCompressing && activeCompressConfig ? activeCompressConfig.archiveName : customArchiveName}
-              onChange={(e) => setCustomArchiveName(e.target.value)}
-              placeholder="Archive name..."
-              className="bg-transparent border-none outline-none text-white text-xs font-mono flex-1 disabled:opacity-50"
-            />
-            <span className="text-[11px] text-[#60CDFF] font-mono ml-1 font-semibold">
-              {selectedFormat}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Format Selector Pills */}
-      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-2">
-        <label className="text-[11px] font-medium text-[#C8C8C8]">Archive Format</label>
-        <div className="grid grid-cols-3 gap-1.5">
-          {[".bay", ".bayg", ".zip", ".7z", ".tar"].map((fmt) => (
-            <button
-              key={fmt}
-              type="button"
-              disabled={isCompressing}
-              onClick={() => {
-                setSelectedFormat(fmt);
-                setSelectedAlgorithm(FORMAT_ALGORITHMS[fmt]?.[0] || "None (Store)");
-              }}
-              className={`py-1.5 px-2 rounded text-xs font-mono font-semibold transition-all cursor-pointer ${
-                selectedFormat === fmt
-                  ? "bg-[#60CDFF] text-black shadow-sm"
-                  : "bg-[#252525] text-[#A8A8A8] hover:text-white border border-[#383838]"
-              }`}
-            >
-              {fmt}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Compression Level Slider */}
-      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-2">
-        <div className="flex justify-between items-center">
-          <label className="text-[11px] font-medium text-[#C8C8C8]">Compression Profile</label>
-          <span className="text-[10px] text-[#60CDFF] font-semibold bg-[#1a3847] px-2 py-0.5 rounded border border-[#23536b]">
-            {getSliderLabel()}
-          </span>
-        </div>
-        <div className="relative pt-1">
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="25"
-            disabled={isCompressing}
-            value={sliderValue}
-            onChange={(e) => setSliderValue(Number(e.target.value))}
-            className="w-full h-1.5 bg-[#333333] rounded-lg appearance-none cursor-pointer accent-[#60CDFF] block"
-          />
-          <div className="relative w-full h-4 mt-1.5 text-[9px] font-mono select-none">
-            {[
-              { val: 0, label: "Eco" },
-              { val: 25, label: "Fast" },
-              { val: 50, label: "Balanced" },
-              { val: 75, label: "High" },
-              { val: 100, label: "Max" },
-            ].map((tier) => {
-              const isSelected = sliderValue === tier.val;
-              return (
-                <span
-                  key={tier.val}
-                  onClick={() => !isCompressing && setSliderValue(tier.val)}
-                  style={{
-                    left: `calc(${tier.val}% + ${(50 - tier.val) * 0.16}px)`,
-                    transform: "translateX(-50%)",
-                  }}
-                  className={`absolute transition-colors cursor-pointer whitespace-nowrap ${
-                    isSelected ? "text-[#60CDFF] font-bold" : "text-[#777777] hover:text-[#C8C8C8]"
-                  }`}
-                  title={`Set Compression Profile to ${tier.label}`}
-                >
-                  {tier.label}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Smart Media Bypass Toggle */}
-      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 flex items-center justify-between">
-        <div>
-          <p className="text-[11px] font-medium text-white">Smart Media Bypass</p>
-          <p className="text-[10px] text-[#888888]">Store pre-compressed media directly</p>
-        </div>
-        <input
-          type="checkbox"
-          disabled={isCompressing}
-          checked={smartMediaBypass}
-          onChange={(e) => setSmartMediaBypass(e.target.checked)}
-          className="accent-[#60CDFF] w-4 h-4 cursor-pointer"
-        />
-      </div>
-
-      {/* Password Protection */}
-      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-1.5">
-        <label className="text-[11px] font-medium text-[#C8C8C8]">Encryption (Optional)</label>
-        <div className="flex items-center bg-[#252525] rounded-md border border-[#3E3E3E] focus-within:border-[#60CDFF] px-2 py-1">
-          <input
-            type={showCompressPassword ? "text" : "password"}
-            disabled={isCompressing}
-            value={compressPassword}
-            onChange={(e) => {
-              setCompressPassword(e.target.value);
-              if (e.target.value.trim().length > 0 && selectedEncryption === "none") {
-                setSelectedEncryption("aes256");
-              }
-            }}
-            placeholder="Password..."
-            className="bg-transparent border-none outline-none text-white text-xs font-mono flex-1 disabled:opacity-50"
-          />
-          <button
-            type="button"
-            onClick={() => setShowCompressPassword(!showCompressPassword)}
-            className="text-[#888] hover:text-white p-0.5 cursor-pointer text-xs"
-          >
-            {showCompressPassword ? "Hide" : "Show"}
-          </button>
-        </div>
-      </div>
-
-      {/* Live Staging Summary */}
-      <div className="bg-[#182633]/60 border border-[#20495f]/70 rounded-lg p-3 space-y-1 text-[#C8C8C8]">
-        <div className="flex justify-between text-[11px]">
-          <span>Files Selected:</span>
-          <span className="font-mono text-white font-semibold">{includedFilesCount} of {totalStagedFilesCount}</span>
-        </div>
-        {excludedCompressPaths.size > 0 && (
-          <div className="flex justify-between text-[11px] text-rose-300">
-            <span>Files Excluded:</span>
-            <span className="font-mono font-semibold">{excludedCompressPaths.size} skipped</span>
-          </div>
-        )}
-        <div className="flex justify-between text-[11px]">
-          <span>Est. Payload:</span>
-          <span className="font-mono text-[#60CDFF] font-semibold">{formatBytes(effectiveTotalSize)}</span>
-        </div>
-      </div>
-
-      {/* Primary Action Button */}
-      <div className="pt-1">
-        {isCompressing ? (
-          <button
-            type="button"
-            onClick={handleCancelCompress}
-            disabled={isCancellingCompress}
-            className="w-full py-2.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg text-xs transition-colors flex items-center justify-center space-x-2 cursor-pointer shadow-lg"
-          >
-            <span>{isCancellingCompress ? "Cancelling..." : "Cancel Compression"}</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleCompress}
-            disabled={selectedFiles.length === 0}
-            className="w-full py-3 bg-[#60CDFF] hover:bg-[#72D4FF] text-black font-bold rounded-lg text-xs tracking-wide uppercase transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-lg hover:shadow-[0_0_20px_rgba(96,205,255,0.4)] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span>⚡</span>
-            <span>Compress Now ({selectedFormat})</span>
-          </button>
-        )}
-      </div>
-    </div>
+    <WorkspaceAdvanceSidebar
+      archiveName={isCompressing && activeCompressConfig ? activeCompressConfig.archiveName : customArchiveName}
+      onArchiveNameChange={setCustomArchiveName}
+      selectedFormat={selectedFormat}
+      onFormatChange={(fmt) => {
+        setSelectedFormat(fmt);
+        setSelectedAlgorithm(FORMAT_ALGORITHMS[fmt]?.[0] || "None (Store)");
+      }}
+      archiveToOriginalPath={archiveToOriginalPath}
+      onToggleArchiveToOriginalPath={setArchiveToOriginalPath}
+      compressDestDir={compressDestDir}
+      onCompressDestDirChange={setCompressDestDir}
+      onSelectDestination={handleSelectCompressDestination}
+      sliderValue={sliderValue}
+      onSliderValueChange={setSliderValue}
+      sliderLabel={getSliderLabel()}
+      smartMediaBypass={smartMediaBypass}
+      onSmartMediaBypassChange={setSmartMediaBypass}
+      compressPassword={compressPassword}
+      onCompressPasswordChange={(pwd) => {
+        setCompressPassword(pwd);
+        if (pwd.trim().length > 0 && selectedEncryption === "none") {
+          setSelectedEncryption("aes256");
+        }
+      }}
+      showCompressPassword={showCompressPassword}
+      onToggleShowPassword={() => setShowCompressPassword(!showCompressPassword)}
+      includedFilesCount={includedFilesCount}
+      totalFilesCount={totalFilesCount}
+      excludedFilesCount={excludedFilesCount}
+      effectivePayloadSize={effectiveTotalSize}
+      isCompressing={isCompressing}
+      isCancellingCompress={isCancellingCompress}
+      onCompress={handleCompress}
+      onCancelCompress={handleCancelCompress}
+    />
   );
 
   return (
@@ -457,11 +318,11 @@ export function CompressPage({
                   </span>
                 </>
               )}
-              {excludedCompressPaths.size > 0 && (
+              {excludedFilesCount > 0 && (
                 <>
                   <span>•</span>
                   <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-[11px] font-medium">
-                    {includedFilesCount} of {totalStagedFilesCount} files included ({excludedCompressPaths.size} excluded)
+                    {includedFilesCount} of {totalFilesCount} files included ({excludedFilesCount} excluded)
                   </span>
                 </>
               )}
@@ -551,6 +412,15 @@ export function CompressPage({
                 sidebarTitle="Compression Options"
                 inspectorTitle="Staged Items & Folders"
                 mode="compress"
+                stagedItems={selectedFiles}
+                itemsInfo={itemsInfo}
+                onUnstageItem={(path) => {
+                  setSelectedFiles((prev) => prev.filter((p) => p !== path));
+                }}
+                onClearStagedItems={() => {
+                  setSelectedFiles([]);
+                }}
+                onSwitchMode={onSwitchMode}
               />
             </div>
           ) : (
@@ -1293,7 +1163,16 @@ export function CompressPage({
           onStageItem={(path) => {
             setSelectedFiles((prev) => (prev.includes(path) ? prev : [...prev, path]));
           }}
+          stagedItems={selectedFiles}
+          itemsInfo={itemsInfo}
+          onUnstageItem={(path) => {
+            setSelectedFiles((prev) => prev.filter((p) => p !== path));
+          }}
+          onClearStagedItems={() => {
+            setSelectedFiles([]);
+          }}
           mode="compress"
+          onSwitchMode={onSwitchMode}
         />
       )}
     </>

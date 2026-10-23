@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.2.1)
+# 📦 Bayzip (v2.2.2)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -6,6 +6,16 @@
 ---
 
 ## ⚡ Key Features
+
+### 🏝️ Dynamic Island Header Progress HUD & Workspace Mode Switcher (v2.2.2)
+- **Top Header Dynamic Island HUD**:
+  - Replaced bulky floating toast notifications with a non-obtrusive centered titlebar progress pill featuring an energetic pulsing status dot, mini progress bar, bold %, and dropdown chevron.
+  - Dropdown card reveals real-time **Estimated Time (ETA)**, live **Throughput Speed (`MB/s`)**, monospace file path, byte counts, and danger-styled operation cancellation.
+- **Interactive Workspace Titlebar Mode Switcher**:
+  - Seamless segmented pill (`[ 📦 Compress ]` ↔ `[ 📂 Extract ]`) directly in the workspace titlebar to toggle between compression and extraction workspaces with zero friction.
+- **1-Click Staging, Unstaging & Safety Controls**:
+  - Direct `[ ✕ Remove ]` button on rows for staged files/folders in normal Tree View and active archive banner card.
+  - Context menu (`Right-Click`) safeguards: non-destructive `✕ Remove from Archive [Unstage]` and `✕ Exclude from Extraction`, strictly isolating `Delete (Recycle Bin)` to local filesystem browsing.
 
 ### 🖥️ Full-Screen Workspace Takeover & Multi-Drive File Navigator (v2.2.1)
 - **True Screen Takeover Interface**:

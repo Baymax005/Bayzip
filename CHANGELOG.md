@@ -2,6 +2,44 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.2.2] - 2026-10-23
+
+### 🏝️ Dynamic Island Top-Header Progress HUD
+- **Centered Header Progress Pill**:
+  - Replaced the bulky bottom-right floating toast that previously obscured the file list and status bar with a centered, non-obtrusive titlebar progress pill.
+  - Features an energetic pulsing emerald live status indicator, operation title (`Compressing Files...`), mini shimmer gradient progress bar, and bold percentage badge (`2%`).
+- **Interactive Slide-Down Telemetry Card**:
+  - Clicking the header pill drops down a frosted Fluent card (`bg-[#161616]/95 backdrop-blur-xl border border-emerald-500/40 shadow-2xl`):
+    - **Real-time Estimated Time (ETA)**: Live calculation of time remaining (e.g. `~14s left`, `< 5s left`, `Finishing up...`).
+    - **Live Throughput Speed**: Instantaneous transfer rate calculation (e.g. `42.5 MB/s`).
+    - **Active File Telemetry**: Monospace path display with tooltip and formatted byte counts (`35.95 MB / 738.76 MB`).
+    - **Safe Cancellation**: Danger-styled cancel button with busy feedback (`Cancelling operation...`).
+    - **Effortless Collapsing**: Auto-collapses on chevron toggle, collapse button, or clicking outside.
+- **Ambient Peripheral Progress**:
+  - Retained the running emerald glowing progress line across the workspace base to maintain ambient visibility when the header dropdown is closed.
+
+### 🔄 Interactive Workspace Titlebar Mode Switcher
+- **Segmented Workspace Mode Pill**:
+  - Replaced the static mode text badge in the workspace titlebar (`BAYZIP WORKSPACE`) with an interactive segmented controller:
+    `[ 📦 Compress ]` ↔ `[ 📂 Extract ]`.
+  - Enables seamless, instantaneous switching between Compression Workspace and Extraction Workspace without leaving full-screen mode.
+
+### 🗑️ Normal Mode Staging, Unstaging & Context Menu Security
+- **1-Click On-Row Staged Item Removal**:
+  - Added dedicated `[ ✕ Remove ]` buttons directly on rows for top-level staged folders and files in normal Tree View.
+  - Added dedicated `[ ✕ Remove ]` button on the active archive banner card in `ExtractPage`.
+- **Context Menu (`Right-Click`) Safety Overhaul**:
+  - Context menu on staged files prioritizes non-destructive **`✕ Remove from Archive [Unstage]`**.
+  - Context menu on archive entries prioritizes **`✕ Exclude from Extraction`** / **`↺ Include in Extraction`**.
+  - Strictly restricted destructive *"Delete (Recycle Bin)"* to local physical disk browsing in filesystem mode, safeguarding original source files from accidental deletion.
+
+### 📊 Metric Accuracy & Navigation Enhancements
+- **Accurate Exclusion Counters**: Fixed calculation of included vs. excluded files (`N of Total included (X excluded)`), correctly tracking recursive folder payloads.
+- **Automatic Orphan Pruning**: Added auto-pruning of excluded path sets in `App.tsx` when staging selections change.
+- **Workspace Navigation Bar & Staging Drawer**: Integrated `WorkspaceNavBar` (history back/forward stack, Up folder, refresh, breadcrumbs, editable path field with `Enter` navigation) and `WorkspaceStagedQueue` resizable staging drawer (`↕`).
+
+---
+
 ## [v2.2.1] - 2026-10-22
 
 ### 🖥️ Full-Screen Workspace Takeover & Competitor-Grade UX

@@ -35,6 +35,7 @@ export interface ExtractPageProps {
   handlePreviewEntry: (entryName: string) => void;
   isWorkspaceOpen?: boolean;
   setIsWorkspaceOpen?: (open: boolean) => void;
+  onSwitchMode?: (newMode: "compress" | "extract") => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -97,6 +98,7 @@ export function ExtractPage({
   handlePreviewEntry,
   isWorkspaceOpen: isWorkspaceOpenProp,
   setIsWorkspaceOpen: setIsWorkspaceOpenProp,
+  onSwitchMode,
 }: ExtractPageProps) {
   const [internalWorkspaceOpen, setInternalWorkspaceOpen] = useState(false);
   const isWorkspaceOpen = isWorkspaceOpenProp !== undefined ? isWorkspaceOpenProp : internalWorkspaceOpen;
@@ -297,15 +299,27 @@ export function ExtractPage({
                 )}
               </div>
             </div>
-            <button
-              type="button"
-              disabled={isExtracting}
-              onClick={handleSelectArchive}
-              className="text-xs px-3 py-1.5 bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-              title={isExtracting ? "Extraction in progress" : undefined}
-            >
-              Change
-            </button>
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                type="button"
+                disabled={isExtracting}
+                onClick={handleSelectArchive}
+                className="text-xs px-3 py-1.5 bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={isExtracting ? "Extraction in progress" : undefined}
+              >
+                Change
+              </button>
+              <button
+                type="button"
+                disabled={isExtracting}
+                onClick={onClearArchive}
+                className="text-xs px-3 py-1.5 bg-rose-950/30 hover:bg-rose-900/60 border border-rose-800/50 hover:border-rose-600 text-rose-300 hover:text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
+                title="Remove / Close this archive"
+              >
+                <span>✕</span>
+                <span>Remove</span>
+              </button>
+            </div>
           </div>
 
           {/* Hierarchical Tree-Type Archive Directory Inspector */}
@@ -325,6 +339,7 @@ export function ExtractPage({
             sidebarTitle="Extraction Options"
             inspectorTitle="Archive Explorer & Folders"
             mode="extract"
+            onSwitchMode={onSwitchMode}
           />
         </div>
       ) : (
@@ -706,6 +721,7 @@ export function ExtractPage({
               : null
           }
           mode="extract"
+          onSwitchMode={onSwitchMode}
         />
       )}
     </div>
