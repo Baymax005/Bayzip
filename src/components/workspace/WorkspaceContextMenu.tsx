@@ -24,7 +24,7 @@ export interface WorkspaceContextMenuProps {
   onToggleExclude?: (name: string, isDir?: boolean) => void;
   onStartRename?: (name: string, isDir: boolean) => void;
   onCopy?: (name: string, isDir: boolean, diskPath?: string) => void;
-  onDeleteDisk?: (name: string, isDir: boolean) => void;
+  onDeleteDisk?: (name: string, isDir: boolean, diskPath?: string) => void;
   onNewFolder?: () => void;
   onPaste?: () => void;
   onLoadArchive?: (path: string) => void;
@@ -253,7 +253,7 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    onDeleteDisk(target.name, target.isDir);
+                    onDeleteDisk(target.name, target.isDir, target.diskPath);
                     onClose();
                   }}
                   className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/60 hover:text-rose-300 text-rose-400 transition-colors cursor-pointer"

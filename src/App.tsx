@@ -249,12 +249,30 @@ function App() {
   const [previewTargetDisplayPath, setPreviewTargetDisplayPath] = useState<string>("");
 
   const handlePreviewEntry = async (entryName: string) => {
-    if (!selectedArchive) return;
-    setPreviewTargetDisplayPath(`${selectedArchive} -> ${entryName}`);
+    const isDiskFile = /^[a-zA-Z]:[/\\]/.test(entryName) || activeMode === "compress" || !selectedArchive;
+
     setIsPreviewOpen(true);
     setIsPreviewLoading(true);
     setPreviewError(null);
     setPreviewData(null);
+
+    if (isDiskFile) {
+      setPreviewTargetDisplayPath(entryName);
+      try {
+        const res = await invoke<ArchiveEntryPreview>("preview_staged_file", {
+          path: entryName,
+        });
+        setPreviewData(res);
+      } catch (err: unknown) {
+        setPreviewError(typeof err === "string" ? err : String(err));
+      } finally {
+        setIsPreviewLoading(false);
+      }
+      return;
+    }
+
+    const archiveBase = selectedArchive.split(/[/\\]/).pop() || selectedArchive;
+    setPreviewTargetDisplayPath(`${archiveBase} ➔ ${entryName}`);
 
     try {
       const res = await invoke<ArchiveEntryPreview>("preview_archive_entry", {

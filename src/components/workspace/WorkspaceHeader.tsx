@@ -14,8 +14,6 @@ export interface WorkspaceHeaderProps {
   isHeaderHUDOpen: boolean;
   onToggleHeaderHUD: () => void;
   onCloseHeaderHUD: () => void;
-  viewMode: "tree" | "flat";
-  onViewModeChange: (mode: "tree" | "flat") => void;
   onStartNewFolder?: () => void;
   // Workspace Panel Layout Controls
   isLeftPanelOpen?: boolean;
@@ -44,8 +42,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   isHeaderHUDOpen,
   onToggleHeaderHUD,
   onCloseHeaderHUD,
-  viewMode,
-  onViewModeChange,
   onStartNewFolder,
   isLeftPanelOpen = true,
   onToggleLeftPanel,
@@ -163,35 +159,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
       {/* Right Controls Cluster */}
       <div className="flex items-center space-x-2 shrink-0" data-tauri-drag-region="false">
-        {/* Compact Tree/Flat View Toggle */}
-        <div className="bg-[#141414] p-0.5 rounded-lg border border-[#383838] flex items-center space-x-0.5">
-          <button
-            type="button"
-            onClick={() => onViewModeChange("tree")}
-            className={`px-2 py-1 text-xs rounded font-medium transition-colors flex items-center space-x-1 cursor-pointer ${
-              viewMode === "tree"
-                ? "bg-[#282828] text-[#60CDFF] shadow-sm font-semibold"
-                : "text-[#888888] hover:text-white"
-            }`}
-            title="Tree View (Hierarchical Folders)"
-          >
-            <span>🗂️</span>
-            <span className="hidden md:inline text-[11px]">Tree</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onViewModeChange("flat")}
-            className={`px-2 py-1 text-xs rounded font-medium transition-colors flex items-center space-x-1 cursor-pointer ${
-              viewMode === "flat"
-                ? "bg-[#282828] text-[#60CDFF] shadow-sm font-semibold"
-                : "text-[#888888] hover:text-white"
-            }`}
-            title="Flat Table View (All Entries)"
-          >
-            <span>📋</span>
-            <span className="hidden md:inline text-[11px]">Flat</span>
-          </button>
-        </div>
 
         {/* + New Folder Button */}
         {onStartNewFolder && (

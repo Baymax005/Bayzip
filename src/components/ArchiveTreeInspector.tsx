@@ -165,7 +165,6 @@ export function ArchiveTreeInspector({
   onSelectArchive,
   onLoadArchiveFromFile,
 }: ArchiveTreeInspectorProps) {
-  const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [internalExpandedModal, setInternalExpandedModal] = useState<boolean>(false);
   const isExpandedModal = isExpandedModalProp !== undefined ? isExpandedModalProp : internalExpandedModal;
   const setIsExpandedModal = (val: boolean) => {
@@ -659,18 +658,60 @@ export function ArchiveTreeInspector({
     setRenamingName("");
   };
 
-  const handleDeleteItem = async (name: string, isDir: boolean) => {
-    const clean = name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
-    const diskPath = getDiskPath(clean);
+  const handleDeleteItem = async (name: string, isDir: boolean, diskPath?: string) => {
+    // 1. Determine target disk path if on physical filesystem
+    let targetDiskPath = diskPath;
+    if (!targetDiskPath) {
+      if (/^[a-zA-Z]:[/\\]/i.test(name)) {
+        targetDiskPath = name;
+      } else if (browserSource === "filesystem") {
+        targetDiskPath = diskCurrentPath.endsWith("\\") || diskCurrentPath.endsWith("/")
+          ? `${diskCurrentPath}${name}`
+          : `${diskCurrentPath}\\${name}`;
+      } else {
+        const clean = name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+        targetDiskPath = getDiskPath(clean);
+      }
+    }
 
-    if (diskPath) {
+    // 2. If it's a physical disk path, delete to recycle bin
+    if (targetDiskPath && /^[a-zA-Z]:[/\\]/i.test(targetDiskPath)) {
       try {
-        await invoke("delete_to_recycle_bin", { path: diskPath });
+        await invoke("delete_to_recycle_bin", { path: targetDiskPath });
+
+        // Remove from active disk directory lists in Pane 1 and Pane 2
+        const normTarget = targetDiskPath.replace(/\//g, "\\").toLowerCase();
+        setDiskEntries((prev) =>
+          prev.filter((e) => e.path.replace(/\//g, "\\").toLowerCase() !== normTarget)
+        );
+        setPane2DiskEntries((prev) =>
+          prev.filter((e) => e.path.replace(/\//g, "\\").toLowerCase() !== normTarget)
+        );
+
+        // If the deleted item was staged for compression, unstage it!
+        if (onUnstageItem && stagedItems) {
+          const isStaged = stagedItems.some(
+            (p) => p.replace(/\//g, "\\").toLowerCase() === normTarget
+          );
+          if (isStaged) {
+            onUnstageItem(targetDiskPath);
+          }
+        }
       } catch (err) {
         console.error("Recycle bin delete error:", err);
       }
     }
 
+    // 3. If in compress mode and user is deleting a staged tree node:
+    if (mode === "compress") {
+      const matched = findStagedItemPath(name);
+      if (matched && onUnstageItem) {
+        onUnstageItem(matched);
+      }
+    }
+
+    // 4. Update localEntries for archive/staged entries
+    const clean = name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
     setLocalEntries((prev) =>
       prev.filter((e) => {
         const eNorm = e.name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
@@ -681,7 +722,7 @@ export function ArchiveTreeInspector({
       })
     );
 
-    if (selectedEntryName === name) {
+    if (selectedEntryName === name || (targetDiskPath && selectedEntryName === targetDiskPath)) {
       setSelectedEntryName(null);
     }
   };
@@ -724,8 +765,8 @@ export function ArchiveTreeInspector({
   ) => {
     e.preventDefault();
     e.stopPropagation();
-    const clampedX = Math.min(e.clientX, window.innerWidth - 230);
-    const clampedY = Math.min(e.clientY, window.innerHeight - 280);
+    const clampedX = Math.max(8, Math.min(e.clientX, window.innerWidth - 240));
+    const clampedY = Math.max(8, Math.min(e.clientY, window.innerHeight - 300));
     setContextMenu({
       isOpen: true,
       x: clampedX,
@@ -894,7 +935,8 @@ export function ArchiveTreeInspector({
       // F2: Rename selected entry
       if (e.key === "F2" && selectedEntryName) {
         e.preventDefault();
-        const isDir = selectedEntryName.endsWith("/");
+        const diskEntry = diskEntries.find((d) => d.path === selectedEntryName) || pane2DiskEntries.find((d) => d.path === selectedEntryName);
+        const isDir = selectedEntryName.endsWith("/") || (diskEntry ? diskEntry.is_dir : false);
         handleStartRename(selectedEntryName, isDir);
         return;
       }
@@ -902,19 +944,23 @@ export function ArchiveTreeInspector({
       // Delete: Recycle bin delete selected entry
       if ((e.key === "Delete" || e.key === "Del") && selectedEntryName) {
         e.preventDefault();
-        const isDir = selectedEntryName.endsWith("/");
-        handleDeleteItem(selectedEntryName, isDir);
+        const isDisk = /^[a-zA-Z]:[/\\]/i.test(selectedEntryName) || browserSource === "filesystem";
+        const diskEntry = diskEntries.find((d) => d.path === selectedEntryName) || pane2DiskEntries.find((d) => d.path === selectedEntryName);
+        const isDir = selectedEntryName.endsWith("/") || (diskEntry ? diskEntry.is_dir : false);
+        handleDeleteItem(selectedEntryName, isDir, isDisk ? selectedEntryName : undefined);
         return;
       }
 
       // Ctrl+C: Copy selected entry
       if (e.ctrlKey && (e.key === "c" || e.key === "C") && selectedEntryName) {
         e.preventDefault();
-        const isDir = selectedEntryName.endsWith("/");
+        const diskEntry = diskEntries.find((d) => d.path === selectedEntryName) || pane2DiskEntries.find((d) => d.path === selectedEntryName);
+        const isDir = selectedEntryName.endsWith("/") || (diskEntry ? diskEntry.is_dir : false);
+        const diskPath = /^[a-zA-Z]:[/\\]/i.test(selectedEntryName) ? selectedEntryName : getDiskPath(selectedEntryName);
         setClipboardItem({
           relName: selectedEntryName,
           isDir,
-          diskPath: getDiskPath(selectedEntryName),
+          diskPath,
         });
         return;
       }
@@ -928,7 +974,7 @@ export function ArchiveTreeInspector({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedEntryName, onPreviewEntry, contextMenu.isOpen, isCreatingFolder, renamingItem, clipboardItem, currentFolderPath]);
+  }, [selectedEntryName, onPreviewEntry, contextMenu.isOpen, isCreatingFolder, renamingItem, clipboardItem, currentFolderPath, diskEntries, pane2DiskEntries, browserSource, diskCurrentPath]);
 
   // Build Hierarchical Tree structure from flat entries
   const treeRoot = useMemo<TreeNode>(() => {
@@ -1102,14 +1148,6 @@ export function ArchiveTreeInspector({
     parts.pop();
     navigateToFolder(parts.join("/"));
   };
-
-  // Filtered entries for Flat View
-  const filteredFlatEntries = useMemo(() => {
-    if (!localEntries) return [];
-    if (!searchQuery.trim()) return localEntries;
-    const q = searchQuery.toLowerCase();
-    return localEntries.filter((entry) => entry.name.toLowerCase().includes(q));
-  }, [localEntries, searchQuery]);
 
   // Filtered files in Current Folder for Tree View
   const filteredCurrentFiles = useMemo(() => {
@@ -1425,21 +1463,24 @@ export function ArchiveTreeInspector({
           className="flex-1 h-full"
           renderRow={(item) => {
             const isAlreadyStaged = Boolean(stagedItems && stagedItems.includes(item.path));
+            const isSelected = selectedEntryName === item.path || selectedEntryName === item.name;
             const dropProps = item.is_dir ? getFolderDropProps(`disk-${item.path}`, "", true, item.path) : null;
             return (
               <div
                 key={item.path}
                 {...getDiskDragProps(item.path, item.is_dir)}
                 {...(dropProps ? dropProps.handlers : {})}
-                onContextMenu={(e) =>
+                onClick={() => setSelectedEntryName(item.path)}
+                onContextMenu={(e) => {
+                  setSelectedEntryName(item.path);
                   handleOpenContextMenu(e, {
                     name: item.name,
                     isDir: item.is_dir,
                     diskPath: item.path,
                     isStaged: isAlreadyStaged,
                     size: item.size,
-                  })
-                }
+                  });
+                }}
                 onDoubleClick={() => {
                   if (item.is_dir) {
                     navigateToDiskDirectory(item.path);
@@ -1458,9 +1499,11 @@ export function ArchiveTreeInspector({
                 className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
                   dropProps?.isDropTarget
                     ? "bg-[#173042] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF] shadow-[0_0_12px_rgba(96,205,255,0.25)]"
-                    : isAlreadyStaged
-                      ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
-                      : "hover:bg-[#242424]"
+                    : isSelected
+                      ? "bg-[#25394A] text-white border-l-2 border-[#60CDFF]"
+                      : isAlreadyStaged
+                        ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
+                        : "hover:bg-[#242424]"
                 }`}
               >
                 <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
@@ -1632,7 +1675,16 @@ export function ArchiveTreeInspector({
           {...getArchiveDragProps(node.path, true, node.name)}
           {...dropProps.handlers}
           onClick={() => navigateToFolder(node.path)}
-          onContextMenu={(e) => handleOpenContextMenu(e, { name: node.path, isDir: true })}
+          onContextMenu={(e) => {
+            const matchedStagedPath = mode === "compress" ? findStagedItemPath(node.path || node.name) : null;
+            handleOpenContextMenu(e, {
+              name: node.path,
+              isDir: true,
+              isExcluded: isFolderSkipped,
+              matchedStagedPath: matchedStagedPath,
+              diskPath: matchedStagedPath || getDiskPath(node.path),
+            });
+          }}
           style={{ paddingLeft: `${Math.max(8, depth * 16 + 8)}px` }}
           className={`flex items-center justify-between py-1.5 pr-2 rounded-md transition-colors cursor-pointer group ${
             dropProps.isDropTarget
@@ -1709,12 +1761,12 @@ export function ArchiveTreeInspector({
                   if (targetPath) {
                     onUnstageItem(targetPath);
                   }
-                  const cleanPrefix = node.path ? node.path.replace(/\/+$/, "") + "/" : "";
+                  const cleanTarget = node.path ? node.path.replace(/\\/g, "/").replace(/\/+$/, "") : "";
                   setLocalEntries((prev) =>
                     prev.filter((item) => {
-                      if (!cleanPrefix) return false;
-                      const cleanItem = item.name.replace(/\\/g, "/").replace(/^\/+/, "");
-                      return !cleanItem.startsWith(cleanPrefix);
+                      if (!cleanTarget) return false;
+                      const cleanItem = item.name.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+                      return cleanItem !== cleanTarget && !cleanItem.startsWith(cleanTarget + "/");
                     })
                   );
                   if (node.path === currentFolderPath) {
@@ -1829,13 +1881,7 @@ export function ArchiveTreeInspector({
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={
-            viewMode === "tree"
-              ? "Filter files in current folder..."
-              : archiveInfo.is_archive === false
-              ? "Search all staged files..."
-              : "Search all files in archive..."
-          }
+          placeholder="Filter files in current folder..."
           className="w-full bg-[#161616] text-xs text-white pl-8 pr-7 py-1.5 rounded border border-[#333333] focus:border-[#60CDFF] outline-none font-mono placeholder-[#666]"
         />
         <svg className="w-3.5 h-3.5 text-[#777] absolute left-2.5 top-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2054,7 +2100,17 @@ export function ArchiveTreeInspector({
                   {...getArchiveDragProps(sub.path, true, sub.name)}
                   {...dropProps.handlers}
                   onDoubleClick={() => setPane2FolderPath(sub.path)}
-                  onContextMenu={(e) => handleOpenContextMenu(e, { name: sub.path, isDir: true })}
+                  onContextMenu={(e) => {
+                    const isFolderSkipped = isDirExcluded(sub.path);
+                    const matchedStagedPath = mode === "compress" ? findStagedItemPath(sub.path) : null;
+                    handleOpenContextMenu(e, {
+                      name: sub.path,
+                      isDir: true,
+                      isExcluded: isFolderSkipped,
+                      matchedStagedPath: matchedStagedPath,
+                      diskPath: matchedStagedPath || getDiskPath(sub.path),
+                    });
+                  }}
                   style={{ height: "34px" }}
                   className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
                     dropProps.isDropTarget
@@ -2081,7 +2137,18 @@ export function ArchiveTreeInspector({
                 key={`p2-file-${file.name}`}
                 {...getArchiveDragProps(file.name, false, fileName)}
                 onDoubleClick={() => onPreviewEntry(file.name)}
-                onContextMenu={(e) => handleOpenContextMenu(e, { name: file.name, isDir: false, size: file.size })}
+                onContextMenu={(e) => {
+                  const isExcluded = isFileExcluded(file.name);
+                  const matchedStagedFilePath = mode === "compress" ? findStagedItemPath(file.name) : null;
+                  handleOpenContextMenu(e, {
+                    name: file.name,
+                    isDir: false,
+                    size: file.size,
+                    isExcluded: isExcluded,
+                    matchedStagedPath: matchedStagedFilePath,
+                    diskPath: matchedStagedFilePath || getDiskPath(file.name),
+                  });
+                }}
                 style={{ height: "34px" }}
                 className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border border-b border-[#222222]"
               >
@@ -2239,21 +2306,24 @@ export function ArchiveTreeInspector({
           className="flex-1 h-full"
           renderRow={(item) => {
             const isAlreadyStaged = Boolean(stagedItems && stagedItems.includes(item.path));
+            const isSelected = selectedEntryName === item.path || selectedEntryName === item.name;
             const dropProps = item.is_dir ? getFolderDropProps(`p2-disk-${item.path}`, "", true, item.path) : null;
             return (
               <div
                 key={`p2-disk-${item.path}`}
                 {...getDiskDragProps(item.path, item.is_dir)}
                 {...(dropProps ? dropProps.handlers : {})}
-                onContextMenu={(e) =>
+                onClick={() => setSelectedEntryName(item.path)}
+                onContextMenu={(e) => {
+                  setSelectedEntryName(item.path);
                   handleOpenContextMenu(e, {
                     name: item.name,
                     isDir: item.is_dir,
                     diskPath: item.path,
                     isStaged: isAlreadyStaged,
                     size: item.size,
-                  })
-                }
+                  });
+                }}
                 onDoubleClick={() => {
                   if (item.is_dir) {
                     loadPane2DiskDirectory(item.path);
@@ -2265,9 +2335,11 @@ export function ArchiveTreeInspector({
                 className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
                   dropProps?.isDropTarget
                     ? "bg-[#173042] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF] shadow-[0_0_12px_rgba(96,205,255,0.25)]"
-                    : isAlreadyStaged
-                      ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
-                      : "hover:bg-[#242424]"
+                    : isSelected
+                      ? "bg-[#25394A] text-white border-l-2 border-[#60CDFF]"
+                      : isAlreadyStaged
+                        ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
+                        : "hover:bg-[#242424]"
                 }`}
               >
                 <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
@@ -2536,7 +2608,15 @@ export function ArchiveTreeInspector({
                   {...getArchiveDragProps(sub.path, true, sub.name)}
                   {...dropProps.handlers}
                   onDoubleClick={() => navigateToFolder(sub.path)}
-                  onContextMenu={(e) => handleOpenContextMenu(e, { name: sub.path, isDir: true })}
+                  onContextMenu={(e) =>
+                    handleOpenContextMenu(e, {
+                      name: sub.path,
+                      isDir: true,
+                      isExcluded: isFolderSkipped,
+                      matchedStagedPath: matchedStagedPath,
+                      diskPath: matchedStagedPath || getDiskPath(sub.path),
+                    })
+                  }
                   onClick={() => {
                     setSelectedEntryName(sub.path);
                   }}
@@ -2660,7 +2740,16 @@ export function ArchiveTreeInspector({
               <div
                 key={`file-${file.name}`}
                 {...getArchiveDragProps(file.name, false, fileNameOnly)}
-                onContextMenu={(e) => handleOpenContextMenu(e, { name: file.name, isDir: false, size: file.size })}
+                onContextMenu={(e) =>
+                  handleOpenContextMenu(e, {
+                    name: file.name,
+                    isDir: false,
+                    size: file.size,
+                    isExcluded: isExcluded,
+                    matchedStagedPath: matchedStagedFilePath,
+                    diskPath: matchedStagedFilePath || getDiskPath(file.name),
+                  })
+                }
                 onClick={() => {
                   setSelectedEntryName(file.name);
                 }}
@@ -2781,155 +2870,6 @@ export function ArchiveTreeInspector({
     );
   };
 
-  // Flat Table Component
-  const renderFlatTable = () => {
-    if (isLoading) {
-      return (
-        <div className="p-8 text-center space-y-3">
-          <div className="w-5 h-5 border-2 border-[#60CDFF] border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-xs text-[#A8A8A8]">Indexing archive directory tree...</p>
-        </div>
-      );
-    }
-
-    if (filteredFlatEntries.length === 0) {
-      return (
-        <div className="p-8 text-center text-xs text-[#888888]">
-          {searchQuery ? "No matching files in archive" : "Archive is empty"}
-        </div>
-      );
-    }
-
-    return (
-      <div
-        className="flex-1 flex flex-col overflow-hidden relative h-full"
-        onContextMenu={(e) => handleOpenContextMenu(e, null)}
-      >
-        <VirtualScrollList
-          key={`flat-virtual-${searchQuery}`}
-          items={filteredFlatEntries}
-          rowHeight={34}
-          className="flex-1 h-full"
-          renderRow={(entry, idx) => {
-            const isSelected = selectedEntryName === entry.name;
-            const fileNameOnly = entry.name.split(/[/\\]/).pop() || entry.name;
-            const isExcluded = !entry.is_dir && isFileExcluded(entry.name);
-            const isFolderSkipped = entry.is_dir && isDirExcluded(entry.name);
-            const isDimmed = isExcluded || isFolderSkipped;
-            const matchedStagedEntryPath = mode === "compress" ? findStagedItemPath(entry.name) : null;
-
-            return (
-              <div
-                key={`flat-${entry.name || idx}`}
-                onContextMenu={(e) => handleOpenContextMenu(e, { name: entry.name, isDir: entry.is_dir, size: entry.size })}
-                onClick={() => {
-                  setSelectedEntryName(entry.name);
-                }}
-              onDoubleClick={() => {
-                if (!entry.is_dir) onPreviewEntry(entry.name);
-              }}
-              style={{ height: "34px" }}
-              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
-                isDimmed
-                  ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
-                  : isSelected
-                    ? "bg-[#25394A] text-white"
-                    : "hover:bg-[#252525]"
-              }`}
-            >
-              <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                {entry.is_dir ? (
-                  <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                ) : (
-                  renderFileIcon(fileNameOnly)
-                )}
-                <span
-                  className={`truncate font-mono text-[11px] transition-colors ${
-                    isDimmed ? "text-rose-300/80 line-through" : "text-white group-hover:text-[#60CDFF]"
-                  }`}
-                  title={entry.name}
-                >
-                  {entry.name}
-                </span>
-                {isExcluded && (
-                  <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-700/80 text-rose-300 flex items-center space-x-1 shrink-0 shadow-sm">
-                    <span>✕</span>
-                    <span>Excluded</span>
-                  </span>
-                )}
-                {isFolderSkipped && (
-                  <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-rose-950/70 border border-rose-800 text-rose-300 shrink-0">
-                    ✕ Folder Excluded
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center space-x-2.5 shrink-0">
-                <span className={`font-mono text-[11px] ${isDimmed ? "text-rose-400 font-semibold" : "text-[#888888]"}`}>
-                  {isExcluded
-                    ? "(Skipped)"
-                    : isFolderSkipped
-                      ? "(Folder Skipped)"
-                      : entry.is_dir
-                        ? "Directory"
-                        : formatBytes(entry.size)}
-                </span>
-                {matchedStagedEntryPath && onUnstageItem ? (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onUnstageItem(matchedStagedEntryPath);
-                    }}
-                    className="text-[10px] px-2 py-0.5 rounded bg-rose-950/40 hover:bg-rose-900/70 text-rose-300 hover:text-white border border-rose-800/60 hover:border-rose-600 transition-colors flex items-center space-x-1 cursor-pointer"
-                    title="Remove this item from archive selection"
-                  >
-                    <span className="font-bold">✕</span>
-                    <span>Remove</span>
-                  </button>
-                ) : onToggleExclude ? (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleExclude(entry.name, entry.is_dir);
-                    }}
-                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center space-x-1 cursor-pointer ${
-                      isDimmed
-                        ? "bg-rose-900/40 hover:bg-rose-900/70 text-rose-300 border-rose-700/70"
-                        : "bg-[#2E2E2E] hover:bg-rose-950/50 text-[#A8A8A8] hover:text-rose-300 border-[#3E3E3E] hover:border-rose-800/60"
-                    }`}
-                    title={isDimmed ? "Include in extraction" : "Exclude from extraction"}
-                  >
-                    <span className="text-rose-400 font-bold">{isDimmed ? "↺" : "✕"}</span>
-                    <span>{isDimmed ? "Include" : "Skip"}</span>
-                  </button>
-                ) : null}
-                {!entry.is_dir && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onPreviewEntry(entry.name);
-                    }}
-                    className="text-[10px] px-2 py-0.5 rounded bg-[#2E2E2E] hover:bg-[#3A3A3A] text-[#60CDFF] border border-[#444444] transition-colors flex items-center space-x-1 cursor-pointer"
-                    title="In-memory safe preview"
-                  >
-                    <span>👁️</span>
-                    <span>Preview</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        }}
-      />
-    </div>
-  );
-};
-
   const isEncryptedWithoutEntries =
     archiveInfo.is_encrypted && (!archiveInfo.entries || archiveInfo.entries.length === 0);
 
@@ -2949,8 +2889,6 @@ export function ArchiveTreeInspector({
           isHeaderHUDOpen={isHeaderHUDOpen}
           onToggleHeaderHUD={() => setIsHeaderHUDOpen((prev) => !prev)}
           onCloseHeaderHUD={() => setIsHeaderHUDOpen(false)}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
           onStartNewFolder={handleStartNewFolder}
           onExpandToWorkspace={() => setIsExpandedModal(true)}
         />
@@ -2959,22 +2897,11 @@ export function ArchiveTreeInspector({
           renderEncryptedBanner()
         ) : (
           <>
-            {viewMode === "tree" ? (
-              <>
-                {renderBreadcrumbs()}
-                {renderSearchInput()}
-                <div className="h-64 flex flex-col overflow-hidden">
-                  {renderCurrentFolderContents()}
-                </div>
-              </>
-            ) : (
-              <>
-                {renderSearchInput()}
-                <div className="h-64 flex flex-col overflow-hidden">
-                  {renderFlatTable()}
-                </div>
-              </>
-            )}
+            {renderBreadcrumbs()}
+            {renderSearchInput()}
+            <div className="h-64 flex flex-col overflow-hidden">
+              {renderCurrentFolderContents()}
+            </div>
           </>
         )}
 
@@ -3021,8 +2948,6 @@ export function ArchiveTreeInspector({
               isHeaderHUDOpen={isHeaderHUDOpen}
               onToggleHeaderHUD={() => setIsHeaderHUDOpen((prev) => !prev)}
               onCloseHeaderHUD={() => setIsHeaderHUDOpen(false)}
-              viewMode={viewMode}
-              onViewModeChange={setViewMode}
               onStartNewFolder={handleStartNewFolder}
               isLeftPanelOpen={windowWidth >= 800 ? isLeftPanelOpen : showMobileTree}
               onToggleLeftPanel={() => {
@@ -3057,9 +2982,7 @@ export function ArchiveTreeInspector({
             ) : (
               <div className="flex-1 flex overflow-hidden relative">
                 <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-                  {viewMode === "tree" ? (
-                    <>
-                      <WorkspaceNavBar
+                  <WorkspaceNavBar
                         currentPath={browserSource === "filesystem" ? diskCurrentPath : currentFolderPath}
                         sourceType={browserSource}
                         hasError={browserSource === "filesystem" ? Boolean(diskError) : false}
@@ -3293,16 +3216,7 @@ export function ArchiveTreeInspector({
                           }
                         />
                       </div>
-                    </>
-                  ) : (
-                    <>
-                      {renderSearchInput()}
-                      <div className="flex-1 overflow-hidden bg-[#181818] flex flex-col">
-                        {renderFlatTable()}
-                      </div>
-                    </>
-                  )}
-                </div>
+                    </div>
 
                 {/* Right Options Sidebar: Advance Section */}
                 {sidebar && (
@@ -3411,7 +3325,7 @@ export function ArchiveTreeInspector({
             diskPath: diskPath || getDiskPath(name),
           });
         }}
-        onDeleteDisk={(name, isDir) => handleDeleteItem(name, isDir)}
+        onDeleteDisk={(name, isDir, diskPath) => handleDeleteItem(name, isDir, diskPath)}
         onNewFolder={handleStartNewFolder}
         onPaste={handlePasteItem}
         onLoadArchive={(diskPath) => {
