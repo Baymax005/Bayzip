@@ -16,6 +16,7 @@ export interface WorkspaceHeaderProps {
   onCloseHeaderHUD: () => void;
   viewMode: "tree" | "flat";
   onViewModeChange: (mode: "tree" | "flat") => void;
+  onStartNewFolder?: () => void;
   // Workspace Panel Layout Controls
   isLeftPanelOpen?: boolean;
   onToggleLeftPanel?: () => void;
