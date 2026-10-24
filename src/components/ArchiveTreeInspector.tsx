@@ -212,24 +212,50 @@ export function ArchiveTreeInspector({
   const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [activeDrive, setActiveDrive] = useState<string>("C:");
 
-  const hasArchiveLoaded = Boolean(
-    archiveInfo &&
-    archiveInfo.path &&
-    archiveInfo.path !== "" &&
-    archiveInfo.path !== "archive" &&
-    archiveInfo.entries &&
-    archiveInfo.entries.length > 0
-  );
-
-  const [browserSource, setBrowserSource] = useState<"archive" | "filesystem">(
-    mode === "compress" || !hasArchiveLoaded ? "filesystem" : "archive"
-  );
+  // Local mutable entries state for real-time additions/renames/deletions
+  const [localEntries, setLocalEntries] = useState<ArchiveEntryItem[]>(archiveInfo.entries || []);
 
   useEffect(() => {
-    if (hasArchiveLoaded) {
+    setLocalEntries(archiveInfo.entries || []);
+  }, [archiveInfo.entries]);
+
+  const hasTreeItems = Boolean(
+    (localEntries && localEntries.length > 0) ||
+    (archiveInfo && archiveInfo.entries && archiveInfo.entries.length > 0) ||
+    (stagedItems && stagedItems.length > 0)
+  );
+
+  const hasArchiveLoaded = Boolean(
+    (archiveInfo &&
+      archiveInfo.path &&
+      archiveInfo.path !== "" &&
+      archiveInfo.path !== "archive" &&
+      archiveInfo.entries &&
+      archiveInfo.entries.length > 0) ||
+    (mode === "compress" && hasTreeItems)
+  );
+
+  const [browserSource, setBrowserSource] = useState<"archive" | "filesystem">(() => {
+    return hasTreeItems ? "archive" : "filesystem";
+  });
+
+  const lastArchivePathRef = useRef<string>(archiveInfo?.path || "");
+  const lastItemCountRef = useRef<number>((localEntries?.length || 0) + (stagedItems?.length || 0));
+
+  useEffect(() => {
+    if (archiveInfo?.path && archiveInfo.path !== lastArchivePathRef.current) {
+      lastArchivePathRef.current = archiveInfo.path;
       setBrowserSource("archive");
     }
-  }, [hasArchiveLoaded]);
+  }, [archiveInfo?.path]);
+
+  useEffect(() => {
+    const currentCount = (localEntries?.length || 0) + (stagedItems?.length || 0);
+    if (lastItemCountRef.current === 0 && currentCount > 0) {
+      setBrowserSource("archive");
+    }
+    lastItemCountRef.current = currentCount;
+  }, [localEntries?.length, stagedItems?.length]);
 
   const [diskCurrentPath, setDiskCurrentPath] = useState<string>("C:\\");
   const [diskEntries, setDiskEntries] = useState<DirectoryItem[]>([]);
@@ -370,12 +396,6 @@ export function ArchiveTreeInspector({
       .catch(() => {});
   }, [selectedArchive]);
 
-  // Local mutable entries state for real-time additions/renames/deletions
-  const [localEntries, setLocalEntries] = useState<ArchiveEntryItem[]>(archiveInfo.entries || []);
-
-  useEffect(() => {
-    setLocalEntries(archiveInfo.entries || []);
-  }, [archiveInfo.entries]);
 
   // Inline New Folder State
   const [isCreatingFolder, setIsCreatingFolder] = useState<boolean>(false);
@@ -784,9 +804,15 @@ export function ArchiveTreeInspector({
 
   // Build Hierarchical Tree structure from flat entries
   const treeRoot = useMemo<TreeNode>(() => {
+    const defaultRootName = mode === "compress" ? "Staged Items" : "Archive Root";
+    const rootName =
+      archiveInfo.filename && archiveInfo.filename !== "Archive"
+        ? archiveInfo.filename
+        : defaultRootName;
+
     const root: TreeNode = {
       path: "",
-      name: archiveInfo.filename || "Archive Root",
+      name: rootName,
       isDir: true,
       size: 0,
       directFileCount: 0,
@@ -1262,60 +1288,75 @@ export function ArchiveTreeInspector({
     );
   };
 
-  // Sleek Drive Switcher Badge & Header
+  // Source Toggle at top of left panel: Staged/Archive Tree vs Drive Files
+  const renderSourceToggle = () => {
+    const isCompress = mode === "compress";
+    const treeTitle = isCompress ? "Staged Tree" : "Archive Tree";
+    const totalCount = localEntries?.length || archiveInfo.file_count || stagedItems?.length || 0;
+
+    return (
+      <div className="grid grid-cols-2 gap-1 bg-[#141414] p-1 rounded-lg border border-[#2E2E2E] mb-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => setBrowserSource("archive")}
+          className={`py-1.5 px-2 text-[11px] rounded font-semibold transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+            browserSource === "archive"
+              ? "bg-[#25394A] text-[#60CDFF] shadow-sm border border-[#60CDFF]/40 font-bold"
+              : "text-[#888888] hover:text-white hover:bg-[#202020]"
+          }`}
+          title={`View ${treeTitle} (${totalCount} items)`}
+        >
+          <span>📦</span>
+          <span className="truncate">{treeTitle}</span>
+          {hasTreeItems && (
+            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-[#12222E] text-[#60CDFF] font-mono shrink-0">
+              {totalCount > 9999 ? `${Math.round(totalCount / 1000)}k` : totalCount}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setBrowserSource("filesystem")}
+          className={`py-1.5 px-2 text-[11px] rounded font-semibold transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+            browserSource === "filesystem"
+              ? "bg-[#25394A] text-[#60CDFF] shadow-sm border border-[#60CDFF]/40 font-bold"
+              : "text-[#888888] hover:text-white hover:bg-[#202020]"
+          }`}
+          title="Browse System Drives & Quick Access"
+        >
+          <span>📁</span>
+          <span className="truncate">Drive Files</span>
+        </button>
+      </div>
+    );
+  };
+
+  // Sleek Subheader for Left Pane Folder Hierarchy
   const renderFolderHierarchyHeader = (isDrawer: boolean = false) => (
     <div
-      className={`flex items-center justify-between px-2 py-1 mb-1 shrink-0 relative ${
+      className={`flex items-center justify-between px-2 py-1 mb-1.5 shrink-0 relative ${
         isDrawer ? "border-b border-[#2E2E2E]" : ""
       }`}
     >
-      {hasArchiveLoaded ? (
-        <div className="flex items-center space-x-1 bg-[#141414] p-0.5 rounded border border-[#333333]">
-          <button
-            type="button"
-            onClick={() => setBrowserSource("archive")}
-            className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-              browserSource === "archive"
-                ? "bg-[#25394A] text-[#60CDFF] shadow-sm"
-                : "text-[#888888] hover:text-white"
-            }`}
-            title="View Archive Folder Tree"
-          >
-            📦 Archive
-          </button>
-          <button
-            type="button"
-            onClick={() => setBrowserSource("filesystem")}
-            className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-              browserSource === "filesystem"
-                ? "bg-[#25394A] text-[#60CDFF] shadow-sm"
-                : "text-[#888888] hover:text-white"
-            }`}
-            title="Browse System Drives & Quick Access"
-          >
-            📁 Drives
-          </button>
-        </div>
-      ) : (
-        <span className="text-[10px] font-bold tracking-wider uppercase text-[#888888]">
-          Quick Access & Drives
+      <div className="flex items-center space-x-1.5">
+        <span className="text-xs text-[#F9D648]">📁</span>
+        <span className="text-[10px] font-bold tracking-wider uppercase text-[#CCCCCC]">
+          {mode === "compress" ? "Staged Folders" : "Archive Folders"}
         </span>
-      )}
+      </div>
       <div className="flex items-center space-x-1.5">
         {/* + New Folder Button on Left Header */}
-        {browserSource === "archive" && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleStartNewFolder();
-            }}
-            className="px-1.5 py-0.5 rounded bg-[#252525] hover:bg-[#303030] border border-[#3E3E3E] hover:border-[#60CDFF]/60 text-[#60CDFF] hover:text-[#90DCFF] text-[10px] font-mono font-semibold flex items-center space-x-0.5 transition-all cursor-pointer shadow-sm"
-            title="Create New Folder (Ctrl+Shift+N)"
-          >
-            <span>📁+</span>
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleStartNewFolder();
+          }}
+          className="px-1.5 py-0.5 rounded bg-[#252525] hover:bg-[#303030] border border-[#3E3E3E] hover:border-[#60CDFF]/60 text-[#60CDFF] hover:text-[#90DCFF] text-[10px] font-mono font-semibold flex items-center space-x-0.5 transition-all cursor-pointer shadow-sm"
+          title="Create New Folder (Ctrl+Shift+N)"
+        >
+          <span>📁+</span>
+        </button>
         {isDrawer && (
           <button
             type="button"
@@ -2515,25 +2556,18 @@ export function ArchiveTreeInspector({
                               style={{ width: `${leftPanelWidth}px` }}
                               className="bg-[#1A1A1A] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0 border-r border-[#2A2A2A]"
                             >
-                              {mode === "compress" || browserSource === "filesystem" || !hasArchiveLoaded ? (
+                              {renderSourceToggle()}
+
+                              {browserSource === "archive" ? (
                                 <>
-                                  {hasArchiveLoaded && (
-                                    <div className="mb-2 px-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => setBrowserSource("archive")}
-                                        className="w-full py-1 px-2.5 rounded bg-[#173042] hover:bg-[#1E415A] border border-[#60CDFF]/50 text-[#60CDFF] hover:text-[#90DCFF] text-[10px] font-semibold flex items-center justify-between transition-all cursor-pointer shadow-sm"
-                                        title="Switch back to loaded archive tree"
-                                      >
-                                        <div className="flex items-center space-x-1.5 truncate">
-                                          <span>📦</span>
-                                          <span className="truncate">{archiveInfo.filename || "Return to Archive"}</span>
-                                        </div>
-                                        <span className="text-[10px] opacity-75 shrink-0">⮐ Back</span>
-                                      </button>
-                                    </div>
-                                  )}
-                                  {!hasArchiveLoaded && onSelectArchive && (
+                                  {renderFolderHierarchyHeader(false)}
+                                  <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5">
+                                    {renderTreeFolderNode(treeRoot)}
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  {!hasArchiveLoaded && onSelectArchive && mode === "extract" && (
                                     <div className="mb-2 px-1">
                                       <button
                                         type="button"
@@ -2548,13 +2582,6 @@ export function ArchiveTreeInspector({
                                   )}
                                   {renderQuickAccess()}
                                   {renderDriveSelector()}
-                                </>
-                              ) : (
-                                <>
-                                  {renderFolderHierarchyHeader(false)}
-                                  <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5">
-                                    {renderTreeFolderNode(treeRoot)}
-                                  </div>
                                 </>
                               )}
                             </div>
@@ -2573,25 +2600,18 @@ export function ArchiveTreeInspector({
                         {/* Left Pane: Slide-over Drawer (Compact < 800px) */}
                         {windowWidth < 800 && showMobileTree && (
                           <div className="absolute inset-y-0 left-0 z-30 w-72 max-w-[85%] bg-[#1A1A1A] border-r border-[#3E3E3E] shadow-2xl flex flex-col p-2 animate-in slide-in-from-left duration-150">
-                            {mode === "compress" || browserSource === "filesystem" || !hasArchiveLoaded ? (
+                            {renderSourceToggle()}
+
+                            {browserSource === "archive" ? (
                               <>
-                                {hasArchiveLoaded && (
-                                  <div className="mb-2 px-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => setBrowserSource("archive")}
-                                      className="w-full py-1 px-2.5 rounded bg-[#173042] hover:bg-[#1E415A] border border-[#60CDFF]/50 text-[#60CDFF] hover:text-[#90DCFF] text-[10px] font-semibold flex items-center justify-between transition-all cursor-pointer shadow-sm"
-                                      title="Switch back to loaded archive tree"
-                                    >
-                                      <div className="flex items-center space-x-1.5 truncate">
-                                        <span>📦</span>
-                                        <span className="truncate">{archiveInfo.filename || "Return to Archive"}</span>
-                                      </div>
-                                      <span className="text-[10px] opacity-75 shrink-0">⮐ Back</span>
-                                    </button>
-                                  </div>
-                                )}
-                                {!hasArchiveLoaded && onSelectArchive && (
+                                {renderFolderHierarchyHeader(true)}
+                                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                                  {renderTreeFolderNode(treeRoot)}
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                {!hasArchiveLoaded && onSelectArchive && mode === "extract" && (
                                   <div className="mb-2 px-1">
                                     <button
                                       type="button"
@@ -2606,13 +2626,6 @@ export function ArchiveTreeInspector({
                                 )}
                                 {renderQuickAccess()}
                                 {renderDriveSelector()}
-                              </>
-                            ) : (
-                              <>
-                                {renderFolderHierarchyHeader(true)}
-                                <div className="flex-1 overflow-y-auto custom-scrollbar">
-                                  {renderTreeFolderNode(treeRoot)}
-                                </div>
                               </>
                             )}
                           </div>
