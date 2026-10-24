@@ -2,6 +2,35 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.3.0] - 2026-10-25
+
+### ⫴ Instant Dual-Pane Split View
+- **Side-by-Side Exploration**:
+  - Added instant dual-pane split view (`WorkspaceDualPaneView.tsx`) toggled via `⫴` or `Ctrl+\`.
+  - Enables viewing local drive contents and staged/archive files simultaneously side-by-side with independent directory navigation.
+  - Interactive resizable center split divider with minimum clamped bounds and drag handle.
+  - Active drag-over drop zones with visual highlights for dropping folders into dual-pane staging targets.
+
+### 🖐️ Interactive Drag-to-Move & Cross-Pane Staging
+- **Unified Drag & Drop Architecture**:
+  - Extracted comprehensive drag-to-move and staging logic into dedicated hook (`useWorkspaceDragDrop.ts`).
+  - Supports picking files and folders from table rows or tree nodes and dropping them into target directory rows, tree hierarchy folders, or breadcrumb pills.
+  - Full staging feedback with drop targets, hover states, and conflict safeguards.
+
+### 🎛️ Workspace Panel Layout Controls
+- **Unified Top-Bar Layout Toggles (`WorkspaceHeader.tsx`)**:
+  - Replaced ad-hoc text buttons with a dedicated 5-icon layout cluster:
+    - `◧` **Left Explorer / Folder Tree** (`Ctrl+B`): Toggles tree visibility, allowing full-width file view expansion.
+    - `⫴` **Dual-Pane Split** (`Ctrl+\`): Toggles instant split view.
+    - `⬒` **Bottom Queue Drawer** (`Ctrl+J`): Toggles the staging/extract queue drawer with badge counter.
+    - `◨` **Right Options Sidebar**: Toggles the compression/extraction options panel.
+    - `🗗` **Compact View** (`Esc`): Restores the compact card view.
+- **De-Cluttered Modern Interface**:
+  - Cleaned up noisy `[ ✕ Exclude Files ]` and `[ ✕ Exit Workspace ]` buttons across both full-screen Workspace and compact inspector views.
+  - Neutralized comments for clean open-source readiness with zero external brand references.
+
+---
+
 ## [v2.2.3] - 2026-10-24
 
 ### 🏝️ Dynamic Island 1-Click Cancellation HUD

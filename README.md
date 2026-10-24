@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.2.3)
+# 📦 Bayzip (v2.3.0)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -6,6 +6,24 @@
 ---
 
 ## ⚡ Key Features
+
+### ⫴ Instant Dual-Pane Split View, Drag-to-Move & Workspace Panel Controls (v2.3.0)
+- **Instant Dual-Pane Split View (`⫴` / `Ctrl+\`)**:
+  - Side-by-side exploration of local disk directories and archive contents with synchronized/independent directory navigation.
+  - Interactive resizable split divider with minimum bounds and drag handle.
+  - Interactive drag-over drop zones for dropping folders into dual-pane staging targets.
+- **Interactive Drag-to-Move & Cross-Pane Staging**:
+  - Unified drag-and-drop orchestration (`useWorkspaceDragDrop.ts`) across tree folders, table rows, and dual panes.
+  - Allows picking items and moving them between folders, staging queues, or onto breadcrumb pills.
+- **Workspace Panel Layout Controls (`WorkspaceHeader.tsx`)**:
+  - Dedicated top-bar 5-icon layout toggle cluster:
+    - `◧` **Left Explorer / Folder Tree** (`Ctrl+B`): Toggles tree visibility, allowing full-width file view expansion.
+    - `⫴` **Dual-Pane Split** (`Ctrl+\`): Toggles instant split view.
+    - `⬒` **Bottom Queue Drawer** (`Ctrl+J`): Toggles the staging/extract queue drawer with active item badge counter.
+    - `◨` **Right Options Sidebar**: Toggles the compression/extraction options panel.
+    - `🗗` **Compact View** (`Esc`): Restores the compact card view.
+- **De-Cluttered Modern Interface**:
+  - Cleaned up noisy `[ ✕ Exclude Files ]` and `[ ✕ Exit Workspace ]` buttons across both full-screen Workspace and compact inspector views.
 
 ### 🧩 Modular Workspace Architecture, Dynamic Island Cancel & Quick Access (v2.2.3)
 - **Dynamic Island 1-Click Operation Cancellation**:
