@@ -17,6 +17,8 @@ export interface WorkspaceNavBarProps {
   isLoading?: boolean;
   sourceType?: "filesystem" | "archive";
   rootLabel?: string;
+  isSplitView?: boolean;
+  onToggleSplitView?: () => void;
 }
 
 export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
@@ -33,6 +35,8 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
   isLoading = false,
   sourceType = "filesystem",
   rootLabel,
+  isSplitView = false,
+  onToggleSplitView,
 }) => {
   const [isEditingPath, setIsEditingPath] = useState(false);
   const [inputPath, setInputPath] = useState(currentPath);
@@ -256,6 +260,25 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
           </div>
         )}
       </div>
+
+      {/* Dual-Pane Split View Toggle Button */}
+      {onToggleSplitView && (
+        <button
+          type="button"
+          onClick={onToggleSplitView}
+          className={`px-2 py-1 rounded-md text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer shrink-0 border ${
+            isSplitView
+              ? "bg-[#25394A] text-[#60CDFF] border-[#60CDFF]/60 shadow-[0_0_10px_rgba(96,205,255,0.25)]"
+              : "bg-[#242424] hover:bg-[#2F2F2F] text-[#A8A8A8] hover:text-white border-[#383838]"
+          }`}
+          title={isSplitView ? "Close Split View (Single Pane)" : "Instant Dual-Pane Split View (⫴)"}
+        >
+          <span className="font-mono text-sm leading-none font-bold">⫴</span>
+          <span className="hidden sm:inline text-[11px] font-sans">
+            {isSplitView ? "Dual-Pane" : "Split View"}
+          </span>
+        </button>
+      )}
 
       {/* Integrated Search Box */}
       <div className="w-48 sm:w-56 shrink-0 flex items-center bg-[#222222] rounded-md border border-[#333333] focus-within:border-[#60CDFF] px-2 py-1 transition-all">
