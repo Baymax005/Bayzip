@@ -165,7 +165,7 @@ export const WorkspaceExtractQueue: React.FC<WorkspaceExtractQueueProps> = ({
                 {isEncrypted ? " • 🔒 Password Protected" : ""}
               </p>
               <p className="text-[10px] text-[#666666]">
-                Tip: Right-click any file above or enable <span className="text-rose-400">Exclude Files</span> to skip unwanted items from being extracted.
+                Tip: Right-click any file or use the <span className="text-rose-400">Skip</span> button to exclude unwanted items from being extracted.
               </p>
             </div>
           ) : (
