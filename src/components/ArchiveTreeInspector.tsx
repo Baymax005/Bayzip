@@ -196,7 +196,7 @@ export function ArchiveTreeInspector({
     typeof window !== "undefined" ? window.innerWidth : 1200
   );
   const [showMobileTree, setShowMobileTree] = useState<boolean>(false);
-  const [showMobileSidebar, setShowMobileSidebar] = useState<boolean>(false);
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState<boolean>(true);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState<boolean>(true);
 
   useEffect(() => {
@@ -2952,8 +2952,8 @@ export function ArchiveTreeInspector({
               }}
               bottomPanelBadge={mode === "compress" ? (stagedItems ? stagedItems.length : 0) : excludedCount}
               hasRightPanel={Boolean(sidebar)}
-              isRightPanelOpen={showMobileSidebar}
-              onToggleRightPanel={() => setShowMobileSidebar((prev) => !prev)}
+              isRightPanelOpen={isRightPanelOpen}
+              onToggleRightPanel={() => setIsRightPanelOpen((prev) => !prev)}
               rightPanelTitle={sidebarTitle || "Options"}
               onToggleCompactView={() => setIsExpandedModal(false)}
             />
@@ -3198,7 +3198,7 @@ export function ArchiveTreeInspector({
                     </div>
 
                 {/* Right Options Sidebar: Advance Section */}
-                {sidebar && (
+                {sidebar && isRightPanelOpen && (
                   <>
                     {/* Draggable Resizer: Right Sidebar */}
                     <div
@@ -3221,6 +3221,14 @@ export function ArchiveTreeInspector({
                               {sidebarTitle}
                             </span>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => setIsRightPanelOpen(false)}
+                            className="text-[#777777] hover:text-white p-0.5 rounded hover:bg-[#2A2A2A] transition-colors cursor-pointer text-xs leading-none"
+                            title="Close options sidebar"
+                          >
+                            ✕
+                          </button>
                         </div>
                       )}
                       {sidebar}
