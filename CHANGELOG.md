@@ -4,12 +4,18 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 ## [v2.3.0] - 2026-10-25
 
-### ⫴ Instant Dual-Pane Split View
+### ⫴ Instant Dual-Pane Split View & Right-Click Split
 - **Side-by-Side Exploration**:
   - Added instant dual-pane split view (`WorkspaceDualPaneView.tsx`) toggled via `⫴` or `Ctrl+\`.
   - Enables viewing local drive contents and staged/archive files simultaneously side-by-side with independent directory navigation.
   - Interactive resizable center split divider with minimum clamped bounds and drag handle.
-  - Active drag-over drop zones with visual highlights for dropping folders into dual-pane staging targets.
+- **Drag-to-Split & Right-Click Context Menu Integration**:
+  - Fixed drag-to-split behavior: dragging any local folder to the right side now immediately opens that specific directory in Pane 2 (instead of erroneously staging it or defaulting to `C:\`).
+  - Added dedicated **"⫴ Open in Split View"** action directly inside the right-click context menu for all directory targets.
+  - Eliminated redundant `[📁 Disk] [📦 Staged]` toggle buttons from Pane 1 and Pane 2 headers, replacing them with clean breadcrumbs, item counters, ergonomic `Up ⮥` buttons, and a clean `✕ Close` button.
+- **Filesystem Hardening & Cross-Volume Moves**:
+  - Added cross-volume move fallback in `drives.rs` to handle moves across different Windows drive letters (`C:\` to `D:\`) without error 17 (`EXDEV`).
+  - Enforced Windows filename character validation disallowing illegal characters (`< > : " / \ | ? *`) and reserved device names.
 
 ### 🖐️ Interactive Drag-to-Move & Cross-Pane Staging
 - **Unified Drag & Drop Architecture**:

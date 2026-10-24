@@ -358,6 +358,18 @@ export function ArchiveTreeInspector({
     setPane2FolderPath(parts.join("/"));
   };
 
+  const handleOpenInSplit = (folderPath: string, isDisk?: boolean) => {
+    setIsSplitView(true);
+    const clean = folderPath.trim();
+    if (isDisk || /^[a-zA-Z]:/.test(clean)) {
+      setPane2Source("filesystem");
+      loadPane2DiskDirectory(clean);
+    } else {
+      setPane2Source("archive");
+      setPane2FolderPath(clean);
+    }
+  };
+
   useEffect(() => {
     if (isSplitView && pane2Source === "filesystem" && pane2DiskEntries.length === 0) {
       loadPane2DiskDirectory(diskCurrentPath || "C:\\");
@@ -1928,35 +1940,16 @@ export function ArchiveTreeInspector({
   const renderPane1Header = () => (
     <div className="px-3 py-1.5 bg-[#202020] border-b border-[#2A2A2A] text-[11px] font-mono text-[#A8A8A8] flex items-center justify-between shrink-0 select-none">
       <div className="flex items-center space-x-2 truncate min-w-0 flex-1 mr-2">
-        <div className="flex items-center space-x-0.5 bg-[#141414] p-0.5 rounded border border-[#303030] shrink-0">
-          <button
-            type="button"
-            onClick={() => setBrowserSource("filesystem")}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-              browserSource === "filesystem" ? "bg-[#25394A] text-[#60CDFF]" : "text-[#777] hover:text-white"
-            }`}
-            title="Browse local disk drives"
-          >
-            📁 Disk
-          </button>
-          <button
-            type="button"
-            onClick={() => setBrowserSource("archive")}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-              browserSource === "archive" ? "bg-[#25394A] text-[#60CDFF]" : "text-[#777] hover:text-white"
-            }`}
-            title="View archive contents"
-          >
-            📦 {mode === "compress" ? "Staged" : "Archive"}
-          </button>
-        </div>
-        {isSplitView && <span className="text-[10px] text-[#666666] shrink-0 font-bold">Pane 1:</span>}
-        <span className="truncate text-white font-semibold">
+        <span className="text-sm shrink-0">
+          {browserSource === "filesystem" ? "📁" : "📦"}
+        </span>
+        {isSplitView && <span className="text-[10px] text-[#60CDFF] shrink-0 font-bold uppercase tracking-wider">Pane 1:</span>}
+        <span className="truncate text-white font-semibold" title={browserSource === "filesystem" ? diskCurrentPath : `/${currentFolderPath || ""}`}>
           {browserSource === "filesystem" ? diskCurrentPath : `/${currentFolderPath || ""}`}
         </span>
       </div>
       <div className="flex items-center space-x-2 shrink-0">
-        <span className="text-[10px] text-[#60CDFF] font-medium">
+        <span className="text-[10px] text-[#A8A8A8] font-medium bg-[#161616] px-2 py-0.5 rounded border border-[#2E2E2E]">
           {browserSource === "filesystem" ? `${diskEntries.length} items` : `${currentFolderNode.totalItemCount} items`}
         </span>
       </div>
@@ -1966,49 +1959,39 @@ export function ArchiveTreeInspector({
   // Pane 2 Subheader
   const renderPane2Header = () => {
     const p2Node = pane2FolderNode;
+    const isDisk = pane2Source === "filesystem";
+    const itemCount = isDisk ? pane2DiskEntries.length : p2Node.totalItemCount;
+    const currentPath = isDisk ? pane2DiskPath : `/${pane2FolderPath || ""}`;
+    const canGoUp = isDisk ? !/^[a-zA-Z]:[/\\]*$/.test(pane2DiskPath.trim()) : Boolean(pane2FolderPath);
+
     return (
       <div className="px-3 py-1.5 bg-[#202020] border-b border-[#2A2A2A] text-[11px] font-mono text-[#A8A8A8] flex items-center justify-between shrink-0 select-none">
         <div className="flex items-center space-x-2 truncate min-w-0 flex-1 mr-2">
-          <div className="flex items-center space-x-0.5 bg-[#141414] p-0.5 rounded border border-[#303030] shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setPane2Source("filesystem");
-                if (pane2DiskEntries.length === 0) {
-                  loadPane2DiskDirectory(pane2DiskPath || "C:\\");
-                }
-              }}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                pane2Source === "filesystem" ? "bg-[#25394A] text-[#60CDFF]" : "text-[#777] hover:text-white"
-              }`}
-              title="Browse local disk drives in Pane 2"
-            >
-              📁 Disk
-            </button>
-            <button
-              type="button"
-              onClick={() => setPane2Source("archive")}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
-                pane2Source === "archive" ? "bg-[#25394A] text-[#60CDFF]" : "text-[#777] hover:text-white"
-              }`}
-              title="View archive contents in Pane 2"
-            >
-              📦 {mode === "compress" ? "Staged" : "Archive"}
-            </button>
-          </div>
-          <span className="text-[10px] text-[#666666] shrink-0 font-bold">Pane 2:</span>
-          <span className="truncate text-white font-semibold">
-            {pane2Source === "filesystem" ? pane2DiskPath : `/${pane2FolderPath || ""}`}
+          <span className="text-sm shrink-0">{isDisk ? "📁" : "📦"}</span>
+          <span className="text-[10px] text-[#60CDFF] shrink-0 font-bold uppercase tracking-wider">Pane 2:</span>
+          <span className="truncate text-white font-semibold" title={currentPath}>
+            {currentPath}
           </span>
         </div>
         <div className="flex items-center space-x-2 shrink-0">
-          <span className="text-[10px] text-[#60CDFF] font-medium">
-            {pane2Source === "filesystem" ? `${pane2DiskEntries.length} items` : `${p2Node.totalItemCount} items`}
+          {canGoUp && (
+            <button
+              type="button"
+              onClick={isDisk ? handlePane2DiskUp : handlePane2ArchiveUp}
+              className="px-1.5 py-0.5 rounded bg-[#2A2A2A] hover:bg-[#383838] text-[#CCCCCC] hover:text-white transition-colors cursor-pointer text-[10px] flex items-center space-x-1 border border-[#3A3A3A]"
+              title="Navigate Up in Pane 2"
+            >
+              <span>⮥</span>
+              <span>Up</span>
+            </button>
+          )}
+          <span className="text-[10px] text-[#A8A8A8] font-medium bg-[#161616] px-2 py-0.5 rounded border border-[#2E2E2E]">
+            {itemCount} items
           </span>
           <button
             type="button"
             onClick={() => setIsSplitView(false)}
-            className="p-1 rounded text-[#888888] hover:text-white hover:bg-[#333333] transition-colors cursor-pointer text-xs leading-none font-bold"
+            className="p-1 px-1.5 rounded text-[#888888] hover:text-white hover:bg-rose-950/60 hover:border-rose-700/60 transition-colors cursor-pointer text-xs leading-none font-bold border border-transparent"
             title="Close Split View (Return to single pane)"
           >
             ✕
@@ -3157,11 +3140,7 @@ export function ArchiveTreeInspector({
                           pane2Header={renderPane2Header()}
                           pane2Content={pane2Source === "filesystem" ? renderPane2DiskContents() : renderPane2ArchiveContents()}
                           onClosePane2={() => setIsSplitView(false)}
-                          onDropFolderToSplit={(folderPath) => {
-                            setIsSplitView(true);
-                            setPane2Source("archive");
-                            setPane2FolderPath(folderPath);
-                          }}
+                          onDropFolderToSplit={handleOpenInSplit}
                           onDropDiskItemToStage={(diskPath) => {
                             if (onStageItem) onStageItem(diskPath);
                           }}
@@ -3307,6 +3286,7 @@ export function ArchiveTreeInspector({
         mode={mode || "extract"}
         browserSource={browserSource}
         onClose={() => setContextMenu((prev) => ({ ...prev, isOpen: false }))}
+        onOpenInSplit={handleOpenInSplit}
         onPreview={(name) => {
           if (browserSource === "filesystem" && contextMenu.target?.diskPath) {
             if (onPreviewEntry) onPreviewEntry(contextMenu.target.diskPath);

@@ -201,8 +201,35 @@ pub fn delete_to_recycle_bin_sync(path_str: &str) -> Result<(), String> {
     }
 }
 
+pub fn validate_file_name(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Name cannot be empty".to_string());
+    }
+    if trimmed.ends_with('.') || trimmed.ends_with(' ') {
+        return Err("Name cannot end with a period or space on Windows".to_string());
+    }
+    const INVALID_CHARS: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+    if trimmed.chars().any(|c| INVALID_CHARS.contains(&c) || (c as u32) < 32) {
+        return Err("Name contains invalid characters (< > : \" / \\ | ? *)".to_string());
+    }
+    let stem = trimmed.split('.').next().unwrap_or(trimmed).to_uppercase();
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.contains(&stem.as_str()) {
+        return Err(format!("'{}' is a reserved system name on Windows", stem));
+    }
+    Ok(())
+}
+
 pub fn create_directory_sync(path_str: &str) -> Result<(), String> {
     let path = std::path::Path::new(path_str);
+    if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+        validate_file_name(name)?;
+    }
     std::fs::create_dir_all(path).map_err(|e| e.to_string())
 }
 
@@ -212,7 +239,23 @@ pub fn rename_path_sync(old_path_str: &str, new_path_str: &str) -> Result<(), St
     if !old_p.exists() {
         return Err("Source file or folder does not exist".to_string());
     }
-    std::fs::rename(old_p, new_p).map_err(|e| e.to_string())
+    if let Some(new_name) = new_p.file_name().and_then(|s| s.to_str()) {
+        validate_file_name(new_name)?;
+    }
+    if let Err(_err) = std::fs::rename(old_p, new_p) {
+        // Cross-device volume move fallback (e.g. across C:\ and D:\)
+        if old_p.is_dir() {
+            copy_dir_recursive(old_p, new_p).map_err(|e| format!("Cross-device directory move failed: {}", e))?;
+            let _ = std::fs::remove_dir_all(old_p);
+            Ok(())
+        } else {
+            std::fs::copy(old_p, new_p).map_err(|e| format!("Cross-device file move failed: {}", e))?;
+            let _ = std::fs::remove_file(old_p);
+            Ok(())
+        }
+    } else {
+        Ok(())
+    }
 }
 
 pub fn copy_path_sync(src_str: &str, dest_parent_dir: &str) -> Result<String, String> {

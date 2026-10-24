@@ -16,7 +16,7 @@ export interface WorkspaceDualPaneViewProps {
   onClosePane2: () => void;
 
   // Drag & drop cross-pane events
-  onDropFolderToSplit?: (folderPath: string) => void;
+  onDropFolderToSplit?: (folderPath: string, isDisk?: boolean) => void;
   onDropDiskItemToStage?: (diskPath: string) => void;
 
   // Bottom drawer (e.g. Staged Items Queue)
@@ -90,15 +90,19 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
   const handleDropPayload = (e: React.DragEvent) => {
     const folderPath = e.dataTransfer.getData("application/bayzip-folder-path");
     const diskPath = e.dataTransfer.getData("application/bayzip-disk-path");
+    const isDir = e.dataTransfer.getData("application/bayzip-is-dir") === "true";
     const textData = e.dataTransfer.getData("text/plain");
 
-    if (folderPath && onDropFolderToSplit) {
-      onDropFolderToSplit(folderPath);
+    const targetFolder = folderPath || (isDir ? diskPath : "");
+    if (targetFolder && onDropFolderToSplit) {
+      const isDisk = Boolean(diskPath) || /^[a-zA-Z]:/.test(targetFolder);
+      onDropFolderToSplit(targetFolder, isDisk);
     } else if (diskPath && onDropDiskItemToStage) {
       onDropDiskItemToStage(diskPath);
     } else if (textData) {
-      if (onDropFolderToSplit && !textData.includes(":\\")) {
-        onDropFolderToSplit(textData);
+      const isLikelyFolder = textData.endsWith("/") || textData.endsWith("\\") || !textData.includes(".");
+      if (onDropFolderToSplit && isLikelyFolder) {
+        onDropFolderToSplit(textData, /^[a-zA-Z]:/.test(textData));
       } else if (onDropDiskItemToStage) {
         onDropDiskItemToStage(textData);
       }

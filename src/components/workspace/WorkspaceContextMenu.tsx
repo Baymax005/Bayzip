@@ -28,6 +28,7 @@ export interface WorkspaceContextMenuProps {
   onNewFolder?: () => void;
   onPaste?: () => void;
   onLoadArchive?: (path: string) => void;
+  onOpenInSplit?: (path: string, isDisk: boolean) => void;
   clipboardItem?: { relName: string; isDir: boolean; diskPath?: string } | null;
 }
 
@@ -49,6 +50,7 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
   onNewFolder,
   onPaste,
   onLoadArchive,
+  onOpenInSplit,
   clipboardItem,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -90,7 +92,25 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
       >
         {target && (
           <>
-            {/* Action 1: In-memory safe preview for files */}
+            {/* Action 1a: Open in Split View for Folders */}
+            {target.isDir && onOpenInSplit && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenInSplit(target.diskPath || target.name, Boolean(target.diskPath));
+                  onClose();
+                }}
+                className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#1C3345] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
+              >
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm">⫴</span>
+                  <span className="font-semibold text-[#60CDFF]">Open in Split View</span>
+                </div>
+                <span className="text-[10px] text-[#60CDFF] font-mono">Pane 2</span>
+              </button>
+            )}
+
+            {/* Action 1b: In-memory safe preview for files */}
             {!target.isDir && onPreview && (
               <button
                 type="button"

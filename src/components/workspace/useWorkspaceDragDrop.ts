@@ -219,6 +219,10 @@ export function useWorkspaceDragDrop({
     onDragStart: (e: React.DragEvent) => {
       e.dataTransfer.setData("application/bayzip-disk-path", diskPath);
       e.dataTransfer.setData("application/bayzip-is-dir", isDir ? "true" : "false");
+      if (isDir) {
+        e.dataTransfer.setData("application/bayzip-folder-path", diskPath);
+        e.dataTransfer.setData("application/bayzip-folder-name", diskPath.split(/[/\\]/).pop() || diskPath);
+      }
       e.dataTransfer.setData("text/plain", diskPath);
       e.dataTransfer.effectAllowed = "copyMove";
     },
