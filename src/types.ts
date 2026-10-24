@@ -89,6 +89,12 @@ export interface DirectoryItem {
   size: number;
 }
 
+export interface QuickAccessItem {
+  name: string;
+  path: string;
+  icon: string;
+}
+
 export interface OperationProgressInfo {
   percent: number;
   label: string;

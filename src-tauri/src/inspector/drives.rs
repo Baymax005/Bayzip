@@ -1,4 +1,29 @@
-use crate::types::DriveInfo;
+use crate::types::{DriveInfo, QuickAccessItem};
+
+pub fn get_quick_access_sync() -> Vec<QuickAccessItem> {
+    let mut list = Vec::new();
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let p = std::path::Path::new(&user_profile);
+        let shortcuts = [
+            ("Desktop", p.join("Desktop"), "🖥️"),
+            ("Downloads", p.join("Downloads"), "📥"),
+            ("Documents", p.join("Documents"), "📑"),
+            ("Pictures", p.join("Pictures"), "🖼️"),
+            ("Music", p.join("Music"), "🎵"),
+            ("Videos", p.join("Videos"), "🎬"),
+        ];
+        for (name, path, icon) in shortcuts {
+            if path.exists() {
+                list.push(QuickAccessItem {
+                    name: name.to_string(),
+                    path: path.to_string_lossy().to_string(),
+                    icon: icon.to_string(),
+                });
+            }
+        }
+    }
+    list
+}
 
 pub fn get_system_drives_sync() -> Vec<DriveInfo> {
     use sysinfo::Disks;
