@@ -1,14 +1,13 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArchiveInfo, ArchiveEntryItem, DriveInfo, DirectoryItem, QuickAccessItem, OperationProgressInfo } from "../types";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 import { WorkspaceNavBar } from "./workspace/WorkspaceNavBar";
 import { WorkspaceStagedQueue } from "./workspace/WorkspaceStagedQueue";
 import { WorkspaceExtractQueue } from "./workspace/WorkspaceExtractQueue";
 import { WorkspaceContextMenu, ContextMenuTarget } from "./workspace/WorkspaceContextMenu";
-import { WorkspaceHeaderProgressHUD } from "./workspace/WorkspaceHeaderProgressHUD";
 import { WorkspaceDualPaneView } from "./workspace/WorkspaceDualPaneView";
+import { WorkspaceHeader } from "./workspace/WorkspaceHeader";
 import { useWorkspaceDragDrop, normalizeArchiveEntryPath } from "./workspace/useWorkspaceDragDrop";
 export { normalizeArchiveEntryPath };
 
@@ -181,7 +180,6 @@ export function ArchiveTreeInspector({
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set([""]));
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedEntryName, setSelectedEntryName] = useState<string | null>(null);
-  const [isExclusionMode, setIsExclusionMode] = useState<boolean>(false);
 
   // Staged files drawer state
   const [isStagedQueueOpen, setIsStagedQueueOpen] = useState<boolean>(true);
@@ -200,12 +198,27 @@ export function ArchiveTreeInspector({
   );
   const [showMobileTree, setShowMobileTree] = useState<boolean>(false);
   const [showMobileSidebar, setShowMobileSidebar] = useState<boolean>(false);
+  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState<boolean>(true);
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
+        e.preventDefault();
+        if (windowWidth < 800) {
+          setShowMobileTree((prev) => !prev);
+        } else {
+          setIsLeftPanelOpen((prev) => !prev);
+        }
+      }
+    };
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [windowWidth]);
 
   // System drives & Filesystem browsing states
   const [drives, setDrives] = useState<DriveInfo[]>([]);
@@ -1583,285 +1596,7 @@ export function ArchiveTreeInspector({
     return <FileFormatIcon fileName={fileName} size="sm" />;
   };
 
-  // Main UI Toolbar Component
-  const renderToolbar = (isFullModal: boolean = false) => (
-    <div
-      className={`px-3.5 py-2.5 ${
-        isFullModal
-          ? "bg-[#181818] border-b border-[#2C2C2C]"
-          : "bg-[#262626] border-b border-[#3E3E3E]"
-      } flex flex-wrap items-center justify-between gap-2 shrink-0 select-none`}
-      data-tauri-drag-region={isFullModal ? "true" : undefined}
-    >
-      <div className="flex items-center space-x-2.5" data-tauri-drag-region={isFullModal ? "true" : undefined}>
-        {isFullModal ? (
-          <div className="flex items-center space-x-2 mr-1" data-tauri-drag-region="true">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#60CDFF] shadow-[0_0_8px_rgba(96,205,255,0.8)]" />
-            <span className="font-bold text-xs tracking-wider text-white uppercase font-sans">
-              BAYZIP WORKSPACE
-            </span>
-            {onSwitchMode ? (
-              <div className="flex items-center bg-[#141414] p-0.5 rounded-lg border border-[#3E3E3E]" data-tauri-drag-region="false">
-                <button
-                  type="button"
-                  onClick={() => onSwitchMode("compress")}
-                  className={`px-2.5 py-0.5 text-[10px] font-semibold rounded transition-all cursor-pointer flex items-center space-x-1 ${
-                    mode === "compress"
-                      ? "bg-[#173042] text-[#60CDFF] border border-[#60CDFF]/50 shadow-[0_0_8px_rgba(96,205,255,0.25)]"
-                      : "text-[#888888] hover:text-white hover:bg-[#202020] border border-transparent"
-                  }`}
-                  title="Switch to Compress Workspace"
-                >
-                  <span>📦</span>
-                  <span>Compress</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSwitchMode("extract")}
-                  className={`px-2.5 py-0.5 text-[10px] font-semibold rounded transition-all cursor-pointer flex items-center space-x-1 ${
-                    mode === "extract"
-                      ? "bg-[#25394A] text-[#60CDFF] border border-[#60CDFF]/50 shadow-[0_0_8px_rgba(96,205,255,0.25)]"
-                      : "text-[#888888] hover:text-white hover:bg-[#202020] border border-transparent"
-                  }`}
-                  title="Switch to Extract Workspace"
-                >
-                  <span>📂</span>
-                  <span>Extract</span>
-                </button>
-              </div>
-            ) : (
-              <span className="text-[10px] uppercase font-mono font-semibold px-2 py-0.5 rounded bg-[#173042] text-[#60CDFF] border border-[#60CDFF]/40">
-                {mode === "compress" ? "Compress Mode" : "Extract Mode"}
-              </span>
-            )}
-            {mode === "extract" && onSelectArchive && (
-              <button
-                type="button"
-                data-tauri-drag-region="false"
-                onClick={onSelectArchive}
-                className="px-2.5 py-0.5 text-[10px] font-semibold rounded bg-[#173042] hover:bg-[#1E415A] border border-[#60CDFF]/50 text-[#60CDFF] hover:text-[#90DCFF] shadow-sm transition-all cursor-pointer flex items-center space-x-1"
-                title="Select Archive File from PC (.bay, .zip, .7z, .tar, .rar)"
-              >
-                <span>📂</span>
-                <span>Open Archive</span>
-              </button>
-            )}
-          </div>
-        ) : (
-          <>
-            <svg className="w-4 h-4 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-            </svg>
-            <span className="text-xs font-semibold text-white tracking-wide">
-              {inspectorTitle || (archiveInfo.is_archive === false ? "Staged Items Inspector" : "Archive Explorer")}
-            </span>
-          </>
-        )}
-        <span className="text-[10px] font-mono bg-[#282828] text-[#A8A8A8] px-2 py-0.5 rounded-full border border-[#3E3E3E]">
-          {archiveInfo.file_count || 0} item{archiveInfo.file_count !== 1 ? "s" : ""}
-        </span>
-      </div>
 
-      {/* Center Dynamic Titlebar Progress HUD (Pill with Dropdown Details) */}
-      {operationProgress && (
-        <div className="flex-1 flex justify-center items-center min-w-0 px-2" data-tauri-drag-region="false">
-          <WorkspaceHeaderProgressHUD
-            progress={operationProgress}
-            isOpen={isHeaderHUDOpen}
-            onToggleOpen={() => setIsHeaderHUDOpen((prev) => !prev)}
-            onClose={() => setIsHeaderHUDOpen(false)}
-          />
-        </div>
-      )}
-
-      <div className="flex items-center space-x-2">
-        {/* Responsive Folder Tree Toggle (in full modal when window width < 850px) */}
-        {isFullModal && viewMode === "tree" && (
-          <button
-            type="button"
-            onClick={() => setShowMobileTree((prev) => !prev)}
-            className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all flex items-center space-x-1.5 cursor-pointer ${
-              showMobileTree
-                ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/70 shadow-[0_0_10px_rgba(96,205,255,0.2)] font-semibold"
-                : "bg-[#1C1C1C] hover:bg-[#2A2A2A] text-[#A8A8A8] hover:text-white border border-[#3E3E3E]"
-            } ${windowWidth >= 850 ? "hidden" : "flex"}`}
-            title={showMobileTree ? "Hide Folder Tree" : "Show Folder Tree Drawer"}
-          >
-            <span>📁</span>
-            <span>Tree</span>
-          </button>
-        )}
-
-        {/* Responsive Options Sidebar Toggle (in full modal when window width < 1150px) */}
-        {isFullModal && sidebar && (
-          <button
-            type="button"
-            onClick={() => setShowMobileSidebar((prev) => !prev)}
-            className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all flex items-center space-x-1.5 cursor-pointer ${
-              showMobileSidebar
-                ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/70 shadow-[0_0_10px_rgba(96,205,255,0.2)] font-semibold"
-                : "bg-[#1C1C1C] hover:bg-[#2A2A2A] text-[#A8A8A8] hover:text-white border border-[#3E3E3E]"
-            } ${windowWidth >= 1150 ? "hidden" : "flex"}`}
-            title={showMobileSidebar ? "Hide Options Panel" : "Show Options Panel Drawer"}
-          >
-            <span>⚙️</span>
-            <span>{sidebarTitle || "Options"}</span>
-          </button>
-        )}
-
-        {/* Toggle between Tree View and Flat Table */}
-        <div className="bg-[#1C1C1C] p-0.5 rounded-lg border border-[#3E3E3E] flex items-center space-x-1">
-          <button
-            type="button"
-            onClick={() => setViewMode("tree")}
-            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors flex items-center space-x-1 cursor-pointer ${
-              viewMode === "tree"
-                ? "bg-[#333333] text-[#60CDFF] shadow-sm font-semibold"
-                : "text-[#888888] hover:text-white"
-            }`}
-            title="Hierarchical Tree View"
-          >
-            <span>🗂️</span>
-            <span className="hidden sm:inline">Tree View</span>
-            <span className="sm:hidden">Tree</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode("flat")}
-            className={`px-2.5 py-1 text-xs rounded font-medium transition-colors flex items-center space-x-1 cursor-pointer ${
-              viewMode === "flat"
-                ? "bg-[#333333] text-[#60CDFF] shadow-sm font-semibold"
-                : "text-[#888888] hover:text-white"
-            }`}
-            title="Flat Archive Table"
-          >
-            <span>📋</span>
-            <span className="hidden sm:inline">Flat Table</span>
-            <span className="sm:hidden">Flat</span>
-          </button>
-        </div>
-
-        {/* + New Folder Button */}
-        <button
-          type="button"
-          onClick={handleStartNewFolder}
-          className="px-2.5 py-1 text-xs rounded-lg font-medium transition-all flex items-center space-x-1.5 bg-[#25394A] hover:bg-[#2C4459] text-[#60CDFF] border border-[#60CDFF]/30 hover:border-[#60CDFF]/60 cursor-pointer shadow-sm"
-          title="Create New Folder (Ctrl+Shift+N)"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-          </svg>
-          <span className="hidden sm:inline">New Folder</span>
-          <span className="sm:hidden">+Folder</span>
-        </button>
-
-        {/* Selective Exclusion Mode Button */}
-        <button
-          type="button"
-          onClick={() => setIsExclusionMode(!isExclusionMode)}
-          className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all flex items-center space-x-1.5 cursor-pointer ${
-            isExclusionMode
-              ? "bg-rose-950/50 text-rose-300 border border-rose-700/80 shadow-[0_0_12px_rgba(244,63,94,0.25)] font-semibold"
-              : "bg-[#1C1C1C] hover:bg-[#2A2A2A] text-[#A8A8A8] hover:text-white border border-[#3E3E3E] hover:border-[#555555]"
-          }`}
-          title={isExclusionMode ? "Exit Exclusion Mode" : "Enable Selective Exclusion: skip unwanted files during extraction"}
-        >
-          {isExclusionMode && <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>}
-          <span className="text-rose-400 font-bold">✕</span>
-          <span className="hidden sm:inline">{isExclusionMode ? "Exclusion Mode" : "Exclude Files"}</span>
-          <span className="sm:hidden">{isExclusionMode ? "Mode" : "Exclude"}</span>
-          {excludedCount > 0 && (
-            <span className="text-[10px] font-mono bg-rose-900/70 text-white px-1.5 py-0.2 rounded-full border border-rose-600">
-              {excludedCount}
-            </span>
-          )}
-        </button>
-
-        {/* Reset / Include All Button */}
-        {excludedCount > 0 && onIncludeAll && (
-          <button
-            type="button"
-            onClick={onIncludeAll}
-            className="px-2 py-1 text-xs rounded-lg font-medium transition-colors flex items-center space-x-1 bg-[#1C1C1C] hover:bg-[#2A2A2A] text-[#60CDFF] hover:text-[#90DCFF] border border-[#3E3E3E] cursor-pointer"
-            title="Include all files (reset exclusions)"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <span className="hidden sm:inline">Include All</span>
-          </button>
-        )}
-
-        {/* Expand / Minimize Fullscreen Toggle (⤢) */}
-        {!isFullModal ? (
-          <button
-            type="button"
-            onClick={() => setIsExpandedModal(true)}
-            className="p-1.5 bg-[#2D2D2D] hover:bg-[#383838] text-[#A8A8A8] hover:text-white rounded border border-[#3E3E3E] transition-colors cursor-pointer"
-            title="Expand into full workspace (⤢)"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-            </svg>
-          </button>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => setIsExpandedModal(false)}
-              className="px-2.5 py-1 bg-[#2D2D2D] hover:bg-rose-950/40 text-[#A8A8A8] hover:text-rose-300 rounded-md border border-[#3E3E3E] hover:border-rose-700/60 transition-colors cursor-pointer flex items-center space-x-1.5 text-xs font-medium"
-              title="Exit Workspace (Esc)"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-              <span className="hidden sm:inline">Exit Workspace</span>
-            </button>
-
-            {/* Native Window Controls in Workspace Header */}
-            <div className="flex items-center h-full ml-1 border-l border-[#3E3E3E] pl-1.5 space-x-0.5" data-tauri-drag-region="false">
-              {/* Minimize */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  getCurrentWindow().minimize().catch(() => {});
-                }}
-                className="p-1.5 hover:bg-[#333333] text-[#A8A8A8] hover:text-white rounded transition-colors cursor-pointer"
-                title="Minimize"
-              >
-                <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor" /></svg>
-              </button>
-              {/* Maximize / Restore */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  getCurrentWindow().toggleMaximize().catch(() => {});
-                }}
-                className="p-1.5 hover:bg-[#333333] text-[#A8A8A8] hover:text-white rounded transition-colors cursor-pointer"
-                title="Maximize / Restore"
-              >
-                <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0,0v10h10V0H0z M9,9H1V1h8V9z" fill="currentColor" /></svg>
-              </button>
-              {/* Close */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  getCurrentWindow().close().catch(() => {});
-                }}
-                className="p-1.5 hover:bg-[#E81123] text-[#A8A8A8] hover:text-white rounded transition-colors cursor-pointer"
-                title="Close Bayzip"
-              >
-                <svg width="10" height="10" viewBox="0 0 10 10"><path d="M10,1L9,0L5,4L1,0L0,1l4,4l-4,4l1,1l4-4l4,4l1-1l-4-4L10,1z" fill="currentColor" /></svg>
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
 
   // Breadcrumb Trail Component
   const renderBreadcrumbs = () => (
@@ -2551,11 +2286,7 @@ export function ArchiveTreeInspector({
                   onDoubleClick={() => navigateToFolder(sub.path)}
                   onContextMenu={(e) => handleOpenContextMenu(e, { name: sub.path, isDir: true })}
                   onClick={() => {
-                    if (isExclusionMode && onToggleExclude) {
-                      onToggleExclude(sub.path, true);
-                    } else {
-                      setSelectedEntryName(sub.path);
-                    }
+                    setSelectedEntryName(sub.path);
                   }}
                   style={{ height: "34px" }}
                   className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
@@ -2679,11 +2410,7 @@ export function ArchiveTreeInspector({
                 {...getArchiveDragProps(file.name, false, fileNameOnly)}
                 onContextMenu={(e) => handleOpenContextMenu(e, { name: file.name, isDir: false, size: file.size })}
                 onClick={() => {
-                  if (isExclusionMode && onToggleExclude) {
-                    onToggleExclude(file.name);
-                  } else {
-                    setSelectedEntryName(file.name);
-                  }
+                  setSelectedEntryName(file.name);
                 }}
                 onDoubleClick={() => onPreviewEntry(file.name)}
                 style={{ height: "34px" }}
@@ -2844,11 +2571,7 @@ export function ArchiveTreeInspector({
                 key={`flat-${entry.name || idx}`}
                 onContextMenu={(e) => handleOpenContextMenu(e, { name: entry.name, isDir: entry.is_dir, size: entry.size })}
                 onClick={() => {
-                  if (isExclusionMode && onToggleExclude) {
-                    onToggleExclude(entry.name, entry.is_dir);
-                  } else {
-                    setSelectedEntryName(entry.name);
-                  }
+                  setSelectedEntryName(entry.name);
                 }}
               onDoubleClick={() => {
                 if (!entry.is_dir) onPreviewEntry(entry.name);
@@ -2965,7 +2688,20 @@ export function ArchiveTreeInspector({
         ref={containerRef}
         className="bg-[#202020] rounded-lg border border-[#3E3E3E] overflow-hidden flex flex-col shadow-sm"
       >
-        {renderToolbar(false)}
+        <WorkspaceHeader
+          isFullModal={false}
+          mode={mode}
+          inspectorTitle={inspectorTitle}
+          itemCount={archiveInfo.file_count || 0}
+          operationProgress={operationProgress}
+          isHeaderHUDOpen={isHeaderHUDOpen}
+          onToggleHeaderHUD={() => setIsHeaderHUDOpen((prev) => !prev)}
+          onCloseHeaderHUD={() => setIsHeaderHUDOpen(false)}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          onStartNewFolder={handleStartNewFolder}
+          onExpandToWorkspace={() => setIsExpandedModal(true)}
+        />
 
         {isEncryptedWithoutEntries ? (
           renderEncryptedBanner()
@@ -3023,7 +2759,44 @@ export function ArchiveTreeInspector({
           }`}
         >
           <div className="flex flex-col w-full h-full overflow-hidden relative">
-            {renderToolbar(true)}
+            <WorkspaceHeader
+              isFullModal={true}
+              mode={mode}
+              onSwitchMode={onSwitchMode}
+              onSelectArchive={onSelectArchive}
+              itemCount={archiveInfo.file_count || 0}
+              operationProgress={operationProgress}
+              isHeaderHUDOpen={isHeaderHUDOpen}
+              onToggleHeaderHUD={() => setIsHeaderHUDOpen((prev) => !prev)}
+              onCloseHeaderHUD={() => setIsHeaderHUDOpen(false)}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+              onStartNewFolder={handleStartNewFolder}
+              isLeftPanelOpen={windowWidth >= 800 ? isLeftPanelOpen : showMobileTree}
+              onToggleLeftPanel={() => {
+                if (windowWidth < 800) {
+                  setShowMobileTree((prev) => !prev);
+                } else {
+                  setIsLeftPanelOpen((prev) => !prev);
+                }
+              }}
+              isSplitView={isSplitView}
+              onToggleSplitView={() => setIsSplitView((prev) => !prev)}
+              isBottomPanelOpen={mode === "compress" ? isStagedQueueOpen : isExtractQueueOpen}
+              onToggleBottomPanel={() => {
+                if (mode === "compress") {
+                  setIsStagedQueueOpen((prev) => !prev);
+                } else {
+                  setIsExtractQueueOpen((prev) => !prev);
+                }
+              }}
+              bottomPanelBadge={mode === "compress" ? (stagedItems ? stagedItems.length : 0) : excludedCount}
+              hasRightPanel={Boolean(sidebar)}
+              isRightPanelOpen={showMobileSidebar}
+              onToggleRightPanel={() => setShowMobileSidebar((prev) => !prev)}
+              rightPanelTitle={sidebarTitle || "Options"}
+              onToggleCompactView={() => setIsExpandedModal(false)}
+            />
 
             {isEncryptedWithoutEntries ? (
               <div className="flex-1 flex items-center justify-center">
@@ -3068,7 +2841,7 @@ export function ArchiveTreeInspector({
                       {/* Dual-Pane Layout: Left Folder Tree / Quick Access, Right Folder Files */}
                       <div className="flex-1 flex overflow-hidden relative">
                         {/* Left Pane: Hierarchical Tree & Drives */}
-                        {windowWidth >= 800 && (
+                        {windowWidth >= 800 && isLeftPanelOpen && (
                           <>
                             <div
                               style={{ width: `${leftPanelWidth}px` }}
