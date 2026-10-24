@@ -74,7 +74,6 @@ export const WorkspaceExtractSidebar: React.FC<WorkspaceExtractSidebarProps> = (
       {/* SECTION 1: Destination & Target Path (Where to extract) */}
       <div className="space-y-2">
         <div className="flex items-center space-x-1.5 text-[11px] font-bold text-[#A8A8A8] uppercase tracking-wider">
-          <span>📍</span>
           <span>Where to Extract</span>
         </div>
 
@@ -136,9 +135,9 @@ export const WorkspaceExtractSidebar: React.FC<WorkspaceExtractSidebarProps> = (
                 <span>📂</span>
                 <span>
                   {archiveFilename &&
-                  archiveFilename !== "No archive loaded" &&
-                  archiveFilename !== "No Archive Loaded" &&
-                  archiveFilename !== "No Archive Selected"
+                    archiveFilename !== "No archive loaded" &&
+                    archiveFilename !== "No Archive Loaded" &&
+                    archiveFilename !== "No Archive Selected"
                     ? "Change"
                     : "Browse..."}
                 </span>
