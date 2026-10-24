@@ -9,6 +9,8 @@ import { WorkspaceExtractQueue } from "./workspace/WorkspaceExtractQueue";
 import { WorkspaceContextMenu, ContextMenuTarget } from "./workspace/WorkspaceContextMenu";
 import { WorkspaceHeaderProgressHUD } from "./workspace/WorkspaceHeaderProgressHUD";
 import { WorkspaceDualPaneView } from "./workspace/WorkspaceDualPaneView";
+import { useWorkspaceDragDrop, normalizeArchiveEntryPath } from "./workspace/useWorkspaceDragDrop";
+export { normalizeArchiveEntryPath };
 
 export interface ArchiveTreeInspectorProps {
   archiveInfo: ArchiveInfo;
@@ -36,10 +38,6 @@ export interface ArchiveTreeInspectorProps {
   onClearStagedItems?: () => void;
   onSelectArchive?: () => void;
   onLoadArchiveFromFile?: (path: string) => void;
-}
-
-export function normalizeArchiveEntryPath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/^\.?\/+/, "").toLowerCase();
 }
 
 export interface TreeNode {
@@ -489,6 +487,26 @@ export function ArchiveTreeInspector({
     if (!cleanRel) return base;
     return `${base}/${cleanRel}`;
   };
+
+  // Modular Workspace Drag-and-Drop Hook (Encapsulated in useWorkspaceDragDrop.ts)
+  const {
+    getArchiveDragProps,
+    getDiskDragProps,
+    getFolderDropProps,
+  } = useWorkspaceDragDrop({
+    localEntries,
+    setLocalEntries,
+    getDiskPath,
+    setExpandedFolders,
+    browserSource,
+    diskCurrentPath,
+    loadDiskDirectory,
+    isSplitView,
+    pane2Source,
+    pane2DiskPath,
+    loadPane2DiskDirectory,
+    onStageItem,
+  });
 
   const handleStartNewFolder = () => {
     setIsCreatingFolder(true);
@@ -1224,26 +1242,40 @@ export function ArchiveTreeInspector({
         onContextMenu={(e) => handleOpenContextMenu(e, null)}
       >
         {/* WinRAR / 7-Zip Standard Parent Directory Row */}
-        {isNotRootDrive && (
-          <div
-            onDoubleClick={handleDiskUp}
-            onClick={handleDiskUp}
-            style={{ height: "34px" }}
-            className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0"
-            title="Navigate to parent folder (Double-click or click)"
-          >
-            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-              <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
-              <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
-                ..
-              </span>
-              <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+        {isNotRootDrive && (() => {
+          const diskParentPath = (() => {
+            const clean = diskCurrentPath.replace(/\//g, "\\").replace(/\\+$/, "");
+            const idx = clean.lastIndexOf("\\");
+            if (idx === -1) return clean;
+            if (idx === 2 && clean.endsWith(":")) return clean + "\\";
+            if (idx <= 2) return clean.substring(0, idx + 1);
+            return clean.substring(0, idx);
+          })();
+          const parentDropProps = getFolderDropProps("parent-disk-up", "", true, diskParentPath);
+          return (
+            <div
+              onDoubleClick={handleDiskUp}
+              onClick={handleDiskUp}
+              {...parentDropProps.handlers}
+              style={{ height: "34px" }}
+              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0 ${
+                parentDropProps.isDropTarget ? "bg-[#173042] text-[#60CDFF] border-l-2 border-[#60CDFF]" : "hover:bg-[#252525]"
+              }`}
+              title="Navigate to parent folder (or drop items to move up)"
+            >
+              <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
+                <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
+                  ..
+                </span>
+                <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+              </div>
+              <div className="flex items-center space-x-2 shrink-0">
+                <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
+              </div>
             </div>
-            <div className="flex items-center space-x-2 shrink-0">
-              <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         <VirtualScrollList
           items={filtered}
@@ -1251,16 +1283,12 @@ export function ArchiveTreeInspector({
           className="flex-1 h-full"
           renderRow={(item) => {
             const isAlreadyStaged = Boolean(stagedItems && stagedItems.includes(item.path));
+            const dropProps = item.is_dir ? getFolderDropProps(`disk-${item.path}`, "", true, item.path) : null;
             return (
               <div
                 key={item.path}
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData("application/bayzip-disk-path", item.path);
-                  e.dataTransfer.setData("application/bayzip-is-dir", item.is_dir ? "true" : "false");
-                  e.dataTransfer.setData("text/plain", item.path);
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
+                {...getDiskDragProps(item.path, item.is_dir)}
+                {...(dropProps ? dropProps.handlers : {})}
                 onContextMenu={(e) =>
                   handleOpenContextMenu(e, {
                     name: item.name,
@@ -1290,9 +1318,11 @@ export function ArchiveTreeInspector({
                 }}
                 style={{ height: "34px" }}
                 className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
-                  isAlreadyStaged
-                    ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
-                    : "hover:bg-[#242424]"
+                  dropProps?.isDropTarget
+                    ? "bg-[#173042] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF] shadow-[0_0_12px_rgba(96,205,255,0.25)]"
+                    : isAlreadyStaged
+                      ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
+                      : "hover:bg-[#242424]"
                 }`}
               >
                 <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
@@ -1456,26 +1486,24 @@ export function ArchiveTreeInspector({
     const isSelected = currentFolderPath === node.path;
     const hasChildren = node.subfolders.length > 0;
     const isFolderSkipped = isDirExcluded(node.path);
+    const dropProps = getFolderDropProps(`tree-${node.path}`, node.path);
 
     return (
       <div key={node.path || "root"} className="select-none text-xs">
         <div
-          draggable
-          onDragStart={(e) => {
-            e.dataTransfer.setData("application/bayzip-folder-path", node.path);
-            e.dataTransfer.setData("application/bayzip-folder-name", node.name);
-            e.dataTransfer.setData("text/plain", node.path);
-            e.dataTransfer.effectAllowed = "copyMove";
-          }}
+          {...getArchiveDragProps(node.path, true, node.name)}
+          {...dropProps.handlers}
           onClick={() => navigateToFolder(node.path)}
           onContextMenu={(e) => handleOpenContextMenu(e, { name: node.path, isDir: true })}
           style={{ paddingLeft: `${Math.max(8, depth * 16 + 8)}px` }}
           className={`flex items-center justify-between py-1.5 pr-2 rounded-md transition-colors cursor-pointer group ${
-            isSelected
-              ? "bg-[#25394A] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF]"
-              : isFolderSkipped
-                ? "bg-rose-950/20 text-rose-300/80 hover:bg-rose-950/30"
-                : "hover:bg-[#282828] text-[#CCCCCC]"
+            dropProps.isDropTarget
+              ? "bg-[#173042] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF] shadow-[0_0_12px_rgba(96,205,255,0.25)]"
+              : isSelected
+                ? "bg-[#25394A] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF]"
+                : isFolderSkipped
+                  ? "bg-rose-950/20 text-rose-300/80 hover:bg-rose-950/30"
+                  : "hover:bg-[#282828] text-[#CCCCCC]"
           }`}
         >
           <div className="flex items-center space-x-1.5 min-w-0 flex-1 mr-2">
@@ -2086,24 +2114,33 @@ export function ArchiveTreeInspector({
         className="flex-1 flex flex-col overflow-hidden relative h-full"
         onContextMenu={(e) => handleOpenContextMenu(e, null)}
       >
-        {pane2FolderPath !== "" && (
-          <div
-            onDoubleClick={handlePane2ArchiveUp}
-            onClick={handlePane2ArchiveUp}
-            style={{ height: "34px" }}
-            className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0"
-            title="Navigate up to parent folder"
-          >
-            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-              <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
-              <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
-                ..
-              </span>
-              <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+        {pane2FolderPath !== "" && (() => {
+          const p2ParentFolderPath = pane2FolderPath.includes("/")
+            ? pane2FolderPath.substring(0, pane2FolderPath.lastIndexOf("/"))
+            : "";
+          const parentDropProps = getFolderDropProps("p2-parent-archive-up", p2ParentFolderPath);
+          return (
+            <div
+              onDoubleClick={handlePane2ArchiveUp}
+              onClick={handlePane2ArchiveUp}
+              {...parentDropProps.handlers}
+              style={{ height: "34px" }}
+              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0 ${
+                parentDropProps.isDropTarget ? "bg-[#173042] text-[#60CDFF] border-l-2 border-[#60CDFF]" : "hover:bg-[#252525]"
+              }`}
+              title="Navigate up to parent folder (or drop items to move up)"
+            >
+              <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
+                <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
+                  ..
+                </span>
+                <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+              </div>
+              <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
             </div>
-            <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
-          </div>
-        )}
+          );
+        })()}
 
         <VirtualScrollList
           key={`pane2-archive-${pane2FolderPath}-${searchQuery}`}
@@ -2113,13 +2150,20 @@ export function ArchiveTreeInspector({
           renderRow={(item) => {
             if (item.kind === "folder") {
               const sub = item.data;
+              const dropProps = getFolderDropProps(`p2-folder-${sub.path}`, sub.path);
               return (
                 <div
                   key={`p2-folder-${sub.path}`}
+                  {...getArchiveDragProps(sub.path, true, sub.name)}
+                  {...dropProps.handlers}
                   onDoubleClick={() => setPane2FolderPath(sub.path)}
                   onContextMenu={(e) => handleOpenContextMenu(e, { name: sub.path, isDir: true })}
                   style={{ height: "34px" }}
-                  className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border border-b border-[#222222]"
+                  className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
+                    dropProps.isDropTarget
+                      ? "bg-[#173042] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF] shadow-[0_0_12px_rgba(96,205,255,0.25)]"
+                      : "hover:bg-[#252525]"
+                  }`}
                 >
                   <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
                     <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
@@ -2138,6 +2182,7 @@ export function ArchiveTreeInspector({
             return (
               <div
                 key={`p2-file-${file.name}`}
+                {...getArchiveDragProps(file.name, false, fileName)}
                 onDoubleClick={() => onPreviewEntry(file.name)}
                 onContextMenu={(e) => handleOpenContextMenu(e, { name: file.name, isDir: false, size: file.size })}
                 style={{ height: "34px" }}
@@ -2198,24 +2243,38 @@ export function ArchiveTreeInspector({
         className="flex-1 flex flex-col overflow-hidden relative h-full"
         onContextMenu={(e) => handleOpenContextMenu(e, null)}
       >
-        {isNotRoot && (
-          <div
-            onDoubleClick={handlePane2DiskUp}
-            onClick={handlePane2DiskUp}
-            style={{ height: "34px" }}
-            className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0"
-            title="Navigate up to parent folder"
-          >
-            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-              <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
-              <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
-                ..
-              </span>
-              <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+        {isNotRoot && (() => {
+          const p2DiskParentPath = (() => {
+            const clean = pane2DiskPath.replace(/\//g, "\\").replace(/\\+$/, "");
+            const idx = clean.lastIndexOf("\\");
+            if (idx === -1) return clean;
+            if (idx === 2 && clean.endsWith(":")) return clean + "\\";
+            if (idx <= 2) return clean.substring(0, idx + 1);
+            return clean.substring(0, idx);
+          })();
+          const parentDropProps = getFolderDropProps("p2-parent-disk-up", "", true, p2DiskParentPath);
+          return (
+            <div
+              onDoubleClick={handlePane2DiskUp}
+              onClick={handlePane2DiskUp}
+              {...parentDropProps.handlers}
+              style={{ height: "34px" }}
+              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0 ${
+                parentDropProps.isDropTarget ? "bg-[#173042] text-[#60CDFF] border-l-2 border-[#60CDFF]" : "hover:bg-[#252525]"
+              }`}
+              title="Navigate up to parent folder (or drop items to move up)"
+            >
+              <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
+                <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
+                  ..
+                </span>
+                <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+              </div>
+              <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
             </div>
-            <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
-          </div>
-        )}
+          );
+        })()}
 
         <VirtualScrollList
           items={filtered}
@@ -2223,15 +2282,12 @@ export function ArchiveTreeInspector({
           className="flex-1 h-full"
           renderRow={(item) => {
             const isAlreadyStaged = Boolean(stagedItems && stagedItems.includes(item.path));
+            const dropProps = item.is_dir ? getFolderDropProps(`p2-disk-${item.path}`, "", true, item.path) : null;
             return (
               <div
                 key={`p2-disk-${item.path}`}
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData("application/bayzip-disk-path", item.path);
-                  e.dataTransfer.setData("text/plain", item.path);
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
+                {...getDiskDragProps(item.path, item.is_dir)}
+                {...(dropProps ? dropProps.handlers : {})}
                 onContextMenu={(e) =>
                   handleOpenContextMenu(e, {
                     name: item.name,
@@ -2254,9 +2310,11 @@ export function ArchiveTreeInspector({
                 }}
                 style={{ height: "34px" }}
                 className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
-                  isAlreadyStaged
-                    ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
-                    : "hover:bg-[#242424]"
+                  dropProps?.isDropTarget
+                    ? "bg-[#173042] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF] shadow-[0_0_12px_rgba(96,205,255,0.25)]"
+                    : isAlreadyStaged
+                      ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
+                      : "hover:bg-[#242424]"
                 }`}
               >
                 <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
@@ -2443,26 +2501,35 @@ export function ArchiveTreeInspector({
           </div>
         )}
         {/* WinRAR / 7-Zip Standard Parent Directory Row */}
-        {currentFolderPath !== "" && (
-          <div
-            onDoubleClick={navigateUp}
-            onClick={navigateUp}
-            style={{ height: "34px" }}
-            className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0"
-            title="Navigate to parent folder (Double-click or click)"
-          >
-            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-              <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
-              <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
-                ..
-              </span>
-              <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+        {currentFolderPath !== "" && (() => {
+          const parentFolderPath = currentFolderPath.includes("/")
+            ? currentFolderPath.substring(0, currentFolderPath.lastIndexOf("/"))
+            : "";
+          const parentDropProps = getFolderDropProps("parent-archive-up", parentFolderPath);
+          return (
+            <div
+              onDoubleClick={navigateUp}
+              onClick={navigateUp}
+              {...parentDropProps.handlers}
+              style={{ height: "34px" }}
+              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0 ${
+                parentDropProps.isDropTarget ? "bg-[#173042] text-[#60CDFF] border-l-2 border-[#60CDFF]" : "hover:bg-[#252525]"
+              }`}
+              title="Navigate to parent folder (or drop items to move up)"
+            >
+              <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
+                <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
+                  ..
+                </span>
+                <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+              </div>
+              <div className="flex items-center space-x-2 shrink-0">
+                <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
+              </div>
             </div>
-            <div className="flex items-center space-x-2 shrink-0">
-              <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         <VirtualScrollList
           key={`folder-virtual-${currentFolderPath}-${searchQuery}`}
@@ -2475,9 +2542,12 @@ export function ArchiveTreeInspector({
               const isFolderSkipped = isDirExcluded(sub.path);
               const isRenaming = renamingItem && renamingItem.originalName === sub.path;
               const matchedStagedPath = mode === "compress" ? findStagedItemPath(sub.path) : null;
+              const dropProps = getFolderDropProps(`folder-${sub.path}`, sub.path);
               return (
                 <div
                   key={`folder-${sub.path}`}
+                  {...getArchiveDragProps(sub.path, true, sub.name)}
+                  {...dropProps.handlers}
                   onDoubleClick={() => navigateToFolder(sub.path)}
                   onContextMenu={(e) => handleOpenContextMenu(e, { name: sub.path, isDir: true })}
                   onClick={() => {
@@ -2489,9 +2559,11 @@ export function ArchiveTreeInspector({
                   }}
                   style={{ height: "34px" }}
                   className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border ${
-                    isFolderSkipped
-                      ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
-                      : "hover:bg-[#252525]"
+                    dropProps.isDropTarget
+                      ? "bg-[#173042] text-[#60CDFF] font-semibold border-l-2 border-[#60CDFF] shadow-[0_0_12px_rgba(96,205,255,0.25)]"
+                      : isFolderSkipped
+                        ? "opacity-50 hover:opacity-85 bg-rose-950/15 hover:bg-rose-950/25 border-l-2 border-rose-500/80"
+                        : "hover:bg-[#252525]"
                   }`}
                 >
                   <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
@@ -2604,6 +2676,7 @@ export function ArchiveTreeInspector({
             return (
               <div
                 key={`file-${file.name}`}
+                {...getArchiveDragProps(file.name, false, fileNameOnly)}
                 onContextMenu={(e) => handleOpenContextMenu(e, { name: file.name, isDir: false, size: file.size })}
                 onClick={() => {
                   if (isExclusionMode && onToggleExclude) {
