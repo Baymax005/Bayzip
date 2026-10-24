@@ -29,6 +29,35 @@ All notable changes, version milestones, security fixes, and performance enhance
   - Cleaned up noisy `[ ✕ Exclude Files ]` and `[ ✕ Exit Workspace ]` buttons across both full-screen Workspace and compact inspector views.
   - Neutralized comments for clean open-source readiness with zero external brand references.
 
+### 🗑️ Native Disk Item Management & Recycle Bin Deletion
+- **Windows Recycle Bin Integration**:
+  - Fixed right-click context menu "Delete" action on physical disk files and directories to properly invoke Tauri's `delete_to_recycle_bin`.
+  - Added native `Delete` / `Del` keyboard shortcut support when focused on disk items.
+  - Real-time UI synchronization: deleted items are immediately purged from active table panes (Pane 1 & Pane 2) and unstaged from the compression queue if present.
+
+### 🎯 Disk Row Selection & Keyboard Shortcuts in Dual Panes
+- **Interactive Disk Row Selection**:
+  - Added click selection with active accent highlight (`bg-[#25394A] border-l-2 border-[#60CDFF]`) across all local disk folders and files in primary and secondary panes.
+  - Keyboard interaction parity: enabled `Space` (instant safe preview), `Ctrl+C` (copy absolute path), `F2` (rename), and `Del` (recycle bin deletion).
+
+### 👁️ Safe Direct File Preview for Disk & Staged Files
+- **Accurate Path Routing**:
+  - Fixed path resolution and routing in `handlePreviewEntry` within `App.tsx`: disk and staged files bypass the archive extraction engine and route directly to `preview_staged_file`.
+  - Cleans up synthetic prefixes, preventing "archive not found" errors and displaying accurate file paths.
+
+### 🔄 Context Menu Staging & Exclusion Synchronization
+- **Accurate Context Target Detection**:
+  - Context menus now accurately differentiate between physical disk items, root staged items, and archive entries.
+  - Root staged items display `Remove from Archive` directly in the context menu for immediate unstaging.
+  - Left tree staging unstage action now recursively cleans up both the target folder and all nested descendant files.
+  - Viewport margin clamping (`Math.max(8, ...)`) prevents context menus from clipping off the top or bottom of the screen.
+
+### 🗂️ Unified Workspace Architecture & Deprecation of Flat View
+- **Streamlined Dual-Pane Focus**:
+  - Streamlined workspace exploration around the hierarchical tree and dual-pane split view, cleanly removing the redundant and buggy Flat View toggle.
+  - Preserves typed address bar navigation inputs without unexpected parent folder truncations.
+  - Smooth navigation fallback when encountering inaccessible or locked system directories.
+
 ---
 
 ## [v2.2.3] - 2026-10-24
