@@ -32,6 +32,7 @@ export interface WorkspaceExtractSidebarProps {
   isCancellingExtract: boolean;
   onExtract: () => void;
   onCancelExtract: () => void;
+  onSelectArchive?: () => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -66,6 +67,7 @@ export const WorkspaceExtractSidebar: React.FC<WorkspaceExtractSidebarProps> = (
   isCancellingExtract,
   onExtract,
   onCancelExtract,
+  onSelectArchive,
 }) => {
   return (
     <div className="space-y-3.5 text-xs select-none">
@@ -122,7 +124,27 @@ export const WorkspaceExtractSidebar: React.FC<WorkspaceExtractSidebarProps> = (
 
         {/* Archive Info Header Card */}
         <div className="bg-[#1F1F1F] rounded-lg border border-[#333333] p-3 space-y-1.5">
-          <label className="text-[11px] font-medium text-[#C8C8C8]">Loaded Archive</label>
+          <div className="flex items-center justify-between">
+            <label className="text-[11px] font-medium text-[#C8C8C8]">Loaded Archive</label>
+            {onSelectArchive && (
+              <button
+                type="button"
+                onClick={onSelectArchive}
+                className="px-2 py-0.5 text-[10px] font-semibold rounded bg-[#25394A] hover:bg-[#2F4960] border border-[#60CDFF]/50 text-[#60CDFF] hover:text-[#90DCFF] transition-all cursor-pointer shadow-sm flex items-center space-x-1"
+                title="Browse for archive file (.bay, .zip, .7z, .tar, .rar)"
+              >
+                <span>📂</span>
+                <span>
+                  {archiveFilename &&
+                  archiveFilename !== "No archive loaded" &&
+                  archiveFilename !== "No Archive Loaded" &&
+                  archiveFilename !== "No Archive Selected"
+                    ? "Change"
+                    : "Browse..."}
+                </span>
+              </button>
+            )}
+          </div>
           <div className="flex items-center space-x-2">
             <div className="w-8 h-8 rounded-md bg-[#252525] border border-[#3E3E3E] flex items-center justify-center shrink-0">
               <BayzipLogo className="w-4 h-4" />

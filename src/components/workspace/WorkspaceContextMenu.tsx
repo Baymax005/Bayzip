@@ -27,6 +27,7 @@ export interface WorkspaceContextMenuProps {
   onDeleteDisk?: (name: string, isDir: boolean) => void;
   onNewFolder?: () => void;
   onPaste?: () => void;
+  onLoadArchive?: (path: string) => void;
   clipboardItem?: { relName: string; isDir: boolean; diskPath?: string } | null;
 }
 
@@ -47,6 +48,7 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
   onDeleteDisk,
   onNewFolder,
   onPaste,
+  onLoadArchive,
   clipboardItem,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -103,6 +105,24 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
                   <span>Preview File</span>
                 </div>
                 <span className="text-[10px] text-[#777777] font-mono">Space</span>
+              </button>
+            )}
+
+            {/* Action 1b: Open Archive in Inspector if it's an archive file on disk */}
+            {onLoadArchive && target.diskPath && !target.isDir && /\.(bay|bayg|zip|7z|tar|gz|bz2|xz|zst|rar)$/i.test(target.name) && (
+              <button
+                type="button"
+                onClick={() => {
+                  onLoadArchive(target.diskPath!);
+                  onClose();
+                }}
+                className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#1C3345] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
+              >
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm">📦</span>
+                  <span className="font-semibold text-[#60CDFF]">Open Archive</span>
+                </div>
+                <span className="text-[10px] text-[#60CDFF] font-mono">Inspect</span>
               </button>
             )}
 

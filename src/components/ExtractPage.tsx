@@ -138,6 +138,7 @@ export function ExtractPage({
       isCancellingExtract={isCancellingExtract}
       onExtract={handleExtract}
       onCancelExtract={handleCancelExtract}
+      onSelectArchive={handleSelectArchive}
     />
   );
 
@@ -245,6 +246,8 @@ export function ExtractPage({
             inspectorTitle="Archive Explorer & Folders"
             mode="extract"
             onSwitchMode={onSwitchMode}
+            onSelectArchive={handleSelectArchive}
+            onLoadArchiveFromFile={selectArchive}
           />
         </div>
       ) : (
@@ -591,14 +594,14 @@ export function ExtractPage({
               filename: "No Archive Loaded",
               size: 0,
               format: "ZIP",
-              is_archive: true,
+              is_archive: false,
               is_encrypted: false,
               file_count: 0,
               total_uncompressed_size: 0,
               entries: [],
             }
           }
-          selectedArchive={selectedArchive || "archive"}
+          selectedArchive={selectedArchive || ""}
           extractPassword={extractPassword}
           isLoading={isInspectingArchive}
           onUnlockPreview={() => {
@@ -627,6 +630,8 @@ export function ExtractPage({
           }
           mode="extract"
           onSwitchMode={onSwitchMode}
+          onSelectArchive={handleSelectArchive}
+          onLoadArchiveFromFile={selectArchive}
         />
       )}
     </div>

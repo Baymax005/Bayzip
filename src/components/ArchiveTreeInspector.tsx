@@ -33,6 +33,8 @@ export interface ArchiveTreeInspectorProps {
   itemsInfo?: Record<string, { size: number; is_dir: boolean }>;
   onUnstageItem?: (path: string) => void;
   onClearStagedItems?: () => void;
+  onSelectArchive?: () => void;
+  onLoadArchiveFromFile?: (path: string) => void;
 }
 
 export function normalizeArchiveEntryPath(p: string): string {
@@ -162,6 +164,8 @@ export function ArchiveTreeInspector({
   itemsInfo,
   onUnstageItem,
   onClearStagedItems,
+  onSelectArchive,
+  onLoadArchiveFromFile,
 }: ArchiveTreeInspectorProps) {
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [internalExpandedModal, setInternalExpandedModal] = useState<boolean>(false);
@@ -207,11 +211,26 @@ export function ArchiveTreeInspector({
   // System drives & Filesystem browsing states
   const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [activeDrive, setActiveDrive] = useState<string>("C:");
-  const [browserSource, setBrowserSource] = useState<"archive" | "filesystem">(
-    archiveInfo.is_archive === false && (!archiveInfo.entries || archiveInfo.entries.length === 0)
-      ? "filesystem"
-      : "archive"
+
+  const hasArchiveLoaded = Boolean(
+    archiveInfo &&
+    archiveInfo.path &&
+    archiveInfo.path !== "" &&
+    archiveInfo.path !== "archive" &&
+    archiveInfo.entries &&
+    archiveInfo.entries.length > 0
   );
+
+  const [browserSource, setBrowserSource] = useState<"archive" | "filesystem">(
+    mode === "compress" || !hasArchiveLoaded ? "filesystem" : "archive"
+  );
+
+  useEffect(() => {
+    if (hasArchiveLoaded) {
+      setBrowserSource("archive");
+    }
+  }, [hasArchiveLoaded]);
+
   const [diskCurrentPath, setDiskCurrentPath] = useState<string>("C:\\");
   const [diskEntries, setDiskEntries] = useState<DirectoryItem[]>([]);
   const [isLoadingDisk, setIsLoadingDisk] = useState<boolean>(false);
@@ -1150,6 +1169,13 @@ export function ArchiveTreeInspector({
                   if (item.is_dir) {
                     navigateToDiskDirectory(item.path);
                   } else {
+                    const isArchive = /\.(bay|bayg|zip|7z|tar|gz|bz2|xz|zst|rar)$/i.test(item.name);
+                    if (isArchive && onLoadArchiveFromFile) {
+                      onLoadArchiveFromFile(item.path);
+                      if (onSwitchMode && mode !== "extract") onSwitchMode("extract");
+                      setBrowserSource("archive");
+                      return;
+                    }
                     invoke("preview_staged_file", { path: item.path })
                       .then(() => {
                         if (onPreviewEntry) onPreviewEntry(item.name);
@@ -1209,6 +1235,24 @@ export function ArchiveTreeInspector({
                       <span>{isAlreadyStaged ? "✓ Staged" : "+ Stage"}</span>
                     </button>
                   )}
+
+                  {/* Open archive button if it's an archive file on disk */}
+                  {!item.is_dir && /\.(bay|bayg|zip|7z|tar|gz|bz2|xz|zst|rar)$/i.test(item.name) && onLoadArchiveFromFile && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onLoadArchiveFromFile(item.path);
+                        if (onSwitchMode && mode !== "extract") onSwitchMode("extract");
+                        setBrowserSource("archive");
+                      }}
+                      className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#25394A] hover:bg-[#324C63] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/50 transition-all cursor-pointer flex items-center space-x-1 shadow-sm"
+                      title={`Open "${item.name}" in Bayzip Extract Inspector`}
+                    >
+                      <span>📦</span>
+                      <span>Open</span>
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -1225,9 +1269,38 @@ export function ArchiveTreeInspector({
         isDrawer ? "border-b border-[#2E2E2E]" : ""
       }`}
     >
-      <span className="text-[10px] font-bold tracking-wider uppercase text-[#888888]">
-        {browserSource === "archive" ? "Folder Hierarchy" : `Drive ${activeDrive}`}
-      </span>
+      {hasArchiveLoaded ? (
+        <div className="flex items-center space-x-1 bg-[#141414] p-0.5 rounded border border-[#333333]">
+          <button
+            type="button"
+            onClick={() => setBrowserSource("archive")}
+            className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
+              browserSource === "archive"
+                ? "bg-[#25394A] text-[#60CDFF] shadow-sm"
+                : "text-[#888888] hover:text-white"
+            }`}
+            title="View Archive Folder Tree"
+          >
+            📦 Archive
+          </button>
+          <button
+            type="button"
+            onClick={() => setBrowserSource("filesystem")}
+            className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer ${
+              browserSource === "filesystem"
+                ? "bg-[#25394A] text-[#60CDFF] shadow-sm"
+                : "text-[#888888] hover:text-white"
+            }`}
+            title="Browse System Drives & Quick Access"
+          >
+            📁 Drives
+          </button>
+        </div>
+      ) : (
+        <span className="text-[10px] font-bold tracking-wider uppercase text-[#888888]">
+          Quick Access & Drives
+        </span>
+      )}
       <div className="flex items-center space-x-1.5">
         {/* + New Folder Button on Left Header */}
         {browserSource === "archive" && (
@@ -1405,6 +1478,18 @@ export function ArchiveTreeInspector({
               <span className="text-[10px] uppercase font-mono font-semibold px-2 py-0.5 rounded bg-[#173042] text-[#60CDFF] border border-[#60CDFF]/40">
                 {mode === "compress" ? "Compress Mode" : "Extract Mode"}
               </span>
+            )}
+            {mode === "extract" && onSelectArchive && (
+              <button
+                type="button"
+                data-tauri-drag-region="false"
+                onClick={onSelectArchive}
+                className="px-2.5 py-0.5 text-[10px] font-semibold rounded bg-[#173042] hover:bg-[#1E415A] border border-[#60CDFF]/50 text-[#60CDFF] hover:text-[#90DCFF] shadow-sm transition-all cursor-pointer flex items-center space-x-1"
+                title="Select Archive File from PC (.bay, .zip, .7z, .tar, .rar)"
+              >
+                <span>📂</span>
+                <span>Open Archive</span>
+              </button>
             )}
           </div>
         ) : (
@@ -1755,6 +1840,42 @@ export function ArchiveTreeInspector({
     const hasItems = currentFolderNode.subfolders.length > 0 || filteredCurrentFiles.length > 0;
 
     if (!hasItems && !isCreatingFolder) {
+      if (!hasArchiveLoaded && mode === "extract") {
+        return (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
+            <div className="w-16 h-16 rounded-2xl bg-[#1C1C1C] border border-[#333333] flex items-center justify-center text-3xl shadow-xl">
+              📦
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-white tracking-wide">No Archive Loaded</h3>
+              <p className="text-xs text-[#888888] max-w-sm">
+                Select an archive file to inspect and extract contents, or browse your local drives on the left.
+              </p>
+            </div>
+            <div className="flex items-center space-x-3 pt-2">
+              {onSelectArchive && (
+                <button
+                  type="button"
+                  onClick={onSelectArchive}
+                  className="px-4 py-2 bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/40 hover:border-[#60CDFF]/80 rounded-lg text-xs font-semibold shadow-[0_0_15px_rgba(96,205,255,0.2)] transition-all cursor-pointer flex items-center space-x-2"
+                >
+                  <span>📂</span>
+                  <span>Select Archive to Extract...</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setBrowserSource("filesystem")}
+                className="px-3.5 py-2 bg-[#252525] hover:bg-[#303030] text-white border border-[#404040] rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center space-x-1.5"
+              >
+                <span>🖥️</span>
+                <span>Browse Local Drives</span>
+              </button>
+            </div>
+          </div>
+        );
+      }
+
       return (
         <div
           onContextMenu={(e) => handleOpenContextMenu(e, null)}
@@ -2394,8 +2515,37 @@ export function ArchiveTreeInspector({
                               style={{ width: `${leftPanelWidth}px` }}
                               className="bg-[#1A1A1A] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0 border-r border-[#2A2A2A]"
                             >
-                              {mode === "compress" || browserSource === "filesystem" ? (
+                              {mode === "compress" || browserSource === "filesystem" || !hasArchiveLoaded ? (
                                 <>
+                                  {hasArchiveLoaded && (
+                                    <div className="mb-2 px-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => setBrowserSource("archive")}
+                                        className="w-full py-1 px-2.5 rounded bg-[#173042] hover:bg-[#1E415A] border border-[#60CDFF]/50 text-[#60CDFF] hover:text-[#90DCFF] text-[10px] font-semibold flex items-center justify-between transition-all cursor-pointer shadow-sm"
+                                        title="Switch back to loaded archive tree"
+                                      >
+                                        <div className="flex items-center space-x-1.5 truncate">
+                                          <span>📦</span>
+                                          <span className="truncate">{archiveInfo.filename || "Return to Archive"}</span>
+                                        </div>
+                                        <span className="text-[10px] opacity-75 shrink-0">⮐ Back</span>
+                                      </button>
+                                    </div>
+                                  )}
+                                  {!hasArchiveLoaded && onSelectArchive && (
+                                    <div className="mb-2 px-1">
+                                      <button
+                                        type="button"
+                                        onClick={onSelectArchive}
+                                        className="w-full py-1.5 px-3 rounded-lg bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/50 shadow-[0_0_12px_rgba(96,205,255,0.15)] text-xs font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                                        title="Select an archive file from your computer"
+                                      >
+                                        <span>📂</span>
+                                        <span>Open Archive File...</span>
+                                      </button>
+                                    </div>
+                                  )}
                                   {renderQuickAccess()}
                                   {renderDriveSelector()}
                                 </>
@@ -2423,8 +2573,37 @@ export function ArchiveTreeInspector({
                         {/* Left Pane: Slide-over Drawer (Compact < 800px) */}
                         {windowWidth < 800 && showMobileTree && (
                           <div className="absolute inset-y-0 left-0 z-30 w-72 max-w-[85%] bg-[#1A1A1A] border-r border-[#3E3E3E] shadow-2xl flex flex-col p-2 animate-in slide-in-from-left duration-150">
-                            {mode === "compress" || browserSource === "filesystem" ? (
+                            {mode === "compress" || browserSource === "filesystem" || !hasArchiveLoaded ? (
                               <>
+                                {hasArchiveLoaded && (
+                                  <div className="mb-2 px-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setBrowserSource("archive")}
+                                      className="w-full py-1 px-2.5 rounded bg-[#173042] hover:bg-[#1E415A] border border-[#60CDFF]/50 text-[#60CDFF] hover:text-[#90DCFF] text-[10px] font-semibold flex items-center justify-between transition-all cursor-pointer shadow-sm"
+                                      title="Switch back to loaded archive tree"
+                                    >
+                                      <div className="flex items-center space-x-1.5 truncate">
+                                        <span>📦</span>
+                                        <span className="truncate">{archiveInfo.filename || "Return to Archive"}</span>
+                                      </div>
+                                      <span className="text-[10px] opacity-75 shrink-0">⮐ Back</span>
+                                    </button>
+                                  </div>
+                                )}
+                                {!hasArchiveLoaded && onSelectArchive && (
+                                  <div className="mb-2 px-1">
+                                    <button
+                                      type="button"
+                                      onClick={onSelectArchive}
+                                      className="w-full py-1.5 px-3 rounded-lg bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/50 shadow-[0_0_12px_rgba(96,205,255,0.15)] text-xs font-semibold flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                                      title="Select an archive file from your computer"
+                                    >
+                                      <span>📂</span>
+                                      <span>Open Archive File...</span>
+                                    </button>
+                                  </div>
+                                )}
                                 {renderQuickAccess()}
                                 {renderDriveSelector()}
                               </>
@@ -2623,6 +2802,13 @@ export function ArchiveTreeInspector({
         onDeleteDisk={(name, isDir) => handleDeleteItem(name, isDir)}
         onNewFolder={handleStartNewFolder}
         onPaste={handlePasteItem}
+        onLoadArchive={(diskPath) => {
+          if (onLoadArchiveFromFile) {
+            onLoadArchiveFromFile(diskPath);
+            if (onSwitchMode && mode !== "extract") onSwitchMode("extract");
+            setBrowserSource("archive");
+          }
+        }}
         clipboardItem={clipboardItem}
       />
     </>
