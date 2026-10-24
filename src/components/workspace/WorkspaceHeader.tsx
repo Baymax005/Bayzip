@@ -16,8 +16,7 @@ export interface WorkspaceHeaderProps {
   onCloseHeaderHUD: () => void;
   viewMode: "tree" | "flat";
   onViewModeChange: (mode: "tree" | "flat") => void;
-  onStartNewFolder?: () => void;
-  // VS Code-style Layout Controls
+  // Workspace Panel Layout Controls
   isLeftPanelOpen?: boolean;
   onToggleLeftPanel?: () => void;
   isSplitView?: boolean;
@@ -208,7 +207,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           </button>
         )}
 
-        {/* VS Code Panel Layout Controls (When in Workspace) */}
+        {/* Workspace Panel Layout Controls (When in Workspace) */}
         {isFullModal ? (
           <>
             <div className="flex items-center space-x-1 bg-[#141414] p-0.5 rounded-lg border border-[#383838]">
