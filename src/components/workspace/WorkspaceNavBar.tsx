@@ -4,7 +4,7 @@ import { DriveInfo } from "../../types";
 export interface WorkspaceNavBarProps {
   currentPath: string;
   onNavigate: (path: string) => void;
-  onRefresh: () => void;
+  onRefresh?: () => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
   drives?: DriveInfo[];
@@ -15,6 +15,8 @@ export interface WorkspaceNavBarProps {
   onForward: () => void;
   onUp: () => void;
   isLoading?: boolean;
+  sourceType?: "filesystem" | "archive";
+  rootLabel?: string;
 }
 
 export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
@@ -29,6 +31,8 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
   onForward,
   onUp,
   isLoading = false,
+  sourceType = "filesystem",
+  rootLabel,
 }) => {
   const [isEditingPath, setIsEditingPath] = useState(false);
   const [inputPath, setInputPath] = useState(currentPath);
@@ -108,23 +112,27 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
           <span className="text-[10px] font-semibold pr-0.5">Up</span>
         </button>
 
-        <button
-          type="button"
-          onClick={onRefresh}
-          className={`p-1 rounded text-[#A8A8A8] hover:text-white hover:bg-[#323232] transition-colors cursor-pointer ${
-            isLoading ? "animate-spin text-[#60CDFF]" : ""
-          }`}
-          title="Refresh Directory (F5)"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-        </button>
+        {onRefresh && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            className={`p-1 rounded text-[#A8A8A8] hover:text-white hover:bg-[#323232] transition-colors cursor-pointer ${
+              isLoading ? "animate-spin text-[#60CDFF]" : ""
+            }`}
+            title="Refresh Directory (F5)"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Address Bar: Breadcrumb Display or Custom Editable Path Input */}
       <div className="flex-1 min-w-0 flex items-center bg-[#222222] hover:bg-[#262626] focus-within:bg-[#1E1E1E] rounded-md border border-[#333333] focus-within:border-[#60CDFF] px-2 py-1 transition-all">
-        <span className="text-sm mr-1.5 text-[#60CDFF] shrink-0">📁</span>
+        <span className="text-sm mr-1.5 text-[#60CDFF] shrink-0">
+          {sourceType === "archive" ? "📦" : "📁"}
+        </span>
 
         {isEditingPath ? (
           <div className="flex-1 flex items-center min-w-0">
@@ -135,7 +143,11 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
               onChange={(e) => setInputPath(e.target.value)}
               onKeyDown={handleKeyDown}
               onBlur={handleCommitPath}
-              placeholder="Enter drive or folder path (e.g. C:\Users\...)"
+              placeholder={
+                sourceType === "archive"
+                  ? "Enter archive folder path (e.g. assets/textures)..."
+                  : "Enter drive or folder path (e.g. C:\\Users\\...)"
+              }
               className="w-full bg-transparent text-white font-mono text-xs outline-none border-none p-0"
             />
             <button
@@ -152,7 +164,49 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
             className="flex-1 min-w-0 flex items-center space-x-1 font-mono text-xs text-[#A8A8A8] overflow-x-auto custom-scrollbar cursor-text py-0.5"
             title="Click to enter or edit custom path"
           >
-            {segments.length === 0 ? (
+            {sourceType === "archive" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onNavigate("");
+                  }}
+                  className={`hover:text-white px-1.5 py-0.5 rounded transition-colors cursor-pointer flex items-center space-x-1 shrink-0 ${
+                    segments.length === 0
+                      ? "text-white font-bold bg-[#2E2E2E]"
+                      : "hover:bg-[#303030] text-[#CCCCCC]"
+                  }`}
+                  title="Archive Root"
+                >
+                  <span>{rootLabel || "Archive Root"}</span>
+                </button>
+                {segments.map((seg, idx) => {
+                  const subPath = segments.slice(0, idx + 1).join("/");
+                  const isLast = idx === segments.length - 1;
+                  return (
+                    <React.Fragment key={`${seg}-${idx}`}>
+                      <span className="text-[#555555] shrink-0">/</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onNavigate(subPath);
+                        }}
+                        className={`hover:text-white px-1 py-0.5 rounded transition-colors cursor-pointer truncate shrink-0 ${
+                          isLast
+                            ? "text-white font-bold bg-[#2E2E2E]"
+                            : "hover:bg-[#303030] text-[#CCCCCC]"
+                        }`}
+                        title={subPath}
+                      >
+                        {seg}
+                      </button>
+                    </React.Fragment>
+                  );
+                })}
+              </>
+            ) : segments.length === 0 ? (
               <span className="text-white font-semibold">Root</span>
             ) : (
               segments.map((seg, idx) => {
@@ -212,7 +266,7 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
           type="text"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Search folder contents..."
+          placeholder={sourceType === "archive" ? "Search archive contents..." : "Search folder contents..."}
           className="w-full bg-transparent text-white font-mono text-xs outline-none border-none p-0"
         />
         {searchQuery && (

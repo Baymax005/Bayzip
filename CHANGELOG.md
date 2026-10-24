@@ -2,6 +2,34 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.2.3] - 2026-10-24
+
+### 🏝️ Dynamic Island 1-Click Cancellation HUD
+- **Instant Cancel Button on Dynamic Island Pill**:
+  - Added a direct 1-click `✕` cancel button directly on the Dynamic Island HUD pill with dedicated hover effects and tooltip.
+  - Enforced `data-tauri-drag-region="false"` and `e.stopPropagation()` / `e.preventDefault()` to stop Windows DWM from intercepting clicks as window drag operations.
+  - Added optimistic UI state (`Cancelling...`) with responsive visual feedback during compression and extraction aborts.
+
+### 🧩 Decomposed Modular Workspace Architecture
+- **Monolithic Refactor & Component Isolation**:
+  - Refactored and decomposed the 2500+ line `ArchiveTreeInspector.tsx` into modular components under `src/components/workspace/`:
+    - **`WorkspaceContextMenu.tsx`**: Viewport-clamped floating context menu (`z-[130]`) with instant dismiss, supporting disk rows (`+ Stage`, `👁️ Preview`, `✏️ Rename`, `📋 Copy`, `🗑️ Delete to Disk`), archive entries (`✕ Exclude / ↺ Include`, `Preview`, `Rename`, `Copy`), and table background (`📁+ New Folder`, `📥 Paste`).
+    - **`WorkspaceExtractQueue.tsx`**: Dedicated resizable bottom drawer (80px–450px) for Extraction Workspace displaying archive payload summary, item counters, and an interactive Excluded Files list with 1-click `↺ Include` buttons.
+    - **`WorkspaceExtractSidebar.tsx`**: Standalone Windows 11 Fluent extraction options sidebar (Where to Extract, Extraction Options, Live Summary & Primary Action), mirroring `WorkspaceAdvanceSidebar` 1:1.
+    - **`WorkspaceNavBar.tsx`**: Unified navigation bar supporting both filesystem and archive folder browsing with clickable breadcrumbs, editable address bar, history stack, and live search.
+
+### 📁 Ergonomic HCI In-Table Navigation (`.. [Parent Directory]`)
+- **Direct Row 0 Navigation**:
+  - Implemented the desktop archiver standard (WinRAR, 7-Zip, Total Commander): added an ergonomic `📁 .. [Parent Directory]` row at index 0 of the table when browsing subdirectories.
+  - Double-clicking or clicking `..` navigates up one directory directly under the cursor without requiring travel to top-level toolbar buttons.
+
+### ⚡ Native Quick Access & Drive Navigation (Left Panel)
+- **Eliminated Duplicate Folder Hierarchy**:
+  - Fixed duplicate folder list between left and middle panes by replacing the left subfolder list with native **Quick Access Shortcuts** (Desktop 🖥️, Downloads 📥, Documents 📄, Pictures 🖼️, Music 🎵, Videos 🎬) powered by the new `get_quick_access` Tauri command.
+  - System drives with live capacity bars remain accessible, while the left pane in Extract mode is dedicated to the hierarchical archive directory tree.
+
+---
+
 ## [v2.2.2] - 2026-10-23
 
 ### 🏝️ Dynamic Island Top-Header Progress HUD

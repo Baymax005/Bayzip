@@ -1,10 +1,12 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArchiveInfo, ArchiveEntryItem, DriveInfo, DirectoryItem, OperationProgressInfo } from "../types";
+import { ArchiveInfo, ArchiveEntryItem, DriveInfo, DirectoryItem, QuickAccessItem, OperationProgressInfo } from "../types";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 import { WorkspaceNavBar } from "./workspace/WorkspaceNavBar";
 import { WorkspaceStagedQueue } from "./workspace/WorkspaceStagedQueue";
+import { WorkspaceExtractQueue } from "./workspace/WorkspaceExtractQueue";
+import { WorkspaceContextMenu, ContextMenuTarget } from "./workspace/WorkspaceContextMenu";
 import { WorkspaceHeaderProgressHUD } from "./workspace/WorkspaceHeaderProgressHUD";
 
 export interface ArchiveTreeInspectorProps {
@@ -182,6 +184,10 @@ export function ArchiveTreeInspector({
   const [isStagedQueueOpen, setIsStagedQueueOpen] = useState<boolean>(true);
   const [stagedQueueHeight, setStagedQueueHeight] = useState<number>(180);
 
+  // Extract files drawer state
+  const [isExtractQueueOpen, setIsExtractQueueOpen] = useState<boolean>(true);
+  const [extractQueueHeight, setExtractQueueHeight] = useState<number>(180);
+
   // Top Titlebar Progress HUD dropdown state
   const [isHeaderHUDOpen, setIsHeaderHUDOpen] = useState<boolean>(false);
 
@@ -214,6 +220,31 @@ export function ArchiveTreeInspector({
   // Disk Navigation History
   const [diskHistory, setDiskHistory] = useState<string[]>(["C:\\"]);
   const [diskHistoryIndex, setDiskHistoryIndex] = useState<number>(0);
+
+  // Archive Folder Navigation History
+  const [archiveHistory, setArchiveHistory] = useState<string[]>([""]);
+  const [archiveHistoryIndex, setArchiveHistoryIndex] = useState<number>(0);
+
+  const handleArchiveBack = () => {
+    if (archiveHistoryIndex > 0) {
+      const target = archiveHistory[archiveHistoryIndex - 1];
+      setArchiveHistoryIndex((prev) => prev - 1);
+      setCurrentFolderPath(target);
+      setExpandedFolders((prev) => new Set(prev).add(target));
+    }
+  };
+
+  const handleArchiveForward = () => {
+    if (archiveHistoryIndex < archiveHistory.length - 1) {
+      const target = archiveHistory[archiveHistoryIndex + 1];
+      setArchiveHistoryIndex((prev) => prev + 1);
+      setCurrentFolderPath(target);
+      setExpandedFolders((prev) => new Set(prev).add(target));
+    }
+  };
+
+  // Quick Access Shortcuts
+  const [quickAccess, setQuickAccess] = useState<QuickAccessItem[]>([]);
 
   // Helper to resolve an archive/tree entry to its absolute path in stagedItems (if staged for compression)
   const findStagedItemPath = (entryPath: string): string | null => {
@@ -312,6 +343,12 @@ export function ArchiveTreeInspector({
         }
       })
       .catch(() => {});
+
+    invoke<QuickAccessItem[]>("get_quick_access")
+      .then((res) => {
+        if (res && res.length > 0) setQuickAccess(res);
+      })
+      .catch(() => {});
   }, [selectedArchive]);
 
   // Local mutable entries state for real-time additions/renames/deletions
@@ -341,11 +378,7 @@ export function ArchiveTreeInspector({
     isOpen: boolean;
     x: number;
     y: number;
-    target?: {
-      name: string;
-      isDir: boolean;
-      size?: number;
-    } | null;
+    target: ContextMenuTarget | null;
   }>({
     isOpen: false,
     x: 0,
@@ -528,7 +561,7 @@ export function ArchiveTreeInspector({
 
   const handleOpenContextMenu = (
     e: React.MouseEvent,
-    target?: { name: string; isDir: boolean; size?: number } | null
+    target?: ContextMenuTarget | null
   ) => {
     e.preventDefault();
     e.stopPropagation();
@@ -868,9 +901,17 @@ export function ArchiveTreeInspector({
   };
 
   // Navigate into a folder
-  const navigateToFolder = (folderPath: string) => {
+  const navigateToFolder = (folderPath: string, pushHistory = true) => {
     setCurrentFolderPath(folderPath);
     setExpandedFolders((prev) => new Set(prev).add(folderPath));
+    if (pushHistory) {
+      setArchiveHistory((prev) => {
+        const next = prev.slice(0, archiveHistoryIndex + 1);
+        next.push(folderPath);
+        return next;
+      });
+      setArchiveHistoryIndex((prev) => prev + 1);
+    }
   };
 
   // Navigate up one level
@@ -878,7 +919,7 @@ export function ArchiveTreeInspector({
     if (!currentFolderPath) return;
     const parts = currentFolderPath.split("/");
     parts.pop();
-    setCurrentFolderPath(parts.join("/"));
+    navigateToFolder(parts.join("/"));
   };
 
   // Filtered entries for Flat View
@@ -895,6 +936,58 @@ export function ArchiveTreeInspector({
     const q = searchQuery.toLowerCase();
     return currentFolderNode.files.filter((f) => f.name.toLowerCase().includes(q));
   }, [currentFolderNode.files, searchQuery]);
+
+  // Quick Access Shortcuts (Desktop, Downloads, Documents, Pictures, etc.)
+  const renderQuickAccess = () => {
+    if (!quickAccess || quickAccess.length === 0) return null;
+    const getIcon = (iconName: string) => {
+      switch (iconName) {
+        case "desktop": return "🖥️";
+        case "downloads": return "📥";
+        case "documents": return "📄";
+        case "pictures": return "🖼️";
+        case "music": return "🎵";
+        case "videos": return "🎬";
+        default: return "📁";
+      }
+    };
+    return (
+      <div className="mb-2 p-2 bg-[#1F1F1F] rounded-lg border border-[#2E2E2E] shrink-0 space-y-1.5">
+        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-[#888888] px-0.5">
+          <div className="flex items-center space-x-1.5">
+            <span className="text-sm">⚡</span>
+            <span>Quick Access</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-0.5">
+          {quickAccess.map((item) => {
+            const isCur =
+              diskCurrentPath.toLowerCase() === item.path.toLowerCase() ||
+              diskCurrentPath.toLowerCase() === `${item.path}\\`.toLowerCase();
+            return (
+              <button
+                key={item.path}
+                type="button"
+                onClick={() => {
+                  navigateToDiskDirectory(item.path);
+                  setBrowserSource("filesystem");
+                }}
+                className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-md text-xs transition-colors cursor-pointer text-left ${
+                  isCur
+                    ? "bg-[#25394A] text-[#60CDFF] font-semibold border border-[#60CDFF]/30 shadow-sm"
+                    : "hover:bg-[#252525] text-[#D0D0D0] hover:text-white border border-transparent"
+                }`}
+                title={item.path}
+              >
+                <span className="text-sm shrink-0">{getIcon(item.icon)}</span>
+                <span className="truncate flex-1 text-[11px] font-sans font-medium">{item.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   // Sleek System Drive Selector Panel
   const renderDriveSelector = () => {
@@ -963,77 +1056,6 @@ export function ArchiveTreeInspector({
     );
   };
 
-  // Switch between Staged/Archive Tree and Real Drive Filesystem
-  const renderSourceToggle = () => (
-    <div className="grid grid-cols-2 gap-1 bg-[#181818] p-1 rounded-md border border-[#2E2E2E] mb-2 shrink-0">
-      <button
-        type="button"
-        onClick={() => setBrowserSource("archive")}
-        className={`py-1 text-[11px] rounded font-medium transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-          browserSource === "archive"
-            ? "bg-[#25394A] text-[#60CDFF] font-semibold shadow-sm border border-[#60CDFF]/40"
-            : "text-[#888888] hover:text-white"
-        }`}
-      >
-        <span>📁</span>
-        <span className="truncate">{archiveInfo.is_archive === false ? "Staged Tree" : "Archive Tree"}</span>
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setBrowserSource("filesystem");
-          if (diskEntries.length === 0) {
-            loadDiskDirectory(diskCurrentPath || (activeDrive ? `${activeDrive}\\` : "C:\\"));
-          }
-        }}
-        className={`py-1 text-[11px] rounded font-medium transition-all flex items-center justify-center space-x-1 cursor-pointer ${
-          browserSource === "filesystem"
-            ? "bg-[#25394A] text-[#60CDFF] font-semibold shadow-sm border border-[#60CDFF]/40"
-            : "text-[#888888] hover:text-white"
-        }`}
-      >
-        <span>🖴</span>
-        <span className="truncate">Drive Files</span>
-      </button>
-    </div>
-  );
-
-  // Left panel subfolder list for Disk Browsing
-  const diskSubfolders = useMemo(() => {
-    return diskEntries.filter((item) => item.is_dir);
-  }, [diskEntries]);
-
-  const renderDiskNavigator = () => {
-    return (
-      <div className="space-y-0.5 text-xs select-none">
-        <div className="px-2 py-1 text-[10px] font-bold text-[#888888] uppercase tracking-wider flex items-center justify-between">
-          <span className="truncate">Folders in {activeDrive}</span>
-          <span className="font-mono text-[#60CDFF] shrink-0">{diskSubfolders.length}</span>
-        </div>
-        {diskSubfolders.length === 0 ? (
-          <div className="px-2 py-4 text-[11px] text-[#666666] italic text-center">
-            {isLoadingDisk ? "Scanning drive..." : "No subfolders found"}
-          </div>
-        ) : (
-          diskSubfolders.map((folder) => (
-            <div
-              key={folder.path}
-              onClick={() => loadDiskDirectory(folder.path)}
-              className="flex items-center space-x-1.5 px-2 py-1.5 rounded-md hover:bg-[#252525] text-[#CCCCCC] hover:text-white transition-colors cursor-pointer group"
-            >
-              <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              <span className="font-mono text-[11px] truncate flex-1" title={folder.path}>
-                {folder.name}
-              </span>
-            </div>
-          ))
-        )}
-      </div>
-    );
-  };
-
 
   // Center Table for Disk Filesystem Browsing
   const renderDiskFolderContents = () => {
@@ -1066,92 +1088,133 @@ export function ArchiveTreeInspector({
       ? diskEntries.filter((item) => item.name.toLowerCase().includes(searchQuery.toLowerCase()))
       : diskEntries;
 
-    if (filtered.length === 0) {
+    const isNotRootDrive = !/^[a-zA-Z]:\\?$/.test(diskCurrentPath.trim());
+
+    if (filtered.length === 0 && !isNotRootDrive) {
       return (
-        <div className="flex-1 flex items-center justify-center text-xs text-[#777777] p-8">
+        <div
+          onContextMenu={(e) => handleOpenContextMenu(e, null)}
+          className="flex-1 flex items-center justify-center text-xs text-[#777777] p-8"
+        >
           This folder is empty
         </div>
       );
     }
 
     return (
-      <VirtualScrollList
-        items={filtered}
-        rowHeight={34}
-        className="flex-1 h-full"
-        renderRow={(item) => {
-          const isAlreadyStaged = Boolean(stagedItems && stagedItems.includes(item.path));
-          return (
-            <div
-              key={item.path}
-              onDoubleClick={() => {
-                if (item.is_dir) {
-                  navigateToDiskDirectory(item.path);
-                } else {
-                  invoke("preview_staged_file", { path: item.path })
-                    .then(() => {
-                      if (onPreviewEntry) onPreviewEntry(item.name);
-                    })
-                    .catch(() => {});
-                }
-              }}
-              style={{ height: "34px" }}
-              className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
-                isAlreadyStaged
-                  ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
-                  : "hover:bg-[#242424]"
-              }`}
-            >
-              <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                {item.is_dir ? (
-                  <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                ) : (
-                  <FileFormatIcon fileName={item.name} size="sm" />
-                )}
-                <span className={`font-mono text-[11px] truncate ${isAlreadyStaged ? "text-emerald-300 font-medium" : "text-white"}`} title={item.path}>
-                  {item.name}
-                </span>
-                {isAlreadyStaged && (
-                  <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-950/90 border border-emerald-600/80 text-emerald-300 font-bold shrink-0">
-                    Staged
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center space-x-3 shrink-0">
-                <span className="font-mono text-[11px] text-[#888888] w-20 text-right">
-                  {item.is_dir ? "Folder" : formatBytes(item.size)}
-                </span>
-
-                {/* Stage / Unstage toggle button in Compress mode */}
-                {onStageItem && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (isAlreadyStaged && onUnstageItem) {
-                        onUnstageItem(item.path);
-                      } else {
-                        onStageItem(item.path);
-                      }
-                    }}
-                    className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer flex items-center space-x-1 ${
-                      isAlreadyStaged
-                        ? "bg-emerald-950/80 hover:bg-rose-950/80 text-emerald-300 hover:text-rose-300 border border-emerald-500/70 hover:border-rose-500/70 shadow-sm"
-                        : "bg-[#173042] hover:bg-[#1C3E56] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/30 hover:border-[#60CDFF]/70 opacity-70 group-hover:opacity-100"
-                    }`}
-                    title={isAlreadyStaged ? `Remove "${item.name}" from archive staging` : `Stage "${item.name}" for archive`}
-                  >
-                    <span>{isAlreadyStaged ? "✓ Staged" : "+ Stage"}</span>
-                  </button>
-                )}
-              </div>
+      <div
+        className="flex-1 flex flex-col overflow-hidden relative h-full"
+        onContextMenu={(e) => handleOpenContextMenu(e, null)}
+      >
+        {/* WinRAR / 7-Zip Standard Parent Directory Row */}
+        {isNotRootDrive && (
+          <div
+            onDoubleClick={handleDiskUp}
+            onClick={handleDiskUp}
+            style={{ height: "34px" }}
+            className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0"
+            title="Navigate to parent folder (Double-click or click)"
+          >
+            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+              <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
+              <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
+                ..
+              </span>
+              <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
             </div>
-          );
-        }}
-      />
+            <div className="flex items-center space-x-2 shrink-0">
+              <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
+            </div>
+          </div>
+        )}
+
+        <VirtualScrollList
+          items={filtered}
+          rowHeight={34}
+          className="flex-1 h-full"
+          renderRow={(item) => {
+            const isAlreadyStaged = Boolean(stagedItems && stagedItems.includes(item.path));
+            return (
+              <div
+                key={item.path}
+                onContextMenu={(e) =>
+                  handleOpenContextMenu(e, {
+                    name: item.name,
+                    isDir: item.is_dir,
+                    diskPath: item.path,
+                    isStaged: isAlreadyStaged,
+                    size: item.size,
+                  })
+                }
+                onDoubleClick={() => {
+                  if (item.is_dir) {
+                    navigateToDiskDirectory(item.path);
+                  } else {
+                    invoke("preview_staged_file", { path: item.path })
+                      .then(() => {
+                        if (onPreviewEntry) onPreviewEntry(item.name);
+                      })
+                      .catch(() => {});
+                  }
+                }}
+                style={{ height: "34px" }}
+                className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] ${
+                  isAlreadyStaged
+                    ? "bg-[#14261d]/70 hover:bg-[#1a3327] border-l-2 border-emerald-500/90 text-white"
+                    : "hover:bg-[#242424]"
+                }`}
+              >
+                <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+                  {item.is_dir ? (
+                    <svg className="w-4 h-4 text-[#F9D648] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                  ) : (
+                    <FileFormatIcon fileName={item.name} size="sm" />
+                  )}
+                  <span className={`font-mono text-[11px] truncate ${isAlreadyStaged ? "text-emerald-300 font-medium" : "text-white"}`} title={item.path}>
+                    {item.name}
+                  </span>
+                  {isAlreadyStaged && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-950/90 border border-emerald-600/80 text-emerald-300 font-bold shrink-0">
+                      Staged
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center space-x-3 shrink-0">
+                  <span className="font-mono text-[11px] text-[#888888] w-20 text-right">
+                    {item.is_dir ? "Folder" : formatBytes(item.size)}
+                  </span>
+
+                  {/* Stage / Unstage toggle button in Compress mode */}
+                  {onStageItem && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isAlreadyStaged && onUnstageItem) {
+                          onUnstageItem(item.path);
+                        } else {
+                          onStageItem(item.path);
+                        }
+                      }}
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all cursor-pointer flex items-center space-x-1 ${
+                        isAlreadyStaged
+                          ? "bg-emerald-950/80 hover:bg-rose-950/80 text-emerald-300 hover:text-rose-300 border border-emerald-500/70 hover:border-rose-500/70 shadow-sm"
+                          : "bg-[#173042] hover:bg-[#1C3E56] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/30 hover:border-[#60CDFF]/70 opacity-70 group-hover:opacity-100"
+                      }`}
+                      title={isAlreadyStaged ? `Remove "${item.name}" from archive staging` : `Stage "${item.name}" for archive`}
+                    >
+                      <span>{isAlreadyStaged ? "✓ Staged" : "+ Stage"}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          }}
+        />
+      </div>
     );
   };
 
@@ -1774,6 +1837,27 @@ export function ArchiveTreeInspector({
             </div>
           </div>
         )}
+        {/* WinRAR / 7-Zip Standard Parent Directory Row */}
+        {currentFolderPath !== "" && (
+          <div
+            onDoubleClick={navigateUp}
+            onClick={navigateUp}
+            style={{ height: "34px" }}
+            className="flex items-center justify-between px-3 text-xs hover:bg-[#252525] transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0"
+            title="Navigate to parent folder (Double-click or click)"
+          >
+            <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
+              <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
+              <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
+                ..
+              </span>
+              <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
+            </div>
+            <div className="flex items-center space-x-2 shrink-0">
+              <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
+            </div>
+          </div>
+        )}
 
         <VirtualScrollList
           key={`folder-virtual-${currentFolderPath}-${searchQuery}`}
@@ -2272,27 +2356,36 @@ export function ArchiveTreeInspector({
                 <div className="flex-1 flex flex-col overflow-hidden min-w-0">
                   {viewMode === "tree" ? (
                     <>
-                      {browserSource === "filesystem" ? (
-                        <WorkspaceNavBar
-                          currentPath={diskCurrentPath}
-                          onNavigate={(newPath) => navigateToDiskDirectory(newPath)}
-                          onRefresh={handleDiskRefresh}
-                          searchQuery={searchQuery}
-                          onSearchChange={setSearchQuery}
-                          canGoBack={diskHistoryIndex > 0}
-                          canGoForward={diskHistoryIndex < diskHistory.length - 1}
-                          onBack={handleDiskBack}
-                          onForward={handleDiskForward}
-                          onUp={handleDiskUp}
-                          isLoading={isLoadingDisk}
-                        />
-                      ) : (
-                        <>
-                          {renderBreadcrumbs()}
-                          {renderSearchInput()}
-                        </>
-                      )}
-                      {/* Dual-Pane Layout: Left Folder Tree, Right Folder Files */}
+                      <WorkspaceNavBar
+                        currentPath={browserSource === "filesystem" ? diskCurrentPath : currentFolderPath}
+                        sourceType={browserSource}
+                        rootLabel={browserSource === "filesystem" ? activeDrive : (archiveInfo.filename || "Archive Root")}
+                        onNavigate={(newPath) => {
+                          if (browserSource === "filesystem") {
+                            navigateToDiskDirectory(newPath);
+                          } else {
+                            navigateToFolder(newPath);
+                          }
+                        }}
+                        onRefresh={() => {
+                          if (browserSource === "filesystem") {
+                            handleDiskRefresh();
+                          }
+                        }}
+                        searchQuery={searchQuery}
+                        onSearchChange={setSearchQuery}
+                        canGoBack={browserSource === "filesystem" ? diskHistoryIndex > 0 : archiveHistoryIndex > 0}
+                        canGoForward={
+                          browserSource === "filesystem"
+                            ? diskHistoryIndex < diskHistory.length - 1
+                            : archiveHistoryIndex < archiveHistory.length - 1
+                        }
+                        onBack={browserSource === "filesystem" ? handleDiskBack : handleArchiveBack}
+                        onForward={browserSource === "filesystem" ? handleDiskForward : handleArchiveForward}
+                        onUp={browserSource === "filesystem" ? handleDiskUp : navigateUp}
+                        isLoading={browserSource === "filesystem" ? isLoadingDisk : isLoading}
+                      />
+                      {/* Dual-Pane Layout: Left Folder Tree / Quick Access, Right Folder Files */}
                       <div className="flex-1 flex overflow-hidden relative">
                         {/* Left Pane: Hierarchical Tree & Drives */}
                         {windowWidth >= 800 && (
@@ -2301,23 +2394,26 @@ export function ArchiveTreeInspector({
                               style={{ width: `${leftPanelWidth}px` }}
                               className="bg-[#1A1A1A] overflow-y-auto custom-scrollbar p-2 flex flex-col shrink-0 border-r border-[#2A2A2A]"
                             >
-                              {renderDriveSelector()}
-                              {renderSourceToggle()}
-                              {renderFolderHierarchyHeader(false)}
-                              <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5">
-                                {browserSource === "archive" ? (
-                                  renderTreeFolderNode(treeRoot)
-                                ) : (
-                                  renderDiskNavigator()
-                                )}
-                              </div>
+                              {mode === "compress" || browserSource === "filesystem" ? (
+                                <>
+                                  {renderQuickAccess()}
+                                  {renderDriveSelector()}
+                                </>
+                              ) : (
+                                <>
+                                  {renderFolderHierarchyHeader(false)}
+                                  <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5">
+                                    {renderTreeFolderNode(treeRoot)}
+                                  </div>
+                                </>
+                              )}
                             </div>
 
                             {/* Draggable Resizer: Left Folder Tree */}
                             <div
                               onMouseDown={handleMouseDownLeft}
                               className="w-1.5 hover:w-1.5 bg-[#262626] hover:bg-[#60CDFF] active:bg-[#60CDFF] cursor-col-resize transition-colors shrink-0 z-20 flex items-center justify-center group select-none"
-                              title="Drag to resize Folder Hierarchy panel"
+                              title="Drag to resize panel"
                             >
                               <div className="w-0.5 h-8 bg-[#444444] group-hover:bg-white rounded-full transition-colors"></div>
                             </div>
@@ -2327,12 +2423,19 @@ export function ArchiveTreeInspector({
                         {/* Left Pane: Slide-over Drawer (Compact < 800px) */}
                         {windowWidth < 800 && showMobileTree && (
                           <div className="absolute inset-y-0 left-0 z-30 w-72 max-w-[85%] bg-[#1A1A1A] border-r border-[#3E3E3E] shadow-2xl flex flex-col p-2 animate-in slide-in-from-left duration-150">
-                            {renderDriveSelector()}
-                            {renderSourceToggle()}
-                            {renderFolderHierarchyHeader(true)}
-                            <div className="flex-1 overflow-y-auto custom-scrollbar">
-                              {browserSource === "archive" ? renderTreeFolderNode(treeRoot) : renderDiskNavigator()}
-                            </div>
+                            {mode === "compress" || browserSource === "filesystem" ? (
+                              <>
+                                {renderQuickAccess()}
+                                {renderDriveSelector()}
+                              </>
+                            ) : (
+                              <>
+                                {renderFolderHierarchyHeader(true)}
+                                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                                  {renderTreeFolderNode(treeRoot)}
+                                </div>
+                              </>
+                            )}
                           </div>
                         )}
 
@@ -2374,6 +2477,23 @@ export function ArchiveTreeInspector({
                                   })
                                   .catch(() => {});
                               }}
+                            />
+                          )}
+
+                          {/* Extract Items Queue Drawer (Visible in Extract mode) */}
+                          {mode === "extract" && (
+                            <WorkspaceExtractQueue
+                              totalFilesCount={archiveInfo.file_count || 0}
+                              totalUncompressedSize={archiveInfo.total_uncompressed_size || 0}
+                              excludedPaths={excludedPaths || new Set()}
+                              onToggleExclude={(path, isDir) => onToggleExclude && onToggleExclude(path, isDir)}
+                              onIncludeAll={onIncludeAll}
+                              isOpen={isExtractQueueOpen}
+                              onToggleOpen={() => setIsExtractQueueOpen((prev) => !prev)}
+                              height={extractQueueHeight}
+                              onHeightChange={(h) => setExtractQueueHeight(h)}
+                              archiveFormat={archiveInfo.format}
+                              isEncrypted={archiveInfo.is_encrypted}
                             />
                           )}
                         </div>
@@ -2470,188 +2590,41 @@ export function ArchiveTreeInspector({
       )}
 
       {/* Sleek Windows 11 Fluent Floating Context Menu */}
-      {contextMenu.isOpen && (
-        <>
-          <div
-            className="fixed inset-0 z-[120]"
-            onClick={() => setContextMenu((prev) => ({ ...prev, isOpen: false }))}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setContextMenu((prev) => ({ ...prev, isOpen: false }));
-            }}
-          />
-          <div
-            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
-            className="fixed z-[121] min-w-[210px] bg-[#1E1E1E]/95 backdrop-blur-md border border-[#3E3E3E] rounded-lg shadow-2xl p-1 text-xs select-none animate-in fade-in duration-100 font-sans"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {contextMenu.target && (
-              <>
-                {!contextMenu.target.isDir && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (contextMenu.target) onPreviewEntry(contextMenu.target.name);
-                      setContextMenu((prev) => ({ ...prev, isOpen: false }));
-                    }}
-                    className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <span className="text-sm">👁️</span>
-                      <span>Preview</span>
-                    </div>
-                    <span className="text-[10px] text-[#777777] font-mono">Space</span>
-                  </button>
-                )}
-
-                {/* Primary Action in Compress Mode: Remove from selection / unstage */}
-                {contextMenu.target && mode === "compress" && findStagedItemPath(contextMenu.target.name) && onUnstageItem && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const matched = findStagedItemPath(contextMenu.target!.name);
-                      if (matched) onUnstageItem(matched);
-                      setContextMenu((prev) => ({ ...prev, isOpen: false }));
-                    }}
-                    className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/70 hover:text-white text-rose-300 transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <span className="text-sm font-bold text-rose-400">✕</span>
-                      <span className="font-semibold">Remove from Archive</span>
-                    </div>
-                    <span className="text-[10px] text-rose-400/80 font-mono">Unstage</span>
-                  </button>
-                )}
-
-                {/* Primary Action in Extract Mode or Inner File: Exclude / Skip */}
-                {onToggleExclude && (!findStagedItemPath(contextMenu.target.name) || mode === "extract") && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (contextMenu.target) {
-                        onToggleExclude(contextMenu.target.name, contextMenu.target.isDir);
-                      }
-                      setContextMenu((prev) => ({ ...prev, isOpen: false }));
-                    }}
-                    className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/70 hover:text-white text-rose-300 transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <span className="text-sm font-bold text-rose-400">
-                        {contextMenu.target.isDir
-                          ? isDirExcluded(contextMenu.target.name) ? "↺" : "✕"
-                          : isFileExcluded(contextMenu.target.name) ? "↺" : "✕"}
-                      </span>
-                      <span className="font-semibold">
-                        {contextMenu.target.isDir
-                          ? isDirExcluded(contextMenu.target.name) ? "Include Folder" : "Exclude Folder"
-                          : isFileExcluded(contextMenu.target.name) ? "Include in Extraction" : "Exclude from Extraction"}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-rose-400/80 font-mono">
-                      {contextMenu.target.isDir
-                        ? isDirExcluded(contextMenu.target.name) ? "Include" : "Skip"
-                        : isFileExcluded(contextMenu.target.name) ? "Include" : "Skip"}
-                    </span>
-                  </button>
-                )}
-
-                <div className="my-1 border-t border-[#2E2E2E]" />
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (contextMenu.target) handleStartRename(contextMenu.target.name, contextMenu.target.isDir);
-                    setContextMenu((prev) => ({ ...prev, isOpen: false }));
-                  }}
-                  className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
-                >
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm">✏️</span>
-                    <span>Rename</span>
-                  </div>
-                  <span className="text-[10px] text-[#777777] font-mono">F2</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (contextMenu.target) {
-                      setClipboardItem({
-                        relName: contextMenu.target.name,
-                        isDir: contextMenu.target.isDir,
-                        diskPath: getDiskPath(contextMenu.target.name),
-                      });
-                    }
-                    setContextMenu((prev) => ({ ...prev, isOpen: false }));
-                  }}
-                  className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
-                >
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm">📋</span>
-                    <span>Copy</span>
-                  </div>
-                  <span className="text-[10px] text-[#777777] font-mono">Ctrl+C</span>
-                </button>
-
-                {/* Only offer physical deletion to Recycle Bin when exploring real disk filesystem */}
-                {browserSource === "filesystem" && (
-                  <>
-                    <div className="my-1 border-t border-[#2E2E2E]" />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (contextMenu.target) handleDeleteItem(contextMenu.target.name, contextMenu.target.isDir);
-                        setContextMenu((prev) => ({ ...prev, isOpen: false }));
-                      }}
-                      className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/60 hover:text-rose-300 text-rose-400 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm">🗑️</span>
-                        <span>Delete from Disk (Recycle Bin)</span>
-                      </div>
-                      <span className="text-[10px] text-rose-400/80 font-mono">Del</span>
-                    </button>
-                  </>
-                )}
-
-                <div className="my-1 border-t border-[#2E2E2E]" />
-              </>
-            )}
-
-            <button
-              type="button"
-              onClick={() => {
-                handleStartNewFolder();
-                setContextMenu((prev) => ({ ...prev, isOpen: false }));
-              }}
-              className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
-            >
-              <div className="flex items-center space-x-2">
-                <span className="text-sm">📁+</span>
-                <span>New Folder</span>
-              </div>
-              <span className="text-[10px] text-[#777777] font-mono">Ctrl+Shift+N</span>
-            </button>
-
-            {clipboardItem && (
-              <button
-                type="button"
-                onClick={() => {
-                  handlePasteItem();
-                  setContextMenu((prev) => ({ ...prev, isOpen: false }));
-                }}
-                className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#25394A] hover:text-[#60CDFF] text-white transition-colors cursor-pointer"
-              >
-                <div className="flex items-center space-x-2 truncate mr-2">
-                  <span className="text-sm">📥</span>
-                  <span className="truncate">Paste "{clipboardItem.relName.split("/").filter(Boolean).pop()}"</span>
-                </div>
-                <span className="text-[10px] text-[#777777] font-mono shrink-0">Ctrl+V</span>
-              </button>
-            )}
-          </div>
-        </>
-      )}
+      <WorkspaceContextMenu
+        isOpen={contextMenu.isOpen}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        target={contextMenu.target}
+        mode={mode || "extract"}
+        browserSource={browserSource}
+        onClose={() => setContextMenu((prev) => ({ ...prev, isOpen: false }))}
+        onPreview={(name) => {
+          if (browserSource === "filesystem" && contextMenu.target?.diskPath) {
+            invoke("preview_staged_file", { path: contextMenu.target.diskPath })
+              .then(() => {
+                if (onPreviewEntry) onPreviewEntry(name);
+              })
+              .catch(() => {});
+          } else {
+            onPreviewEntry(name);
+          }
+        }}
+        onStage={(path) => onStageItem && onStageItem(path)}
+        onUnstage={(path) => onUnstageItem && onUnstageItem(path)}
+        onToggleExclude={(name, isDir) => onToggleExclude && onToggleExclude(name, isDir)}
+        onStartRename={(name, isDir) => handleStartRename(name, isDir)}
+        onCopy={(name, isDir, diskPath) => {
+          setClipboardItem({
+            relName: name,
+            isDir,
+            diskPath: diskPath || getDiskPath(name),
+          });
+        }}
+        onDeleteDisk={(name, isDir) => handleDeleteItem(name, isDir)}
+        onNewFolder={handleStartNewFolder}
+        onPaste={handlePasteItem}
+        clipboardItem={clipboardItem}
+      />
     </>
   );
 }

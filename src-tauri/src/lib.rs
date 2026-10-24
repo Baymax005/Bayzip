@@ -280,6 +280,15 @@ async fn get_system_drives() -> Result<Vec<DriveInfo>, String> {
 }
 
 #[tauri::command]
+async fn get_quick_access() -> Result<Vec<crate::types::QuickAccessItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(inspector::get_quick_access_sync())
+    })
+    .await
+    .map_err(|e| format!("Quick access query failed: {}", e))?
+}
+
+#[tauri::command]
 async fn browse_directory(path: String) -> Result<Vec<DirectoryItem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         inspector::browse_directory_sync(&path)
@@ -355,6 +364,7 @@ pub fn run() {
             get_file_icon,
             get_file_icons,
             get_system_drives,
+            get_quick_access,
             browse_directory,
             delete_to_recycle_bin,
             create_directory,

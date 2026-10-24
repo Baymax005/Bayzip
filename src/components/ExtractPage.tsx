@@ -3,6 +3,7 @@ import { ArchiveInfo, ExtractProgress } from "../types";
 import { ArchiveTreeInspector } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
+import { WorkspaceExtractSidebar } from "./workspace/WorkspaceExtractSidebar";
 
 export interface ExtractPageProps {
   selectedArchive: string | null;
@@ -110,130 +111,34 @@ export function ExtractPage({
     totalBytes: archiveInfo?.total_uncompressed_size ?? 0,
   });
 
-  const renderExtractSidebar = () => (
-    <div className="space-y-4 text-xs">
-      {/* Destination Directory */}
-      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-1.5">
-        <label className="text-[11px] font-medium text-[#C8C8C8]">Destination Folder</label>
-        <div className="flex space-x-1.5">
-          <input
-            type="text"
-            disabled={isExtracting}
-            value={extractDest}
-            onChange={(e) => setExtractDest(e.target.value)}
-            placeholder="Destination directory..."
-            className="flex-1 bg-[#252525] text-xs text-white px-2 py-1.5 rounded border border-[#3E3E3E] focus:border-[#60CDFF] outline-none font-mono disabled:opacity-50"
-          />
-          <button
-            type="button"
-            disabled={isExtracting}
-            onClick={handleSelectDestFolder}
-            className="px-2.5 py-1.5 bg-[#252525] hover:bg-[#333333] text-white rounded border border-[#3E3E3E] text-xs transition-colors cursor-pointer shrink-0"
-          >
-            Browse
-          </button>
-        </div>
-      </div>
 
-      {/* Password (if encrypted) */}
-      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-1.5">
-        <div className="flex justify-between items-center">
-          <label className="text-[11px] font-medium text-[#C8C8C8]">Archive Password</label>
-          {archiveInfo?.is_encrypted && (
-            <span className="text-[10px] text-amber-400 font-semibold">Required</span>
-          )}
-        </div>
-        <div className="flex items-center bg-[#252525] rounded border border-[#3E3E3E] focus-within:border-[#60CDFF] px-2 py-1">
-          <input
-            type={showExtractPassword ? "text" : "password"}
-            disabled={isExtracting}
-            value={extractPassword}
-            onChange={(e) => setExtractPassword(e.target.value)}
-            placeholder={archiveInfo?.is_encrypted ? "Enter archive password..." : "Unencrypted"}
-            className="bg-transparent border-none outline-none text-white text-xs font-mono flex-1 disabled:opacity-50"
-          />
-          <button
-            type="button"
-            onClick={() => setShowExtractPassword(!showExtractPassword)}
-            className="text-[#888] hover:text-white p-0.5 text-xs cursor-pointer"
-          >
-            {showExtractPassword ? "Hide" : "Show"}
-          </button>
-        </div>
-      </div>
 
-      {/* Extraction Options Toggles */}
-      <div className="bg-[#1C1C1C] rounded-lg border border-[#333333] p-3 space-y-2.5">
-        <label className="flex items-center justify-between cursor-pointer">
-          <span className="text-[11px] text-[#A8A8A8]">Extract into subfolder</span>
-          <input
-            type="checkbox"
-            disabled={isExtracting}
-            checked={extractToSubfolder}
-            onChange={(e) => setExtractToSubfolder(e.target.checked)}
-            className="accent-[#60CDFF] w-4 h-4 cursor-pointer"
-          />
-        </label>
-        <label className="flex items-center justify-between cursor-pointer">
-          <span className="text-[11px] text-[#A8A8A8]">Open folder when done</span>
-          <input
-            type="checkbox"
-            disabled={isExtracting}
-            checked={openFolderOnExtract}
-            onChange={(e) => setOpenFolderOnExtract(e.target.checked)}
-            className="accent-[#60CDFF] w-4 h-4 cursor-pointer"
-          />
-        </label>
-      </div>
-
-      {/* Summary */}
-      <div className="bg-[#182633]/60 border border-[#20495f]/70 rounded-lg p-3 space-y-1 text-[#C8C8C8]">
-        <div className="flex justify-between text-[11px]">
-          <span>Files Selected:</span>
-          <span className="font-mono text-white font-semibold">
-            {archiveInfo ? (archiveInfo.file_count || 0) - excludedPaths.size : 0} of {archiveInfo?.file_count || 0}
-          </span>
-        </div>
-        {excludedPaths.size > 0 && (
-          <div className="flex justify-between text-[11px] text-rose-300">
-            <span>Files Skipped:</span>
-            <span className="font-mono font-semibold">{excludedPaths.size} excluded</span>
-          </div>
-        )}
-        <div className="flex justify-between text-[11px]">
-          <span>Archive Size:</span>
-          <span className="font-mono text-[#60CDFF] font-semibold">{formatBytes(archiveInfo?.size || 0)}</span>
-        </div>
-      </div>
-
-      {/* Primary Action Button */}
-      <div className="pt-1">
-        {isExtracting ? (
-          <button
-            type="button"
-            onClick={handleCancelExtract}
-            disabled={isCancellingExtract}
-            className="w-full py-2.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg text-xs transition-colors flex items-center justify-center space-x-2 cursor-pointer shadow-lg"
-          >
-            <span>{isCancellingExtract ? "Cancelling..." : "Cancel Extraction"}</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleExtract}
-            disabled={!selectedArchive}
-            className="w-full py-3 bg-[#60CDFF] hover:bg-[#72D4FF] text-black font-bold rounded-lg text-xs tracking-wide uppercase transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-lg hover:shadow-[0_0_20px_rgba(96,205,255,0.4)] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span>📦</span>
-            <span>
-              {excludedPaths.size > 0
-                ? `Extract (${archiveInfo ? (archiveInfo.file_count || 0) - excludedPaths.size : 0} Files)`
-                : "Extract All Files"}
-            </span>
-          </button>
-        )}
-      </div>
-    </div>
+  const extractSidebar = (
+    <WorkspaceExtractSidebar
+      extractDest={extractDest}
+      onExtractDestChange={setExtractDest}
+      onSelectDestination={handleSelectDestFolder}
+      extractToSubfolder={extractToSubfolder}
+      onToggleExtractToSubfolder={setExtractToSubfolder}
+      archiveStemName={getArchiveStemName(selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "" : "")}
+      openFolderOnExtract={openFolderOnExtract}
+      onToggleOpenFolderOnExtract={setOpenFolderOnExtract}
+      isEncrypted={Boolean(archiveInfo?.is_encrypted)}
+      extractPassword={extractPassword}
+      onExtractPasswordChange={setExtractPassword}
+      showPassword={showExtractPassword}
+      onToggleShowPassword={() => setShowExtractPassword(!showExtractPassword)}
+      archiveFilename={selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "No Archive Selected"}
+      archiveFormat={archiveInfo?.format || "ZIP"}
+      totalFilesCount={archiveInfo?.file_count || 0}
+      includedFilesCount={includedFilesCount}
+      excludedFilesCount={excludedPaths.size}
+      totalUncompressedSize={archiveInfo?.total_uncompressed_size || 0}
+      isExtracting={isExtracting}
+      isCancellingExtract={isCancellingExtract}
+      onExtract={handleExtract}
+      onCancelExtract={handleCancelExtract}
+    />
   );
 
   return (
@@ -335,7 +240,7 @@ export function ExtractPage({
             onIncludeAll={handleIncludeAll}
             isExpandedModal={false}
             onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
-            sidebar={renderExtractSidebar()}
+            sidebar={extractSidebar}
             sidebarTitle="Extraction Options"
             inspectorTitle="Archive Explorer & Folders"
             mode="extract"
@@ -705,7 +610,7 @@ export function ExtractPage({
           onIncludeAll={handleIncludeAll}
           isExpandedModal={true}
           onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
-          sidebar={renderExtractSidebar()}
+          sidebar={extractSidebar}
           sidebarTitle="Extraction Options"
           inspectorTitle="Archive Explorer & Drives"
           operationProgress={

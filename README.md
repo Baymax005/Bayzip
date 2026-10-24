@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.2.2)
+# 📦 Bayzip (v2.2.3)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -6,6 +6,24 @@
 ---
 
 ## ⚡ Key Features
+
+### 🧩 Modular Workspace Architecture, Dynamic Island Cancel & Quick Access (v2.2.3)
+- **Dynamic Island 1-Click Operation Cancellation**:
+  - Direct 1-click `✕` cancel button directly on the Dynamic Island HUD pill with dedicated hover effects and optimistic visual cancelling feedback (`Cancelling...`).
+  - Strict `data-tauri-drag-region="false"` and event propagation suppression ensuring click events are never intercepted by Windows DWM window dragging.
+- **Decomposed Modular Workspace Architecture**:
+  - Refactored monolithic inspector into high-performance isolated components under `src/components/workspace/`:
+    - **`WorkspaceContextMenu.tsx`**: Viewport-clamped floating context menu (`z-[130]`) with instant dismiss, supporting disk rows (`+ Stage`, `Preview`, `Rename`, `Copy`, `Delete to Recycle Bin`), archive entries (`Exclude / Include`), and background clicks (`New Folder`, `Paste`).
+    - **`WorkspaceExtractQueue.tsx`**: Dedicated resizable bottom drawer (80px–450px) for Extraction Workspace displaying archive payload summary, item counters, and an interactive Excluded Files list with 1-click `↺ Include` buttons.
+    - **`WorkspaceExtractSidebar.tsx`**: Standalone Windows 11 Fluent extraction options sidebar (Where to Extract, Extraction Options, Live Summary & Primary Action), mirroring `WorkspaceAdvanceSidebar` 1:1.
+    - **`WorkspaceNavBar.tsx`**: Unified navigation bar supporting both filesystem and archive folder browsing with clickable breadcrumbs, editable address bar, history stack, and live search.
+    - **`WorkspaceHeaderProgressHUD.tsx`**: Isolated titlebar Dynamic Island HUD with real-time ETA, throughput speed (`MB/s`), and drop-down telemetry card.
+- **Ergonomic HCI In-Table Navigation (`.. [Parent Directory]`)**:
+  - Implemented the desktop archiver standard (WinRAR, 7-Zip, Total Commander): added an ergonomic `📁 .. [Parent Directory]` row at index 0 of the table when browsing subdirectories.
+  - Double-clicking or clicking `..` navigates up one directory directly under the cursor without requiring travel to top-level toolbar buttons.
+- **Native Quick Access & Drive Navigation (Left Panel)**:
+  - Eliminated duplicate middle/left folder trees by replacing left pane folders with native **Quick Access Shortcuts** (Desktop 🖥️, Downloads 📥, Documents 📑, Pictures 🖼️, Music 🎵, Videos 🎬) powered by the asynchronous `get_quick_access` Tauri command.
+  - Left pane in Extract mode remains dedicated to the hierarchical archive directory tree with chevron expand/collapse toggles.
 
 ### 🏝️ Dynamic Island Header Progress HUD & Workspace Mode Switcher (v2.2.2)
 - **Top Header Dynamic Island HUD**:

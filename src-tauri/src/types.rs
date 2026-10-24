@@ -72,6 +72,13 @@ pub struct DirectoryItem {
     pub size: u64,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct QuickAccessItem {
+    pub name: String,
+    pub path: String,
+    pub icon: String,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct ArchiveInfo {
     pub path: String,
