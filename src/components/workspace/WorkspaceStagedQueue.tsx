@@ -9,6 +9,7 @@ export interface WorkspaceStagedQueueProps {
   isOpen: boolean;
   onToggleOpen: () => void;
   onPreviewItem?: (path: string) => void;
+  onDropItem?: (path: string) => void;
   height?: number;
   onHeightChange?: (h: number) => void;
 }
@@ -29,10 +30,12 @@ export const WorkspaceStagedQueue: React.FC<WorkspaceStagedQueueProps> = ({
   isOpen,
   onToggleOpen,
   onPreviewItem,
+  onDropItem,
   height = 180,
   onHeightChange,
 }) => {
   const [isResizing, setIsResizing] = useState(false);
+  const [isDraggingOverQueue, setIsDraggingOverQueue] = useState(false);
 
   const totalBytes = stagedItems.reduce((acc, p) => acc + (itemsInfo[p]?.size || 0), 0);
 
@@ -62,9 +65,37 @@ export const WorkspaceStagedQueue: React.FC<WorkspaceStagedQueueProps> = ({
 
   return (
     <div
-      className={`border-t border-[#2A2A2A] bg-[#161616] flex flex-col shrink-0 select-none transition-all ${
-        isResizing ? "cursor-row-resize" : ""
-      }`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        if (!isDraggingOverQueue) setIsDraggingOverQueue(true);
+      }}
+      onDragLeave={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        if (
+          e.clientX <= rect.left ||
+          e.clientX >= rect.right ||
+          e.clientY <= rect.top ||
+          e.clientY >= rect.bottom
+        ) {
+          setIsDraggingOverQueue(false);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsDraggingOverQueue(false);
+        const diskPath =
+          e.dataTransfer.getData("application/bayzip-disk-path") ||
+          e.dataTransfer.getData("text/plain");
+        if (diskPath && onDropItem) {
+          onDropItem(diskPath);
+        }
+      }}
+      className={`border-t transition-all flex flex-col shrink-0 select-none ${
+        isDraggingOverQueue
+          ? "border-emerald-500 bg-[#12231b] shadow-[0_-4px_16px_rgba(16,185,129,0.25)]"
+          : "border-[#2A2A2A] bg-[#161616]"
+      } ${isResizing ? "cursor-row-resize" : ""}`}
       style={{ height: isOpen ? `${height}px` : "34px" }}
     >
       {/* Resizable Divider Header */}

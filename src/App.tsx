@@ -109,6 +109,7 @@ function App() {
   const [stagedEntries, setStagedEntries] = useState<ArchiveEntryItem[]>([]);
   const [isInspectingStaged, setIsInspectingStaged] = useState<boolean>(false);
   const [excludedCompressPaths, setExcludedCompressPaths] = useState<Set<string>>(new Set());
+  const stagedCacheRef = useRef<Map<string, { info: SelectedItemInfo; entries: ArchiveEntryItem[] }>>(new Map());
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
@@ -245,9 +246,11 @@ function App() {
   const [previewData, setPreviewData] = useState<ArchiveEntryPreview | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewTargetDisplayPath, setPreviewTargetDisplayPath] = useState<string>("");
 
   const handlePreviewEntry = async (entryName: string) => {
     if (!selectedArchive) return;
+    setPreviewTargetDisplayPath(`${selectedArchive} -> ${entryName}`);
     setIsPreviewOpen(true);
     setIsPreviewLoading(true);
     setPreviewError(null);
@@ -267,49 +270,111 @@ function App() {
     }
   };
 
-  // Query file and folder size metadata and recursive tree when selection changes
+  // Query file and folder size metadata and recursive tree incrementally when selection changes
   useEffect(() => {
     if (selectedFiles.length === 0) {
+      stagedCacheRef.current.clear();
       setItemsInfo({});
       setStagedEntries([]);
       setExcludedCompressPaths(new Set());
       setIsInspectingStaged(false);
+      if (!isCompressing) {
+        setCustomArchiveName("");
+      }
       return;
     }
     let isCurrent = true;
+
+    // Determine paths added and paths removed
+    const currentCachedPaths = Array.from(stagedCacheRef.current.keys());
+    const pathsRemoved = currentCachedPaths.filter((p) => !selectedFiles.includes(p));
+    const pathsToAdd = selectedFiles.filter((p) => !stagedCacheRef.current.has(p));
+
+    // Prune removed paths from cache immediately
+    if (pathsRemoved.length > 0) {
+      pathsRemoved.forEach((p) => stagedCacheRef.current.delete(p));
+    }
+
+    // Fast path: Only removals occurred (0ms instant rebuild, zero disk I/O, zero loading spinner)
+    if (pathsToAdd.length === 0) {
+      const newItemsInfo: Record<string, { size: number; is_dir: boolean }> = {};
+      const newStagedEntries: ArchiveEntryItem[] = [];
+      let hasFolder = false;
+
+      for (const [p, data] of stagedCacheRef.current.entries()) {
+        newItemsInfo[p] = { size: data.info.size, is_dir: data.info.is_dir };
+        if (data.info.is_dir) hasFolder = true;
+        newStagedEntries.push(...data.entries);
+      }
+
+      setItemsInfo(newItemsInfo);
+      setStagedEntries(newStagedEntries);
+      if (hasFolder) {
+        setCompressViewMode("tree");
+      }
+
+      // Prune orphaned excluded paths that no longer exist in stagedEntries
+      setExcludedCompressPaths((prev) => {
+        if (prev.size === 0) return prev;
+        const entryNorms = new Set(newStagedEntries.map((e) => normalizeArchiveEntryPath(e.name).replace(/\/+$/, "")));
+        const pruned = new Set<string>();
+        for (const exc of prev) {
+          const clean = exc.replace(/\/+$/, "");
+          if (entryNorms.has(clean)) {
+            pruned.add(exc);
+          }
+        }
+        return pruned;
+      });
+
+      setIsInspectingStaged(false);
+      return;
+    }
+
+    // Slow path: Only inspect the NEWLY ADDED paths from disk!
     setIsInspectingStaged(true);
 
-    // 1. Fetch top-level item infos
-    invoke<SelectedItemInfo[]>("get_selected_items_info", { paths: selectedFiles })
-      .then((infos) => {
+    Promise.all([
+      invoke<SelectedItemInfo[]>("get_selected_items_info", { paths: pathsToAdd }),
+      invoke<ArchiveEntryItem[]>("inspect_staged_items", { paths: pathsToAdd }),
+    ])
+      .then(([infos, newEntries]) => {
         if (!isCurrent) return;
-        let hasFolder = false;
-        const map: Record<string, { size: number; is_dir: boolean }> = {};
+
+        // Associate new entries with their respective top-level item path
         infos.forEach((info) => {
-          map[info.path] = { size: info.size, is_dir: info.is_dir };
-          if (info.is_dir) hasFolder = true;
+          const baseName = info.name;
+          const matchingEntries = newEntries.filter((e) => {
+            const clean = e.name.replace(/\\/g, "/").replace(/^\/+/, "");
+            return clean === baseName || clean === `${baseName}/` || clean.startsWith(`${baseName}/`);
+          });
+          stagedCacheRef.current.set(info.path, {
+            info,
+            entries: matchingEntries.length > 0 ? matchingEntries : [{ name: info.name, size: info.size, is_dir: info.is_dir }],
+          });
         });
-        setItemsInfo(map);
+
+        // Reconstruct aggregated states
+        const aggregatedItemsInfo: Record<string, { size: number; is_dir: boolean }> = {};
+        const aggregatedEntries: ArchiveEntryItem[] = [];
+        let hasFolder = false;
+
+        for (const [p, data] of stagedCacheRef.current.entries()) {
+          aggregatedItemsInfo[p] = { size: data.info.size, is_dir: data.info.is_dir };
+          if (data.info.is_dir) hasFolder = true;
+          aggregatedEntries.push(...data.entries);
+        }
+
+        setItemsInfo(aggregatedItemsInfo);
+        setStagedEntries(aggregatedEntries);
         if (hasFolder) {
           setCompressViewMode("tree");
         }
-      })
-      .catch((err) => {
-        if (isCurrent) console.error("Failed to query item sizes:", err);
-      });
 
-    // 2. Deep recursive inspection for Staged Tree View
-    invoke<ArchiveEntryItem[]>("inspect_staged_items", { paths: selectedFiles })
-      .then((entries) => {
-        if (!isCurrent) return;
-        setStagedEntries(entries);
-        if (entries.some((e) => e.is_dir)) {
-          setCompressViewMode("tree");
-        }
         // Prune orphaned excluded paths that no longer exist in stagedEntries
         setExcludedCompressPaths((prev) => {
           if (prev.size === 0) return prev;
-          const entryNorms = new Set(entries.map((e) => normalizeArchiveEntryPath(e.name).replace(/\/+$/, "")));
+          const entryNorms = new Set(aggregatedEntries.map((e) => normalizeArchiveEntryPath(e.name).replace(/\/+$/, "")));
           const pruned = new Set<string>();
           for (const exc of prev) {
             const clean = exc.replace(/\/+$/, "");
@@ -321,7 +386,7 @@ function App() {
         });
       })
       .catch((err) => {
-        if (isCurrent) console.error("Failed to inspect staged items:", err);
+        if (isCurrent) console.error("Failed to inspect added staged items:", err);
       })
       .finally(() => {
         if (isCurrent) setIsInspectingStaged(false);
@@ -404,26 +469,34 @@ function App() {
 
   const handlePreviewStagedEntry = async (entryName: string) => {
     let resolvedPath: string | null = null;
-    const clean = entryName.replace(/\\/g, "/").replace(/^\/+/, "");
-    const firstSegment = clean.split("/")[0].toLowerCase();
+    const isAbsolute = /^[a-zA-Z]:[/\\]/.test(entryName) || entryName.startsWith("/");
+    if (isAbsolute) {
+      resolvedPath = entryName;
+    } else {
+      const clean = entryName.replace(/\\/g, "/").replace(/^\/+/, "");
+      const firstSegment = clean.split("/")[0].toLowerCase();
 
-    for (const filePath of selectedFiles) {
-      const normFilePath = filePath.replace(/\\/g, "/");
-      const name = normFilePath.split("/").pop() || "";
-      if (name.toLowerCase() === firstSegment) {
-        if (clean.includes("/")) {
-          const sub = clean.substring(clean.indexOf("/") + 1);
-          resolvedPath = `${filePath}/${sub}`;
-        } else {
-          resolvedPath = filePath;
+      for (const filePath of selectedFiles) {
+        const normFilePath = filePath.replace(/\\/g, "/");
+        const name = normFilePath.split("/").pop() || "";
+        if (name.toLowerCase() === firstSegment) {
+          if (clean.includes("/")) {
+            const sub = clean.substring(clean.indexOf("/") + 1);
+            resolvedPath = `${filePath}/${sub}`;
+          } else {
+            resolvedPath = filePath;
+          }
+          break;
         }
-        break;
+      }
+
+      if (!resolvedPath && selectedFiles.length === 1) {
+        resolvedPath = `${selectedFiles[0]}/${clean}`;
       }
     }
 
-    if (!resolvedPath && selectedFiles.length === 1) {
-      resolvedPath = `${selectedFiles[0]}/${clean}`;
-    }
+    const displayPath = resolvedPath || entryName;
+    setPreviewTargetDisplayPath(displayPath);
 
     if (!resolvedPath) {
       setPreviewError("Could not locate source file on disk.");
@@ -438,7 +511,7 @@ function App() {
 
     try {
       const res = await invoke<ArchiveEntryPreview>("preview_staged_file", {
-        filePath: resolvedPath,
+        path: resolvedPath,
       });
       setPreviewData(res);
     } catch (err: unknown) {
@@ -602,10 +675,24 @@ function App() {
       })
       .catch(() => { });
 
-    // 3. Listen to native Tauri file drop events
+    // 3. Enable window-level drop acceptance for Windows WebView2 & Explorer
+    const handleWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "copy";
+      }
+    };
+    const handleWindowDrop = (e: DragEvent) => {
+      e.preventDefault();
+      setIsDraggingOver(false);
+    };
+    window.addEventListener("dragover", handleWindowDragOver);
+    window.addEventListener("drop", handleWindowDrop);
+
+    // 4. Listen to native Tauri file drop events
     getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (event.payload.type === "over") {
+        if (event.payload.type === "over" || event.payload.type === "enter") {
           setIsDraggingOver(true);
         } else if (event.payload.type === "leave") {
           setIsDraggingOver(false);
@@ -634,7 +721,7 @@ function App() {
         console.error("Failed to register drag-drop listener:", err);
       });
 
-    // 4. Listen to live compression progress events from Rust
+    // 5. Listen to live compression progress events from Rust
     listen<CompressProgress>("compress_progress", (event) => {
       if (isMounted) setProgress(event.payload);
     })
@@ -646,7 +733,7 @@ function App() {
         console.error("Compress progress listener error:", err);
       });
 
-    // 5. Listen to live extraction progress events from Rust
+    // 6. Listen to live extraction progress events from Rust
     listen<ExtractProgress>("extract_progress", (event) => {
       if (isMounted) setExtractProgress(event.payload);
     })
@@ -660,6 +747,8 @@ function App() {
 
     return () => {
       isMounted = false;
+      window.removeEventListener("dragover", handleWindowDragOver);
+      window.removeEventListener("drop", handleWindowDrop);
       if (unlistenDrop) unlistenDrop();
       if (unlistenCompress) unlistenCompress();
       if (unlistenExtract) unlistenExtract();
@@ -1312,11 +1401,12 @@ function App() {
           setIsPreviewOpen(false);
           setPreviewData(null);
           setPreviewError(null);
+          setPreviewTargetDisplayPath("");
         }}
         preview={previewData}
         isLoading={isPreviewLoading}
         error={previewError}
-        archivePath={selectedArchive || ""}
+        archivePath={previewTargetDisplayPath || selectedArchive || ""}
       />
 
       {/* Drag & Drop Visual Indicator Overlay with Blinking Watermark */}

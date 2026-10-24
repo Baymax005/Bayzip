@@ -167,7 +167,7 @@ pub fn compute_path_size_filtered(
                         if is_path_excluded(clean, excluded) {
                             continue;
                         }
-                        if let Ok(m) = std::fs::symlink_metadata(&ep) {
+                        if let Ok(m) = entry.metadata() {
                             if m.is_file() {
                                 *total += m.len();
                             } else if m.is_dir() && !m.file_type().is_symlink() {

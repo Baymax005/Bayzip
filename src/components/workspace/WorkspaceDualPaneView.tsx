@@ -121,7 +121,21 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
           <div className="shrink-0">{pane1Header}</div>
 
           {/* Pane 1 Scrollable Content */}
-          <div className="flex-1 flex flex-col overflow-hidden min-h-0 relative">
+          <div
+            onDragOver={(e) => {
+              if (!isSplit) {
+                const rect = e.currentTarget.getBoundingClientRect();
+                if (e.clientX >= rect.right - rect.width * 0.35) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "copy";
+                  if (!isHoveringDropZone) setIsHoveringDropZone(true);
+                } else if (isHoveringDropZone) {
+                  setIsHoveringDropZone(false);
+                }
+              }
+            }}
+            className="flex-1 flex flex-col overflow-hidden min-h-0 relative"
+          >
             {pane1Content}
           </div>
 
@@ -134,7 +148,6 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
                 setIsHoveringDropZone(true);
               }}
               onDragLeave={(e) => {
-                // Prevent flicker when hovering children
                 const rect = e.currentTarget.getBoundingClientRect();
                 if (
                   e.clientX <= rect.left ||
@@ -150,9 +163,9 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
                 setIsHoveringDropZone(false);
                 handleDropPayload(e);
               }}
-              className={`absolute top-0 right-0 bottom-0 w-1/3 pointer-events-auto transition-all flex items-center justify-center ${
+              className={`absolute top-0 right-0 bottom-0 w-1/3 transition-all flex items-center justify-center ${
                 isHoveringDropZone
-                  ? "bg-[#173042]/75 border-2 border-dashed border-[#60CDFF] shadow-[inset_0_0_24px_rgba(96,205,255,0.25)] z-30"
+                  ? "bg-[#173042]/85 border-2 border-dashed border-[#60CDFF] shadow-[inset_0_0_24px_rgba(96,205,255,0.25)] z-30 pointer-events-auto"
                   : "bg-transparent pointer-events-none"
               }`}
             >

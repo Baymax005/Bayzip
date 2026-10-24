@@ -228,8 +228,13 @@ export function ArchiveTreeInspector({
   const [localEntries, setLocalEntries] = useState<ArchiveEntryItem[]>(archiveInfo.entries || []);
 
   useEffect(() => {
-    setLocalEntries(archiveInfo.entries || []);
-  }, [archiveInfo.entries]);
+    if (mode === "compress" && (!stagedItems || stagedItems.length === 0)) {
+      setLocalEntries([]);
+      setCurrentFolderPath("");
+    } else {
+      setLocalEntries(archiveInfo.entries || []);
+    }
+  }, [archiveInfo.entries, stagedItems?.length, mode]);
 
   const hasTreeItems = Boolean(
     (localEntries && localEntries.length > 0) ||
@@ -302,6 +307,7 @@ export function ArchiveTreeInspector({
 
   // Quick Access Shortcuts
   const [quickAccess, setQuickAccess] = useState<QuickAccessItem[]>([]);
+  const [editPathTrigger, setEditPathTrigger] = useState<number>(0);
 
   // Instant Dual-Pane Split View State
   const [isSplitView, setIsSplitView] = useState<boolean>(false);
@@ -322,12 +328,12 @@ export function ArchiveTreeInspector({
     if (/^[a-zA-Z]:$/.test(clean)) {
       clean = `${clean}\\`;
     }
+    setPane2DiskPath(clean);
     setIsLoadingPane2Disk(true);
     setPane2DiskError(null);
     try {
-      const items = await invoke<DirectoryItem[]>("read_directory_contents", { path: clean });
+      const items = await invoke<DirectoryItem[]>("browse_directory", { path: clean });
       setPane2DiskEntries(items || []);
-      setPane2DiskPath(clean);
     } catch (err: any) {
       setPane2DiskError(String(err));
     } finally {
@@ -381,12 +387,19 @@ export function ArchiveTreeInspector({
   };
 
   const loadDiskDirectory = async (dirPath: string) => {
+    let clean = dirPath.trim();
+    if (/^[a-zA-Z]:$/.test(clean)) {
+      clean = `${clean}\\`;
+    }
+    setDiskCurrentPath(clean);
+    if (/^[a-zA-Z]:/i.test(clean)) {
+      setActiveDrive(clean.slice(0, 2).toUpperCase());
+    }
     setIsLoadingDisk(true);
     setDiskError(null);
     try {
-      const items = await invoke<DirectoryItem[]>("browse_directory", { path: dirPath });
+      const items = await invoke<DirectoryItem[]>("browse_directory", { path: clean });
       setDiskEntries(items || []);
-      setDiskCurrentPath(dirPath);
     } catch (err: any) {
       setDiskError(String(err));
     } finally {
@@ -399,6 +412,25 @@ export function ArchiveTreeInspector({
     if (/^[a-zA-Z]:$/.test(clean)) {
       clean = `${clean}\\`;
     }
+
+    // Smart Quick Access matching: if user typed "downloads", "desktop", "c:\downloads", etc.
+    const lower = clean.toLowerCase().replace(/[\/\\]+$/, "");
+    if (quickAccess && quickAccess.length > 0) {
+      const match = quickAccess.find((item) => {
+        const itemLower = item.name.toLowerCase();
+        const itemPathLower = item.path.toLowerCase().replace(/[\/\\]+$/, "");
+        return (
+          itemLower === lower ||
+          `c:\\${itemLower}` === lower ||
+          `c:/${itemLower}` === lower ||
+          itemPathLower === lower
+        );
+      });
+      if (match) {
+        clean = match.path;
+      }
+    }
+
     loadDiskDirectory(clean);
     if (pushHistory) {
       setDiskHistory((prev) => {
@@ -432,7 +464,7 @@ export function ArchiveTreeInspector({
     if (lastSlash > 0) {
       const parent = clean.substring(0, lastSlash + 1);
       navigateToDiskDirectory(parent);
-    } else if (clean.length >= 2 && clean[1] === ":") {
+    } else if (clean.length > 2 && clean[1] === ":") {
       navigateToDiskDirectory(`${clean.slice(0, 2)}\\`);
     }
   };
@@ -462,7 +494,7 @@ export function ArchiveTreeInspector({
         if (res && res.length > 0) setQuickAccess(res);
       })
       .catch(() => {});
-  }, [selectedArchive]);
+  }, []);
 
 
   // Inline New Folder State
@@ -731,7 +763,7 @@ export function ArchiveTreeInspector({
     const handleMouseMove = (e: MouseEvent) => {
       if (isDraggingLeft) {
         const delta = e.clientX - dragLeftStartRef.current.startX;
-        const newWidth = Math.max(180, Math.min(650, dragLeftStartRef.current.startWidth + delta));
+        const newWidth = Math.max(220, Math.min(650, dragLeftStartRef.current.startWidth + delta));
         setLeftPanelWidth(newWidth);
       } else if (isDraggingRight) {
         const delta = dragRightStartRef.current.startX - e.clientX;
@@ -753,7 +785,8 @@ export function ArchiveTreeInspector({
     };
   }, [isDraggingLeft, isDraggingRight]);
 
-  const excludedCount = excludedPaths.size;
+  const excludedCount =
+    mode === "compress" && (!stagedItems || stagedItems.length === 0) ? 0 : excludedPaths.size;
 
   const isFileExcluded = (filePath: string): boolean => {
     if (!excludedPaths || excludedPaths.size === 0) return false;
@@ -1178,12 +1211,14 @@ export function ArchiveTreeInspector({
                 }`}
                 title={`Browse Drive ${driveLetter} (${d.name})`}
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-1.5 min-w-0">
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex items-center space-x-1.5 shrink-0">
                     <span className="text-xs shrink-0">{d.is_removable ? "🔌" : "🖴"}</span>
-                    <span className="font-mono font-bold text-xs text-white">{driveLetter}</span>
-                    <span className="text-[10px] text-[#A8A8A8] truncate">{d.name}</span>
+                    <span className="font-mono font-bold text-xs text-white bg-[#262626] px-1.5 py-0.5 rounded border border-[#3E3E3E] shrink-0">
+                      {driveLetter}
+                    </span>
                   </div>
+                  {d.name && <span className="text-[10px] text-[#A8A8A8] truncate min-w-0 flex-1">{d.name}</span>}
                   <span className={`text-[10px] font-mono shrink-0 ${isCur ? "text-[#60CDFF] font-semibold" : "text-[#777777]"}`}>
                     {formatBytes(free)} free
                   </span>
@@ -1217,17 +1252,111 @@ export function ArchiveTreeInspector({
     }
 
     if (diskError) {
+      const targetTerm = diskCurrentPath.replace(/^[a-zA-Z]:[/\\]*/, "").replace(/[/\\]+$/, "").toLowerCase();
+      const smartSuggestion = quickAccess.find((qa) => {
+        const qaLower = qa.name.toLowerCase();
+        return (
+          qaLower === targetTerm ||
+          (targetTerm.length >= 3 && qaLower.startsWith(targetTerm)) ||
+          (targetTerm.length >= 3 && targetTerm.startsWith(qaLower))
+        );
+      });
+
       return (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 space-y-3 text-center">
-          <span className="text-2xl">⚠️</span>
-          <p className="text-xs text-rose-400 font-mono max-w-md">{diskError}</p>
-          <button
-            type="button"
-            onClick={() => loadDiskDirectory(diskCurrentPath)}
-            className="px-3 py-1 bg-[#252525] hover:bg-[#333333] text-xs text-white rounded border border-[#3E3E3E] cursor-pointer"
-          >
-            Retry
-          </button>
+        <div className="flex-1 flex flex-col items-center justify-center p-6 space-y-4 text-center select-none max-w-lg mx-auto">
+          <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-2xl shadow-[0_0_20px_rgba(245,158,11,0.15)]">
+            ⚠️
+          </div>
+
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-white tracking-wide">Path Not Found</h3>
+            <p className="text-xs text-[#A8A8A8] max-w-sm">
+              Bayzip could not locate or open the specified directory.
+            </p>
+          </div>
+
+          <div className="w-full bg-[#1A1A1A] border border-[#2E2E2E] rounded-lg p-2.5 font-mono text-xs text-rose-300 break-all select-all flex items-center space-x-2">
+            <span className="text-[#666666] shrink-0 font-sans">Location:</span>
+            <span className="flex-1 truncate">{diskCurrentPath}</span>
+          </div>
+
+          {smartSuggestion && (
+            <div className="w-full bg-gradient-to-r from-[#173042] to-[#12222E] border border-[#60CDFF]/40 rounded-lg p-3 text-left space-y-1.5 shadow-md">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#60CDFF]">
+                  Did you mean?
+                </span>
+                <span className="text-[10px] text-[#A8A8A8]">Quick Access</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigateToDiskDirectory(smartSuggestion.path)}
+                className="w-full py-1.5 px-3 bg-[#1C3E56] hover:bg-[#254F6D] text-[#60CDFF] hover:text-[#90DCFF] rounded text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer border border-[#60CDFF]/50"
+              >
+                <div className="flex items-center space-x-2 truncate mr-2">
+                  <span>📁</span>
+                  <span className="font-bold">{smartSuggestion.name}</span>
+                  <span className="text-[10px] text-[#A8A8A8] font-mono truncate">({smartSuggestion.path})</span>
+                </div>
+                <span className="text-xs font-bold shrink-0">Open →</span>
+              </button>
+            </div>
+          )}
+
+          {/* Action Row */}
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setEditPathTrigger((prev) => prev + 1)}
+              className="px-3.5 py-1.5 bg-[#252525] hover:bg-[#333333] text-xs font-medium text-white rounded-md border border-[#3E3E3E] hover:border-[#60CDFF]/60 cursor-pointer flex items-center space-x-1.5 transition-all shadow-sm"
+            >
+              <span>✏️</span>
+              <span>Edit Path</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const root = `${activeDrive || "C:"}\\`;
+                navigateToDiskDirectory(root);
+              }}
+              className="px-3.5 py-1.5 bg-[#252525] hover:bg-[#333333] text-xs font-medium text-white rounded-md border border-[#3E3E3E] hover:border-[#60CDFF]/60 cursor-pointer flex items-center space-x-1.5 transition-all shadow-sm"
+            >
+              <span>🏠</span>
+              <span>Go to {activeDrive || "C:"}\</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => loadDiskDirectory(diskCurrentPath)}
+              className="px-3.5 py-1.5 bg-[#173042] hover:bg-[#20495f] text-xs font-semibold text-[#60CDFF] rounded-md border border-[#60CDFF]/40 cursor-pointer flex items-center space-x-1.5 transition-all shadow-sm"
+            >
+              <span>↺</span>
+              <span>Retry</span>
+            </button>
+          </div>
+
+          {/* Quick Access Recovery Chips */}
+          {quickAccess && quickAccess.length > 0 && (
+            <div className="pt-2 border-t border-[#262626] w-full space-y-2">
+              <span className="text-[10px] font-semibold text-[#666666] uppercase tracking-wider block">
+                Quick Jump:
+              </span>
+              <div className="flex flex-wrap justify-center gap-1.5">
+                {quickAccess.slice(0, 5).map((qa) => (
+                  <button
+                    key={qa.path}
+                    type="button"
+                    onClick={() => navigateToDiskDirectory(qa.path)}
+                    className="px-2 py-1 rounded bg-[#202020] hover:bg-[#2A2A2A] text-[11px] text-[#CCCCCC] hover:text-white border border-[#303030] hover:border-[#444444] transition-colors cursor-pointer flex items-center space-x-1"
+                  >
+                    <span>📁</span>
+                    <span>{qa.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -1322,11 +1451,7 @@ export function ArchiveTreeInspector({
                       setBrowserSource("archive");
                       return;
                     }
-                    invoke("preview_staged_file", { path: item.path })
-                      .then(() => {
-                        if (onPreviewEntry) onPreviewEntry(item.name);
-                      })
-                      .catch(() => {});
+                    if (onPreviewEntry) onPreviewEntry(item.path);
                   }
                 }}
                 style={{ height: "34px" }}
@@ -1569,16 +1694,53 @@ export function ArchiveTreeInspector({
             </span>
           </div>
 
-          {/* Badge */}
-          {isFolderSkipped ? (
-            <span className="text-[9px] font-semibold text-rose-400 px-1 py-0.2 rounded bg-rose-950/60 border border-rose-800/80 shrink-0">
-              ✕
-            </span>
-          ) : (
-            <span className="text-[10px] font-mono text-[#888888] px-1.5 py-0.2 rounded bg-[#2A2A2A] border border-[#3A3A3A] shrink-0">
-              {node.totalItemCount}
-            </span>
-          )}
+          {/* Action & Badge Cluster */}
+          <div className="flex items-center space-x-1 shrink-0">
+            {/* Direct Unstage Button for Staged Folders */}
+            {mode === "compress" && onUnstageItem && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const targetPath =
+                    findStagedItemPath(node.path || node.name) ||
+                    (node.path === "" && stagedItems && stagedItems.length === 1 ? stagedItems[0] : null) ||
+                    node.name;
+                  if (targetPath) {
+                    onUnstageItem(targetPath);
+                  }
+                  const cleanPrefix = node.path ? node.path.replace(/\/+$/, "") + "/" : "";
+                  setLocalEntries((prev) =>
+                    prev.filter((item) => {
+                      if (!cleanPrefix) return false;
+                      const cleanItem = item.name.replace(/\\/g, "/").replace(/^\/+/, "");
+                      return !cleanItem.startsWith(cleanPrefix);
+                    })
+                  );
+                  if (node.path === currentFolderPath) {
+                    navigateToFolder("");
+                  }
+                }}
+                className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-rose-950/80 text-[#888888] hover:text-rose-400 rounded transition-all cursor-pointer mr-0.5"
+                title="Remove from staged"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+
+            {/* Badge */}
+            {isFolderSkipped && node.path !== "" ? (
+              <span className="text-[9px] font-semibold text-rose-400 px-1 py-0.2 rounded bg-rose-950/60 border border-rose-800/80 shrink-0">
+                ✕
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono text-[#888888] px-1.5 py-0.2 rounded bg-[#2A2A2A] border border-[#3A3A3A] shrink-0">
+                {node.totalItemCount}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Render nested subfolders if expanded */}
@@ -1952,17 +2114,77 @@ export function ArchiveTreeInspector({
     }
 
     if (pane2DiskError) {
+      const targetTerm = pane2DiskPath.replace(/^[a-zA-Z]:[/\\]*/, "").replace(/[/\\]+$/, "").toLowerCase();
+      const smartSuggestion = quickAccess.find((qa) => {
+        const qaLower = qa.name.toLowerCase();
+        return (
+          qaLower === targetTerm ||
+          (targetTerm.length >= 3 && qaLower.startsWith(targetTerm)) ||
+          (targetTerm.length >= 3 && targetTerm.startsWith(qaLower))
+        );
+      });
+
       return (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 space-y-3 text-center">
-          <span className="text-2xl">⚠️</span>
-          <p className="text-xs text-rose-400 font-mono max-w-md">{pane2DiskError}</p>
-          <button
-            type="button"
-            onClick={() => loadPane2DiskDirectory(pane2DiskPath)}
-            className="px-3 py-1 bg-[#252525] hover:bg-[#333333] text-xs text-white rounded border border-[#3E3E3E] cursor-pointer"
-          >
-            Retry
-          </button>
+        <div className="flex-1 flex flex-col items-center justify-center p-6 space-y-4 text-center select-none max-w-lg mx-auto">
+          <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-2xl shadow-[0_0_20px_rgba(245,158,11,0.15)]">
+            ⚠️
+          </div>
+
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-white tracking-wide">Path Not Found (Pane 2)</h3>
+            <p className="text-xs text-[#A8A8A8] max-w-sm">
+              Bayzip could not locate or open the specified directory.
+            </p>
+          </div>
+
+          <div className="w-full bg-[#1A1A1A] border border-[#2E2E2E] rounded-lg p-2.5 font-mono text-xs text-rose-300 break-all select-all flex items-center space-x-2">
+            <span className="text-[#666666] shrink-0 font-sans">Location:</span>
+            <span className="flex-1 truncate">{pane2DiskPath}</span>
+          </div>
+
+          {smartSuggestion && (
+            <div className="w-full bg-gradient-to-r from-[#173042] to-[#12222E] border border-[#60CDFF]/40 rounded-lg p-3 text-left space-y-1.5 shadow-md">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#60CDFF]">
+                  Did you mean?
+                </span>
+                <span className="text-[10px] text-[#A8A8A8]">Quick Access</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => loadPane2DiskDirectory(smartSuggestion.path)}
+                className="w-full py-1.5 px-3 bg-[#1C3E56] hover:bg-[#254F6D] text-[#60CDFF] hover:text-[#90DCFF] rounded text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer border border-[#60CDFF]/50"
+              >
+                <div className="flex items-center space-x-2 truncate mr-2">
+                  <span>📁</span>
+                  <span className="font-bold">{smartSuggestion.name}</span>
+                  <span className="text-[10px] text-[#A8A8A8] font-mono truncate">({smartSuggestion.path})</span>
+                </div>
+                <span className="text-xs font-bold shrink-0">Open →</span>
+              </button>
+            </div>
+          )}
+
+          {/* Action Row */}
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => loadPane2DiskDirectory("C:\\")}
+              className="px-3.5 py-1.5 bg-[#252525] hover:bg-[#333333] text-xs font-medium text-white rounded-md border border-[#3E3E3E] hover:border-[#60CDFF]/60 cursor-pointer flex items-center space-x-1.5 transition-all shadow-sm"
+            >
+              <span>🏠</span>
+              <span>Go to C:\</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => loadPane2DiskDirectory(pane2DiskPath)}
+              className="px-3.5 py-1.5 bg-[#173042] hover:bg-[#20495f] text-xs font-semibold text-[#60CDFF] rounded-md border border-[#60CDFF]/40 cursor-pointer flex items-center space-x-1.5 transition-all shadow-sm"
+            >
+              <span>↺</span>
+              <span>Retry</span>
+            </button>
+          </div>
         </div>
       );
     }
@@ -2036,11 +2258,7 @@ export function ArchiveTreeInspector({
                   if (item.is_dir) {
                     loadPane2DiskDirectory(item.path);
                   } else {
-                    invoke("preview_staged_file", { path: item.path })
-                      .then(() => {
-                        if (onPreviewEntry) onPreviewEntry(item.name);
-                      })
-                      .catch(() => {});
+                    if (onPreviewEntry) onPreviewEntry(item.path);
                   }
                 }}
                 style={{ height: "34px" }}
@@ -2156,6 +2374,23 @@ export function ArchiveTreeInspector({
       return (
         <div
           onContextMenu={(e) => handleOpenContextMenu(e, null)}
+          onDragOver={(e) => {
+            if (mode === "compress") {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }
+          }}
+          onDrop={(e) => {
+            if (mode === "compress") {
+              e.preventDefault();
+              const diskPath =
+                e.dataTransfer.getData("application/bayzip-disk-path") ||
+                e.dataTransfer.getData("text/plain");
+              if (diskPath && onStageItem) {
+                onStageItem(diskPath);
+              }
+            }
+          }}
           className="p-8 text-center text-xs text-[#888888] flex flex-col items-center justify-center space-y-2 flex-1 h-full"
         >
           <span>{searchQuery ? "No matching files in this folder" : "This folder is empty"}</span>
@@ -2183,6 +2418,23 @@ export function ArchiveTreeInspector({
       <div
         className="flex-1 flex flex-col overflow-hidden relative h-full"
         onContextMenu={(e) => handleOpenContextMenu(e, null)}
+        onDragOver={(e) => {
+          if (mode === "compress") {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+          }
+        }}
+        onDrop={(e) => {
+          if (mode === "compress") {
+            e.preventDefault();
+            const diskPath =
+              e.dataTransfer.getData("application/bayzip-disk-path") ||
+              e.dataTransfer.getData("text/plain");
+            if (diskPath && onStageItem) {
+              onStageItem(diskPath);
+            }
+          }
+        }}
       >
         {/* Inline New Folder Input Row */}
         {isCreatingFolder && (
@@ -2810,7 +3062,17 @@ export function ArchiveTreeInspector({
                       <WorkspaceNavBar
                         currentPath={browserSource === "filesystem" ? diskCurrentPath : currentFolderPath}
                         sourceType={browserSource}
-                        rootLabel={browserSource === "filesystem" ? activeDrive : (archiveInfo.filename || "Archive Root")}
+                        hasError={browserSource === "filesystem" ? Boolean(diskError) : false}
+                        isPathEditingRequested={editPathTrigger}
+                        rootLabel={
+                          browserSource === "filesystem"
+                            ? activeDrive
+                            : mode === "compress"
+                              ? archiveInfo.filename && archiveInfo.filename !== "Archive"
+                                ? archiveInfo.filename
+                                : "Staged Root"
+                              : archiveInfo.filename || "Archive Root"
+                        }
                         isSplitView={isSplitView}
                         onToggleSplitView={() => setIsSplitView((prev) => !prev)}
                         onNavigate={(newPath) => {
@@ -2835,6 +3097,11 @@ export function ArchiveTreeInspector({
                         }
                         onBack={browserSource === "filesystem" ? handleDiskBack : handleArchiveBack}
                         onForward={browserSource === "filesystem" ? handleDiskForward : handleArchiveForward}
+                        canGoUp={
+                          browserSource === "filesystem"
+                            ? !/^[a-zA-Z]:[/\\]*$/.test(diskCurrentPath.trim())
+                            : currentFolderPath !== ""
+                        }
                         onUp={browserSource === "filesystem" ? handleDiskUp : navigateUp}
                         isLoading={browserSource === "filesystem" ? isLoadingDisk : isLoading}
                       />
@@ -2853,7 +3120,24 @@ export function ArchiveTreeInspector({
                                 <>
                                   {renderFolderHierarchyHeader(false)}
                                   <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5">
-                                    {renderTreeFolderNode(treeRoot)}
+                                    {mode === "compress" && localEntries.length === 0 && (!stagedItems || stagedItems.length === 0) ? (
+                                      <div className="p-4 text-center text-[#777777] flex flex-col items-center justify-center space-y-2 h-44">
+                                        <span className="text-2xl">📁</span>
+                                        <p className="text-xs font-semibold text-[#CCCCCC]">No Staged Folders</p>
+                                        <p className="text-[11px] text-[#666666] max-w-[190px]">
+                                          Browse "Drive Files" or drag items here to stage.
+                                        </p>
+                                        <button
+                                          type="button"
+                                          onClick={() => setBrowserSource("filesystem")}
+                                          className="mt-1 px-2.5 py-1 text-[11px] font-medium rounded bg-[#252525] hover:bg-[#303030] text-[#60CDFF] border border-[#3E3E3E] transition-colors cursor-pointer"
+                                        >
+                                          Browse Drive Files
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      renderTreeFolderNode(treeRoot)
+                                    )}
                                   </div>
                                 </>
                               ) : (
@@ -2897,7 +3181,24 @@ export function ArchiveTreeInspector({
                               <>
                                 {renderFolderHierarchyHeader(true)}
                                 <div className="flex-1 overflow-y-auto custom-scrollbar">
-                                  {renderTreeFolderNode(treeRoot)}
+                                  {mode === "compress" && localEntries.length === 0 && (!stagedItems || stagedItems.length === 0) ? (
+                                    <div className="p-4 text-center text-[#777777] flex flex-col items-center justify-center space-y-2 h-44">
+                                      <span className="text-2xl">📁</span>
+                                      <p className="text-xs font-semibold text-[#CCCCCC]">No Staged Folders</p>
+                                      <p className="text-[11px] text-[#666666] max-w-[190px]">
+                                        Browse "Drive Files" or drag items here to stage.
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() => setBrowserSource("filesystem")}
+                                        className="mt-1 px-2.5 py-1 text-[11px] font-medium rounded bg-[#252525] hover:bg-[#303030] text-[#60CDFF] border border-[#3E3E3E] transition-colors cursor-pointer"
+                                      >
+                                        Browse Drive Files
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    renderTreeFolderNode(treeRoot)
+                                  )}
                                 </div>
                               </>
                             ) : (
@@ -2947,18 +3248,28 @@ export function ArchiveTreeInspector({
                                 <WorkspaceStagedQueue
                                   stagedItems={stagedItems}
                                   itemsInfo={itemsInfo || {}}
-                                  onRemoveItem={(path) => onUnstageItem && onUnstageItem(path)}
-                                  onClearAll={() => onClearStagedItems && onClearStagedItems()}
+                                  onRemoveItem={(path) => {
+                                    if (onUnstageItem) onUnstageItem(path);
+                                    const base = path.replace(/\\/g, "/").split("/").pop() || "";
+                                    setLocalEntries((prev) =>
+                                      prev.filter((item) => {
+                                        const cleanItem = item.name.replace(/\\/g, "/").replace(/^\/+/, "");
+                                        return !cleanItem.startsWith(base + "/") && cleanItem !== base;
+                                      })
+                                    );
+                                  }}
+                                  onDropItem={(path) => onStageItem && onStageItem(path)}
+                                  onClearAll={() => {
+                                    if (onClearStagedItems) onClearStagedItems();
+                                    setLocalEntries([]);
+                                    setCurrentFolderPath("");
+                                  }}
                                   isOpen={isStagedQueueOpen}
                                   onToggleOpen={() => setIsStagedQueueOpen((prev) => !prev)}
                                   height={stagedQueueHeight}
                                   onHeightChange={(h) => setStagedQueueHeight(h)}
                                   onPreviewItem={(path) => {
-                                    invoke("preview_staged_file", { path })
-                                      .then(() => {
-                                        if (onPreviewEntry) onPreviewEntry(path.split(/[/\\]/).pop() || path);
-                                      })
-                                      .catch(() => {});
+                                    if (onPreviewEntry) onPreviewEntry(path);
                                   }}
                                 />
                               )}
@@ -3084,11 +3395,7 @@ export function ArchiveTreeInspector({
         onClose={() => setContextMenu((prev) => ({ ...prev, isOpen: false }))}
         onPreview={(name) => {
           if (browserSource === "filesystem" && contextMenu.target?.diskPath) {
-            invoke("preview_staged_file", { path: contextMenu.target.diskPath })
-              .then(() => {
-                if (onPreviewEntry) onPreviewEntry(name);
-              })
-              .catch(() => {});
+            if (onPreviewEntry) onPreviewEntry(contextMenu.target.diskPath);
           } else {
             onPreviewEntry(name);
           }

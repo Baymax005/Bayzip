@@ -414,11 +414,23 @@ export function CompressPage({
                 mode="compress"
                 stagedItems={selectedFiles}
                 itemsInfo={itemsInfo}
+                onStageItem={(path) => {
+                  setSelectedFiles((prev) => (prev.includes(path) ? prev : [...prev, path]));
+                }}
                 onUnstageItem={(path) => {
-                  setSelectedFiles((prev) => prev.filter((p) => p !== path));
+                  setSelectedFiles((prev) => {
+                    const next = prev.filter((p) => p !== path);
+                    if (next.length === 0 && !isCompressing) {
+                      setCustomArchiveName("");
+                    }
+                    return next;
+                  });
                 }}
                 onClearStagedItems={() => {
                   setSelectedFiles([]);
+                  if (!isCompressing) {
+                    setCustomArchiveName("");
+                  }
                 }}
                 onSwitchMode={onSwitchMode}
               />
@@ -1166,10 +1178,19 @@ export function CompressPage({
           stagedItems={selectedFiles}
           itemsInfo={itemsInfo}
           onUnstageItem={(path) => {
-            setSelectedFiles((prev) => prev.filter((p) => p !== path));
+            setSelectedFiles((prev) => {
+              const next = prev.filter((p) => p !== path);
+              if (next.length === 0 && !isCompressing) {
+                setCustomArchiveName("");
+              }
+              return next;
+            });
           }}
           onClearStagedItems={() => {
             setSelectedFiles([]);
+            if (!isCompressing) {
+              setCustomArchiveName("");
+            }
           }}
           mode="compress"
           onSwitchMode={onSwitchMode}

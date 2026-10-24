@@ -181,8 +181,9 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
               </button>
             )}
 
-            {/* Action 4: Exclusion / Skip Toggle (in Extract Mode or Compress inner file) */}
-            {onToggleExclude && (mode === "extract" || (mode === "compress" && !target.matchedStagedPath)) && (
+            {/* Action 4: Exclusion / Skip Toggle (Only in Extract Mode or in Compress Mode when inspecting Staged Archive Tree) */}
+            {onToggleExclude &&
+              (mode === "extract" || (mode === "compress" && browserSource === "archive" && !target.matchedStagedPath)) && (
               <button
                 type="button"
                 onClick={() => {
@@ -197,8 +198,8 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
                   </span>
                   <span className="font-semibold">
                     {target.isExcluded
-                      ? target.isDir ? "Include Folder" : "Include in Extraction"
-                      : target.isDir ? "Exclude Folder" : "Exclude from Extraction"}
+                      ? target.isDir ? "Include Folder" : mode === "compress" ? "Include in Archive" : "Include in Extraction"
+                      : target.isDir ? "Exclude Folder" : mode === "compress" ? "Exclude from Archive" : "Exclude from Extraction"}
                   </span>
                 </div>
                 <span className="text-[10px] text-rose-400/80 font-mono">

@@ -33,14 +33,15 @@ pub fn inspect_staged_items_sync(paths: &[String]) -> Result<Vec<ArchiveEntryIte
                             None => continue,
                         };
                         let rel = format!("{}/{}", rel_prefix, file_name);
-                        if let Ok(m) = std::fs::symlink_metadata(&path) {
+                        if let Ok(m) = entry.metadata() {
+                            let is_symlink = m.file_type().is_symlink();
                             if m.is_dir() {
                                 entries.push(ArchiveEntryItem {
                                     name: format!("{}/", rel),
                                     size: 0,
                                     is_dir: true,
                                 });
-                                if !m.file_type().is_symlink() {
+                                if !is_symlink {
                                     walk_staged_dir(&path, &rel, entries, depth + 1);
                                 }
                             } else {

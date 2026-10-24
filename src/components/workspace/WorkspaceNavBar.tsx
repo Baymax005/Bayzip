@@ -11,10 +11,13 @@ export interface WorkspaceNavBarProps {
   activeDrive?: string;
   canGoBack: boolean;
   canGoForward: boolean;
+  canGoUp?: boolean;
   onBack: () => void;
   onForward: () => void;
   onUp: () => void;
   isLoading?: boolean;
+  hasError?: boolean;
+  isPathEditingRequested?: number;
   sourceType?: "filesystem" | "archive";
   rootLabel?: string;
   isSplitView?: boolean;
@@ -29,10 +32,13 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
   onSearchChange,
   canGoBack,
   canGoForward,
+  canGoUp = true,
   onBack,
   onForward,
   onUp,
   isLoading = false,
+  hasError = false,
+  isPathEditingRequested,
   sourceType = "filesystem",
   rootLabel,
   isSplitView = false,
@@ -47,6 +53,12 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
   }, [currentPath]);
 
   useEffect(() => {
+    if (isPathEditingRequested) {
+      setIsEditingPath(true);
+    }
+  }, [isPathEditingRequested]);
+
+  useEffect(() => {
     if (isEditingPath && inputRef.current) {
       inputRef.current.focus();
       inputRef.current.select();
@@ -55,7 +67,7 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
 
   const handleCommitPath = () => {
     const trimmed = inputPath.trim();
-    if (trimmed && trimmed !== currentPath) {
+    if (trimmed) {
       onNavigate(trimmed);
     }
     setIsEditingPath(false);
@@ -107,8 +119,9 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
         <button
           type="button"
           onClick={onUp}
-          className="p-1 rounded text-[#60CDFF] hover:text-white hover:bg-[#323232] transition-colors cursor-pointer flex items-center space-x-1"
-          title="Up to Parent Directory (Alt+Up)"
+          disabled={!canGoUp}
+          className="p-1 rounded text-[#60CDFF] hover:text-white hover:bg-[#323232] disabled:opacity-30 disabled:hover:bg-transparent disabled:text-[#777777] disabled:hover:text-[#777777] transition-colors cursor-pointer disabled:cursor-not-allowed flex items-center space-x-1"
+          title={canGoUp ? "Up to Parent Directory (Alt+Up)" : "Already at Root (No Parent Directory)"}
         >
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
@@ -133,9 +146,18 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
       </div>
 
       {/* Address Bar: Breadcrumb Display or Custom Editable Path Input */}
-      <div className="flex-1 min-w-0 flex items-center bg-[#222222] hover:bg-[#262626] focus-within:bg-[#1E1E1E] rounded-md border border-[#333333] focus-within:border-[#60CDFF] px-2 py-1 transition-all">
-        <span className="text-sm mr-1.5 text-[#60CDFF] shrink-0">
-          {sourceType === "archive" ? "📦" : "📁"}
+      <div
+        className={`flex-1 min-w-0 flex items-center rounded-md border px-2 py-1 transition-all ${
+          hasError
+            ? "border-amber-500/70 bg-[#251A1D] focus-within:border-amber-400"
+            : "border-[#333333] bg-[#222222] hover:bg-[#262626] focus-within:bg-[#1E1E1E] focus-within:border-[#60CDFF]"
+        }`}
+      >
+        <span
+          className={`text-sm mr-1.5 shrink-0 ${hasError ? "text-amber-400" : "text-[#60CDFF]"}`}
+          title={hasError ? "Path not found or inaccessible" : undefined}
+        >
+          {hasError ? "⚠️" : sourceType === "archive" ? "📦" : "📁"}
         </span>
 
         {isEditingPath ? (
@@ -150,14 +172,24 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
               placeholder={
                 sourceType === "archive"
                   ? "Enter archive folder path (e.g. assets/textures)..."
-                  : "Enter drive or folder path (e.g. C:\\Users\\...)"
+                  : "Enter drive or folder path (e.g. C:\\Users\\... or downloads)"
               }
               className="w-full bg-transparent text-white font-mono text-xs outline-none border-none p-0"
             />
+            {inputPath && (
+              <button
+                type="button"
+                onClick={() => setInputPath("")}
+                className="text-[#666666] hover:text-white px-1 text-xs cursor-pointer shrink-0"
+                title="Clear input"
+              >
+                ✕
+              </button>
+            )}
             <button
               type="button"
               onClick={handleCommitPath}
-              className="ml-1 text-[10px] px-1.5 py-0.5 bg-[#173042] text-[#60CDFF] hover:bg-[#20495f] rounded border border-[#60CDFF]/40 cursor-pointer shrink-0"
+              className="ml-1 text-[10px] px-2 py-0.5 bg-[#173042] text-[#60CDFF] hover:bg-[#20495f] rounded border border-[#60CDFF]/40 cursor-pointer shrink-0 font-semibold"
             >
               Go
             </button>
@@ -211,7 +243,7 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
                 })}
               </>
             ) : segments.length === 0 ? (
-              <span className="text-white font-semibold">Root</span>
+              <span className="text-white font-semibold">{rootLabel || "This PC"}</span>
             ) : (
               segments.map((seg, idx) => {
                 const subPath =
@@ -219,6 +251,7 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
                     .slice(0, idx + 1)
                     .join("\\") + (idx === 0 && seg.includes(":") ? "\\" : "");
                 const isLast = idx === segments.length - 1;
+                const displayLabel = idx === 0 && seg.includes(":") ? `${seg}\\` : seg;
 
                 return (
                   <React.Fragment key={`${seg}-${idx}`}>
@@ -231,32 +264,51 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
                       }}
                       className={`hover:text-white px-1 py-0.5 rounded transition-colors cursor-pointer truncate shrink-0 ${
                         isLast
-                          ? "text-white font-bold bg-[#2E2E2E]"
+                          ? hasError
+                            ? "text-amber-300 font-bold bg-[#331C1F] border border-amber-600/40"
+                            : "text-white font-bold bg-[#2E2E2E]"
                           : "hover:bg-[#303030] text-[#CCCCCC]"
                       }`}
                       title={subPath}
                     >
-                      {seg}
+                      {displayLabel}
                     </button>
                   </React.Fragment>
                 );
               })
             )}
 
-            {/* Quick Edit Path Icon */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsEditingPath(true);
-              }}
-              className="ml-auto text-[#666666] hover:text-[#60CDFF] p-0.5 cursor-pointer shrink-0"
-              title="Edit Path (Click to enter custom path)"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-              </svg>
-            </button>
+            {/* Quick Actions Cluster: Copy Path & Edit Path */}
+            <div className="ml-auto flex items-center space-x-1 shrink-0">
+              <button
+                type="button"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    await navigator.clipboard.writeText(currentPath);
+                  } catch {}
+                }}
+                className="text-[#666666] hover:text-[#60CDFF] p-0.5 cursor-pointer rounded hover:bg-[#303030]"
+                title="Copy path to clipboard"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsEditingPath(true);
+                }}
+                className="text-[#666666] hover:text-[#60CDFF] p-0.5 cursor-pointer rounded hover:bg-[#303030]"
+                title="Edit Path (Click to enter custom path)"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </button>
+            </div>
           </div>
         )}
       </div>

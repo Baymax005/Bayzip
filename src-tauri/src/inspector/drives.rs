@@ -5,15 +5,25 @@ pub fn get_quick_access_sync() -> Vec<QuickAccessItem> {
     if let Ok(user_profile) = std::env::var("USERPROFILE") {
         let p = std::path::Path::new(&user_profile);
         let shortcuts = [
-            ("Desktop", p.join("Desktop"), "🖥️"),
-            ("Downloads", p.join("Downloads"), "📥"),
-            ("Documents", p.join("Documents"), "📑"),
-            ("Pictures", p.join("Pictures"), "🖼️"),
-            ("Music", p.join("Music"), "🎵"),
-            ("Videos", p.join("Videos"), "🎬"),
+            ("Desktop", "Desktop", "🖥️"),
+            ("Downloads", "Downloads", "📥"),
+            ("Documents", "Documents", "📑"),
+            ("Pictures", "Pictures", "🖼️"),
+            ("Music", "Music", "🎵"),
+            ("Videos", "Videos", "🎬"),
         ];
-        for (name, path, icon) in shortcuts {
-            if path.exists() {
+        for (name, folder, icon) in shortcuts {
+            let primary = p.join(folder);
+            let onedrive = p.join("OneDrive").join(folder);
+            let valid_path = if primary.exists() {
+                Some(primary)
+            } else if onedrive.exists() {
+                Some(onedrive)
+            } else {
+                None
+            };
+
+            if let Some(path) = valid_path {
                 list.push(QuickAccessItem {
                     name: name.to_string(),
                     path: path.to_string_lossy().to_string(),
@@ -53,11 +63,58 @@ pub fn get_system_drives_sync() -> Vec<DriveInfo> {
 }
 
 pub fn browse_directory_sync(dir_path: &str) -> Result<Vec<crate::types::DirectoryItem>, String> {
-    let p = std::path::Path::new(dir_path);
+    let mut clean = dir_path.trim().to_string();
+    if clean.len() == 2 && clean.ends_with(':') {
+        clean.push('\\');
+    }
+
+    let mut p = std::path::PathBuf::from(&clean);
+
+    // Expand ~ prefix to USERPROFILE
+    if clean.starts_with('~') {
+        if let Ok(user_profile) = std::env::var("USERPROFILE") {
+            let rest = clean.trim_start_matches('~').trim_start_matches(['/', '\\']);
+            p = std::path::Path::new(&user_profile).join(rest);
+        }
+    }
+
+    // Smart alias resolution for user library folders if path does not exist as typed
+    if !p.exists() {
+        if let Ok(user_profile) = std::env::var("USERPROFILE") {
+            let up = std::path::Path::new(&user_profile);
+            let lower = clean.to_lowercase().replace('/', "\\");
+            let target_name = if lower == "downloads" || lower == "c:\\downloads" || lower == "c:downloads" {
+                Some("Downloads")
+            } else if lower == "desktop" || lower == "c:\\desktop" || lower == "c:desktop" {
+                Some("Desktop")
+            } else if lower == "documents" || lower == "c:\\documents" || lower == "c:documents" {
+                Some("Documents")
+            } else if lower == "pictures" || lower == "c:\\pictures" || lower == "c:pictures" {
+                Some("Pictures")
+            } else if lower == "music" || lower == "c:\\music" || lower == "c:music" {
+                Some("Music")
+            } else if lower == "videos" || lower == "c:\\videos" || lower == "c:videos" {
+                Some("Videos")
+            } else {
+                None
+            };
+
+            if let Some(folder_name) = target_name {
+                let candidate1 = up.join(folder_name);
+                let candidate2 = up.join("OneDrive").join(folder_name);
+                if candidate1.exists() {
+                    p = candidate1;
+                } else if candidate2.exists() {
+                    p = candidate2;
+                }
+            }
+        }
+    }
+
     if !p.exists() {
         return Err(format!("Path does not exist: {}", dir_path));
     }
-    let rd = match std::fs::read_dir(p) {
+    let rd = match std::fs::read_dir(&p) {
         Ok(entries) => entries,
         Err(e) => return Err(format!("Failed to read directory: {}", e)),
     };
