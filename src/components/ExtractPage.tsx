@@ -3,7 +3,6 @@ import { ArchiveInfo, ExtractProgress } from "../types";
 import { ArchiveTreeInspector } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
-import { WorkspaceExtractSidebar } from "./workspace/WorkspaceExtractSidebar";
 
 export interface ExtractPageProps {
   selectedArchive: string | null;
@@ -111,37 +110,6 @@ export function ExtractPage({
     totalBytes: archiveInfo?.total_uncompressed_size ?? 0,
   });
 
-
-
-  const extractSidebar = (
-    <WorkspaceExtractSidebar
-      extractDest={extractDest}
-      onExtractDestChange={setExtractDest}
-      onSelectDestination={handleSelectDestFolder}
-      extractToSubfolder={extractToSubfolder}
-      onToggleExtractToSubfolder={setExtractToSubfolder}
-      archiveStemName={getArchiveStemName(selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "" : "")}
-      openFolderOnExtract={openFolderOnExtract}
-      onToggleOpenFolderOnExtract={setOpenFolderOnExtract}
-      isEncrypted={Boolean(archiveInfo?.is_encrypted)}
-      extractPassword={extractPassword}
-      onExtractPasswordChange={setExtractPassword}
-      showPassword={showExtractPassword}
-      onToggleShowPassword={() => setShowExtractPassword(!showExtractPassword)}
-      archiveFilename={selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "No Archive Selected"}
-      archiveFormat={archiveInfo?.format || "ZIP"}
-      totalFilesCount={archiveInfo?.file_count || 0}
-      includedFilesCount={includedFilesCount}
-      excludedFilesCount={excludedPaths.size}
-      totalUncompressedSize={archiveInfo?.total_uncompressed_size || 0}
-      isExtracting={isExtracting}
-      isCancellingExtract={isCancellingExtract}
-      onExtract={handleExtract}
-      onCancelExtract={handleCancelExtract}
-      onSelectArchive={handleSelectArchive}
-    />
-  );
-
   return (
     <div className="space-y-6">
       {/* Archive Selection Area */}
@@ -241,8 +209,6 @@ export function ExtractPage({
             onIncludeAll={handleIncludeAll}
             isExpandedModal={false}
             onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
-            sidebar={extractSidebar}
-            sidebarTitle="Extraction Options"
             inspectorTitle="Archive Explorer & Folders"
             mode="extract"
             onSwitchMode={onSwitchMode}
@@ -613,8 +579,6 @@ export function ExtractPage({
           onIncludeAll={handleIncludeAll}
           isExpandedModal={true}
           onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
-          sidebar={extractSidebar}
-          sidebarTitle="Extraction Options"
           inspectorTitle="Archive Explorer & Drives"
           operationProgress={
             isExtracting && extractProgress
@@ -632,6 +596,13 @@ export function ExtractPage({
           onSwitchMode={onSwitchMode}
           onSelectArchive={handleSelectArchive}
           onLoadArchiveFromFile={selectArchive}
+          extractDest={extractDest}
+          onExtractDestChange={setExtractDest}
+          extractToSubfolder={extractToSubfolder}
+          onToggleExtractToSubfolder={setExtractToSubfolder}
+          openFolderOnExtract={openFolderOnExtract}
+          onToggleOpenFolderOnExtract={setOpenFolderOnExtract}
+          onExtractArchive={handleExtract}
         />
       )}
     </div>

@@ -86,26 +86,67 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
     };
   }, [isResizing]);
 
-  // Drag-and-drop parsing helper
+  // Drag-and-drop parsing helper: supports both folders and files
   const handleDropPayload = (e: React.DragEvent) => {
     const folderPath = e.dataTransfer.getData("application/bayzip-folder-path");
     const diskPath = e.dataTransfer.getData("application/bayzip-disk-path");
     const isDir = e.dataTransfer.getData("application/bayzip-is-dir") === "true";
+    const archiveEntry = e.dataTransfer.getData("application/bayzip-archive-entry");
     const textData = e.dataTransfer.getData("text/plain");
 
-    const targetFolder = folderPath || (isDir ? diskPath : "");
-    if (targetFolder && onDropFolderToSplit) {
-      const isDisk = Boolean(diskPath) || /^[a-zA-Z]:/.test(targetFolder);
+    let targetFolder = folderPath || (isDir ? diskPath : "");
+    let isDisk = Boolean(diskPath) || /^[a-zA-Z]:/.test(targetFolder);
+
+    // If it's a file on physical disk (not directory), open its parent directory in Split View
+    if (!targetFolder && diskPath) {
+      isDisk = true;
+      const clean = diskPath.replace(/\//g, "\\");
+      const lastSlash = clean.lastIndexOf("\\");
+      if (lastSlash > 0) {
+        targetFolder = clean.substring(0, lastSlash + 1);
+      } else if (clean.length >= 2 && clean[1] === ":") {
+        targetFolder = `${clean.slice(0, 2)}\\`;
+      } else {
+        targetFolder = clean;
+      }
+    }
+
+    // If it's an archive entry file, open its parent folder in Split View
+    if (!targetFolder && archiveEntry) {
+      isDisk = false;
+      const clean = archiveEntry.replace(/\\/g, "/");
+      const lastSlash = clean.lastIndexOf("/");
+      if (lastSlash > 0) {
+        targetFolder = clean.substring(0, lastSlash);
+      } else {
+        targetFolder = ""; // archive root
+      }
+    }
+
+    // Fallback: textData (from external drag or standard drag)
+    if (!targetFolder && textData) {
+      const clean = textData.trim();
+      const isLikelyDisk = /^[a-zA-Z]:/.test(clean);
+      if (clean.endsWith("/") || clean.endsWith("\\") || !clean.includes(".")) {
+        targetFolder = clean;
+        isDisk = isLikelyDisk;
+      } else if (isLikelyDisk) {
+        const norm = clean.replace(/\//g, "\\");
+        const lastSlash = norm.lastIndexOf("\\");
+        targetFolder = lastSlash > 0 ? norm.substring(0, lastSlash + 1) : norm;
+        isDisk = true;
+      } else {
+        const norm = clean.replace(/\\/g, "/");
+        const lastSlash = norm.lastIndexOf("/");
+        targetFolder = lastSlash > 0 ? norm.substring(0, lastSlash) : "";
+        isDisk = false;
+      }
+    }
+
+    if (onDropFolderToSplit && targetFolder !== undefined && targetFolder !== "") {
       onDropFolderToSplit(targetFolder, isDisk);
     } else if (diskPath && onDropDiskItemToStage) {
       onDropDiskItemToStage(diskPath);
-    } else if (textData) {
-      const isLikelyFolder = textData.endsWith("/") || textData.endsWith("\\") || !textData.includes(".");
-      if (onDropFolderToSplit && isLikelyFolder) {
-        onDropFolderToSplit(textData, /^[a-zA-Z]:/.test(textData));
-      } else if (onDropDiskItemToStage) {
-        onDropDiskItemToStage(textData);
-      }
     }
   };
 
@@ -128,13 +169,16 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
           <div
             onDragOver={(e) => {
               if (!isSplit) {
+                // Unconditionally prevent default so Chromium never renders the red forbidden cursor
+                e.preventDefault();
                 const rect = e.currentTarget.getBoundingClientRect();
-                if (e.clientX >= rect.right - rect.width * 0.35) {
-                  e.preventDefault();
+                const inDropZone = e.clientX >= rect.right - Math.max(160, rect.width * 0.35);
+                if (inDropZone) {
                   e.dataTransfer.dropEffect = "copy";
                   if (!isHoveringDropZone) setIsHoveringDropZone(true);
-                } else if (isHoveringDropZone) {
-                  setIsHoveringDropZone(false);
+                } else {
+                  e.dataTransfer.dropEffect = "move";
+                  if (isHoveringDropZone) setIsHoveringDropZone(false);
                 }
               }
             }}
@@ -148,39 +192,38 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
             <div
               onDragOver={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 e.dataTransfer.dropEffect = "copy";
-                setIsHoveringDropZone(true);
+                if (!isHoveringDropZone) setIsHoveringDropZone(true);
               }}
               onDragLeave={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                if (
-                  e.clientX <= rect.left ||
-                  e.clientX >= rect.right ||
-                  e.clientY <= rect.top ||
-                  e.clientY >= rect.bottom
-                ) {
-                  setIsHoveringDropZone(false);
-                }
+                e.stopPropagation();
+                const related = e.relatedTarget as Node | null;
+                if (e.currentTarget.contains(related)) return;
+                setIsHoveringDropZone(false);
               }}
               onDrop={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 setIsHoveringDropZone(false);
                 handleDropPayload(e);
               }}
-              className={`absolute top-0 right-0 bottom-0 w-1/3 transition-all flex items-center justify-center ${
+              className={`absolute top-0 right-0 bottom-0 w-1/3 transition-all duration-150 flex items-center justify-center ${
                 isHoveringDropZone
-                  ? "bg-[#173042]/85 border-2 border-dashed border-[#60CDFF] shadow-[inset_0_0_24px_rgba(96,205,255,0.25)] z-30 pointer-events-auto"
+                  ? "bg-[#173042]/90 border-2 border-dashed border-[#60CDFF] shadow-[inset_0_0_35px_rgba(96,205,255,0.35),0_0_25px_rgba(96,205,255,0.25)] z-30 pointer-events-auto"
                   : "bg-transparent pointer-events-none"
               }`}
             >
               {isHoveringDropZone && (
-                <div className="p-4 rounded-xl bg-[#12222E] border border-[#60CDFF] shadow-2xl flex flex-col items-center space-y-2 text-center animate-in zoom-in-95 duration-150">
-                  <span className="text-2xl">⫴</span>
-                  <p className="text-xs font-bold text-[#60CDFF] font-sans">
-                    Drop here to Open Split View
+                <div className="p-5 rounded-xl bg-[#12222E]/95 border-2 border-[#60CDFF] shadow-[0_0_30px_rgba(96,205,255,0.35)] flex flex-col items-center space-y-2 text-center animate-in zoom-in-95 duration-150 pointer-events-none select-none">
+                  <div className="w-10 h-10 rounded-full bg-[#1C3E56] border border-[#60CDFF]/60 flex items-center justify-center text-xl text-[#60CDFF] shadow-[0_0_15px_rgba(96,205,255,0.3)]">
+                    ⫴
+                  </div>
+                  <p className="text-sm font-bold text-white font-sans tracking-wide">
+                    Drop to Open Split View
                   </p>
-                  <span className="text-[10px] text-[#A8A8A8]">
-                    Opens this folder side-by-side
+                  <span className="text-xs text-[#A8A8A8]">
+                    Opens side-by-side dual explorer
                   </span>
                 </div>
               )}
@@ -216,15 +259,9 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
                 setIsPane2DragOver(true);
               }}
               onDragLeave={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                if (
-                  e.clientX <= rect.left ||
-                  e.clientX >= rect.right ||
-                  e.clientY <= rect.top ||
-                  e.clientY >= rect.bottom
-                ) {
-                  setIsPane2DragOver(false);
-                }
+                const related = e.relatedTarget as Node | null;
+                if (e.currentTarget.contains(related)) return;
+                setIsPane2DragOver(false);
               }}
               onDrop={(e) => {
                 e.preventDefault();

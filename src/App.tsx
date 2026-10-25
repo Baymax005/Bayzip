@@ -1316,6 +1316,8 @@ function App() {
               isWorkspaceOpen={isWorkspaceOpen}
               setIsWorkspaceOpen={setIsWorkspaceOpen}
               onSwitchMode={(m) => setActiveMode(m)}
+              onSelectArchive={handleSelectArchive}
+              onLoadArchiveFromFile={selectArchive}
             />
           )}
 

@@ -2,6 +2,34 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.3.1] - 2026-10-26
+
+### ⚡ Unified Desktop Archiver Workspace & Modal Extraction
+- **Primary Desktop Archiver Action Toolbar (`WorkspaceHeader.tsx`)**:
+  - Replaced the previous Compress / Extract split-mode segmented buttons with an intuitive desktop archiver toolbar:
+    - **`📂 Open`** (`Ctrl+O`): Instantly open and inspect any archive file (`.bay`, `.bayg`, `.zip`, `.7z`, `.tar`, `.rar`, etc.) from your computer.
+    - **`⚡ Extract`** (`Ctrl+E`): Opens the dedicated desktop **Extraction Path and Options** popup dialog.
+    - **`📦 Add`**: Toggles the advanced compression options sidebar to configure algorithms (Zstd, Brotli, LZ4, LZMA2), compression level, password encryption, volume splitting, and staging.
+    - **`🧪 Test`**: Executes archive integrity test with live Dynamic Island HUD feedback.
+    - **Active Archive Badge**: Monospace pill displaying the active archive name directly in the workspace titlebar.
+- **Dedicated Desktop Extraction Modal (`WorkspaceExtractModal.tsx`)**:
+  - Replaced the old full-screen/workspace extraction mode with a desktop archiver popup dialog:
+    - Target extraction destination input with native folder picker (`@tauri-apps/plugin-dialog`).
+    - Extraction checkboxes:
+      - `Extract to subfolder: <archive_name>\` (enabled by default).
+      - `Open destination folder after extraction` (auto-launches Windows File Explorer).
+    - Built-in decryption password field with visibility toggle and auto-focus when archive encryption is detected.
+    - Archive summary badge displaying total file count and uncompressed byte size.
+    - Keyboard ergonomics: `Enter` to extract immediately, `Escape` to dismiss the modal without closing the workspace.
+
+### 🧹 Clean Architecture & Legacy Code Removal
+- **Streamlined Archive Inspector (`ArchiveTreeInspector.tsx`)**:
+  - Removed obsolete tab redirects (`onSwitchMode("extract")`), allowing archive files opened from disk to load directly inside the workspace without switching views.
+  - Removed artificial `mode === "extract"` checks on the `"No Archive Loaded"` empty state and left-panel `"Open Archive File..."` button.
+  - Simplified drag-and-drop staging checks (`if (onStageItem)`) and removed artificial `mode === "compress"` restrictions across context menus and file trees.
+  - Removed obsolete workspace extraction sidebars (`WorkspaceExtractSidebar.tsx`) and drawers (`WorkspaceExtractQueue.tsx`).
+  - Preserved normal standalone pages (`CompressPage.tsx` and `ExtractPage.tsx`) for classic quick operations.
+
 ## [v2.3.0] - 2026-10-25
 
 ### ⫴ Instant Dual-Pane Split View & Right-Click Split

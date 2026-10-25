@@ -8,6 +8,11 @@ export interface WorkspaceHeaderProps {
   mode?: "compress" | "extract";
   onSwitchMode?: (newMode: "compress" | "extract") => void;
   onSelectArchive?: () => void;
+  onOpenExtractModal?: () => void;
+  onAddOrCompress?: () => void;
+  onTestArchive?: () => void;
+  hasArchiveLoaded?: boolean;
+  archiveName?: string;
   inspectorTitle?: string;
   itemCount: number;
   operationProgress?: OperationProgressInfo | null;
@@ -34,8 +39,13 @@ export interface WorkspaceHeaderProps {
 export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   isFullModal = false,
   mode = "compress",
-  onSwitchMode,
+  onSwitchMode: _onSwitchMode,
   onSelectArchive,
+  onOpenExtractModal,
+  onAddOrCompress,
+  onTestArchive,
+  hasArchiveLoaded = false,
+  archiveName,
   inspectorTitle,
   itemCount,
   operationProgress,
@@ -69,64 +79,93 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       {/* Left Cluster: App Branding & Mode Switching */}
       <div className="flex items-center space-x-2.5 min-w-0" data-tauri-drag-region={isFullModal ? "true" : undefined}>
         {isFullModal ? (
-          <div className="flex items-center space-x-2 mr-1" data-tauri-drag-region="true">
+          <div className="flex items-center space-x-2.5 mr-1" data-tauri-drag-region="true">
             <span className="w-2.5 h-2.5 rounded-full bg-[#60CDFF] shadow-[0_0_8px_rgba(96,205,255,0.8)]" />
-            <span className="font-bold text-xs tracking-wider text-white uppercase font-sans">
-              BAYZIP WORKSPACE
+            <span className="font-bold text-xs tracking-wider text-white uppercase font-sans mr-1">
+              BAYZIP
             </span>
 
-            {/* Mode Selector Pill */}
-            {onSwitchMode ? (
-              <div
-                className="flex items-center bg-[#141414] p-0.5 rounded-lg border border-[#3E3E3E]"
-                data-tauri-drag-region="false"
-              >
+            {/* Desktop Archiver Primary Action Toolbar */}
+            <div className="flex items-center space-x-1.5" data-tauri-drag-region="false">
+              {/* 1. Open Archive Button */}
+              {onSelectArchive && (
                 <button
                   type="button"
-                  onClick={() => onSwitchMode("compress")}
-                  className={`px-2.5 py-0.5 text-[10px] font-semibold rounded transition-all cursor-pointer flex items-center space-x-1 ${
-                    mode === "compress"
-                      ? "bg-[#173042] text-[#60CDFF] border border-[#60CDFF]/50 shadow-[0_0_8px_rgba(96,205,255,0.25)]"
-                      : "text-[#888888] hover:text-white hover:bg-[#202020] border border-transparent"
-                  }`}
-                  title="Switch to Compress Workspace"
+                  data-tauri-drag-region="false"
+                  onClick={onSelectArchive}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[#202020] hover:bg-[#282828] text-[#D0D0D0] hover:text-white border border-[#3E3E3E] hover:border-[#60CDFF]/50 transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm"
+                  title="Open Archive File from PC (.bay, .zip, .7z, .tar, .rar) [Ctrl+O]"
                 >
-                  <span>📦</span>
-                  <span>Compress</span>
+                  <svg className="w-3.5 h-3.5 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
+                  </svg>
+                  <span>Open</span>
                 </button>
+              )}
+
+              {/* 2. Extract Button (Opens Extraction Popup Modal) */}
+              {onOpenExtractModal && (
                 <button
                   type="button"
-                  onClick={() => onSwitchMode("extract")}
-                  className={`px-2.5 py-0.5 text-[10px] font-semibold rounded transition-all cursor-pointer flex items-center space-x-1 ${
-                    mode === "extract"
-                      ? "bg-[#25394A] text-[#60CDFF] border border-[#60CDFF]/50 shadow-[0_0_8px_rgba(96,205,255,0.25)]"
-                      : "text-[#888888] hover:text-white hover:bg-[#202020] border border-transparent"
+                  data-tauri-drag-region="false"
+                  onClick={onOpenExtractModal}
+                  className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm ${
+                    hasArchiveLoaded
+                      ? "bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/60 hover:border-[#60CDFF] shadow-[0_0_10px_rgba(96,205,255,0.2)]"
+                      : "bg-[#202020] hover:bg-[#282828] text-[#888888] hover:text-[#CCCCCC] border border-[#3E3E3E]"
                   }`}
-                  title="Switch to Extract Workspace"
+                  title="Extract Archive with Options & Password (Ctrl+E)"
                 >
-                  <span>📂</span>
+                  <span className="text-[#60CDFF] text-sm leading-none">⚡</span>
                   <span>Extract</span>
                 </button>
-              </div>
-            ) : (
-              <span className="text-[10px] uppercase font-mono font-semibold px-2 py-0.5 rounded bg-[#173042] text-[#60CDFF] border border-[#60CDFF]/40">
-                {mode === "compress" ? "Compress Mode" : "Extract Mode"}
-              </span>
-            )}
+              )}
 
-            {/* Open Archive Button in Extract Mode */}
-            {mode === "extract" && onSelectArchive && (
-              <button
-                type="button"
-                data-tauri-drag-region="false"
-                onClick={onSelectArchive}
-                className="px-2.5 py-0.5 text-[10px] font-semibold rounded bg-[#173042] hover:bg-[#1E415A] border border-[#60CDFF]/50 text-[#60CDFF] hover:text-[#90DCFF] shadow-sm transition-all cursor-pointer flex items-center space-x-1"
-                title="Select Archive File from PC (.bay, .zip, .7z, .tar, .rar)"
-              >
-                <span>📂</span>
-                <span>Open Archive</span>
-              </button>
-            )}
+              {/* 3. Add / Compress Button */}
+              {onAddOrCompress && (
+                <button
+                  type="button"
+                  data-tauri-drag-region="false"
+                  onClick={onAddOrCompress}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm ${
+                    isRightPanelOpen
+                      ? "bg-[#25394A] text-[#60CDFF] border border-[#60CDFF]/50"
+                      : "bg-[#202020] hover:bg-[#282828] text-[#D0D0D0] hover:text-white border border-[#3E3E3E] hover:border-[#60CDFF]/50"
+                  }`}
+                  title="Add / Compress Files (Configure algorithm, format & settings)"
+                >
+                  <span className="text-xs leading-none">📦</span>
+                  <span>Add</span>
+                </button>
+              )}
+
+              {/* 4. Test Archive Button */}
+              {onTestArchive && hasArchiveLoaded && (
+                <button
+                  type="button"
+                  data-tauri-drag-region="false"
+                  onClick={onTestArchive}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[#202020] hover:bg-[#282828] text-[#D0D0D0] hover:text-white border border-[#3E3E3E] hover:border-emerald-500/50 transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm"
+                  title="Test Archive Integrity"
+                >
+                  <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>Test</span>
+                </button>
+              )}
+
+              {/* Archive Name Badge */}
+              {archiveName && hasArchiveLoaded && (
+                <span
+                  className="hidden xl:inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-[#171717] border border-[#2F2F2F] text-[11px] font-mono text-[#A8A8A8] truncate max-w-[180px]"
+                  title={archiveName}
+                >
+                  <span className="text-[#60CDFF]">📁</span>
+                  <span className="truncate">{archiveName}</span>
+                </span>
+              )}
+            </div>
           </div>
         ) : (
           <>

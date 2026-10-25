@@ -6,7 +6,7 @@ import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
 import { WorkspaceAdvanceSidebar } from "./workspace/WorkspaceAdvanceSidebar";
 
-const FORMAT_ALGORITHMS: Record<string, string[]> = {
+export const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
   ".bayg": ["Zstd-Fast (Auto)"],
   ".7z": ["LZMA2", "LZMA", "BZip2"],
@@ -79,6 +79,8 @@ export interface CompressPageProps {
   isWorkspaceOpen?: boolean;
   setIsWorkspaceOpen?: (open: boolean) => void;
   onSwitchMode?: (newMode: "compress" | "extract") => void;
+  onSelectArchive?: () => void;
+  onLoadArchiveFromFile?: (path: string) => void;
 }
 
 export function CompressPage({
@@ -130,6 +132,8 @@ export function CompressPage({
   isWorkspaceOpen: isWorkspaceOpenProp,
   setIsWorkspaceOpen: setIsWorkspaceOpenProp,
   onSwitchMode,
+  onSelectArchive,
+  onLoadArchiveFromFile,
 }: CompressPageProps) {
   const [internalWorkspaceOpen, setInternalWorkspaceOpen] = useState(false);
   const isWorkspaceOpen = isWorkspaceOpenProp !== undefined ? isWorkspaceOpenProp : internalWorkspaceOpen;
@@ -270,6 +274,8 @@ export function CompressPage({
         setSelectedFormat(fmt);
         setSelectedAlgorithm(FORMAT_ALGORITHMS[fmt]?.[0] || "None (Store)");
       }}
+      selectedAlgorithm={selectedAlgorithm}
+      onAlgorithmChange={setSelectedAlgorithm}
       archiveToOriginalPath={archiveToOriginalPath}
       onToggleArchiveToOriginalPath={setArchiveToOriginalPath}
       compressDestDir={compressDestDir}
@@ -278,8 +284,14 @@ export function CompressPage({
       sliderValue={sliderValue}
       onSliderValueChange={setSliderValue}
       sliderLabel={getSliderLabel()}
+      specs={specs}
+      getEstimatedCores={getEstimatedCores}
       smartMediaBypass={smartMediaBypass}
       onSmartMediaBypassChange={setSmartMediaBypass}
+      separateArchives={separateArchives}
+      onSeparateArchivesChange={setSeparateArchives}
+      selectedEncryption={selectedEncryption}
+      onEncryptionChange={setSelectedEncryption}
       compressPassword={compressPassword}
       onCompressPasswordChange={(pwd) => {
         setCompressPassword(pwd);
@@ -1194,6 +1206,8 @@ export function CompressPage({
           }}
           mode="compress"
           onSwitchMode={onSwitchMode}
+          onSelectArchive={onSelectArchive}
+          onLoadArchiveFromFile={onLoadArchiveFromFile}
         />
       )}
     </>

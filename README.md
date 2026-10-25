@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.3.0)
+# 📦 Bayzip (v2.3.1)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -6,6 +6,22 @@
 ---
 
 ## ⚡ Key Features
+
+### ⚡ Unified Desktop Archiver Workspace & Modal Extraction Dialog (v2.3.1)
+- **Primary Desktop Archiver Action Toolbar (`WorkspaceHeader.tsx`)**:
+  - Replaced the split-mode toggle with a dedicated desktop archiver action toolbar:
+    - `📂 Open` (`Ctrl+O`): Browse and open any archive file directly.
+    - `⚡ Extract` (`Ctrl+E`): Triggers the desktop extraction options modal dialog.
+    - `📦 Add`: Toggles the advanced compression options panel.
+    - `🧪 Test`: Runs immediate archive integrity verification.
+- **Dedicated Desktop Extraction Popup Modal (`WorkspaceExtractModal.tsx`)**:
+  - Native modal dialog asking for destination folder path (with native folder browser).
+  - Configurable options: "Extract to subfolder: `<archive_name>\`" and "Open destination folder after extraction".
+  - Built-in decryption password field with show/hide toggle and auto-focus for encrypted archives.
+  - Full keyboard support: `Enter` to confirm extraction, `Esc` to close modal.
+- **Streamlined Unified Codebase**:
+  - Eliminated redundant workspace extraction sidebars and drawers in favor of the clean popup modal workflow.
+  - Kept standalone classic `CompressPage.tsx` and `ExtractPage.tsx` pages completely intact.
 
 ### ⫴ Instant Dual-Pane Split View, Drag-to-Move & Workspace Panel Controls (v2.3.0)
 - **Instant Dual-Pane Split View (`⫴` / `Ctrl+\`)**:

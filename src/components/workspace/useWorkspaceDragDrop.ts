@@ -177,23 +177,27 @@ export function useWorkspaceDragDrop({
     const isDir = isDirStr === "true";
     const diskPath = e.dataTransfer.getData("application/bayzip-disk-path");
     const folderPath = e.dataTransfer.getData("application/bayzip-folder-path");
+    const textData = e.dataTransfer.getData("text/plain");
+
+    const effectiveDiskPath = diskPath || (/^[a-zA-Z]:[/\\]/.test(textData) ? textData : "");
+    const effectiveArchiveEntry = archiveEntry || (!effectiveDiskPath && textData ? textData : "");
 
     if (isDiskTarget && targetDiskPath) {
       // Target is a physical disk folder
-      if (diskPath) {
-        await handleMoveDiskItem(diskPath, targetDiskPath);
+      if (effectiveDiskPath) {
+        await handleMoveDiskItem(effectiveDiskPath, targetDiskPath);
       }
       return;
     }
 
     // Target is an archive folder
-    if (archiveEntry || folderPath) {
-      const src = archiveEntry || folderPath;
+    if (effectiveArchiveEntry || folderPath) {
+      const src = effectiveArchiveEntry || folderPath;
       await handleMoveArchiveEntry(src, isDir || Boolean(folderPath), targetFolderPath);
-    } else if (diskPath) {
+    } else if (effectiveDiskPath) {
       // Dragged from disk to archive folder: stage it!
       if (onStageItem) {
-        onStageItem(diskPath);
+        onStageItem(effectiveDiskPath);
       }
     }
   };
@@ -247,6 +251,10 @@ export function useWorkspaceDragDrop({
       },
       onDragLeave: (e: React.DragEvent) => {
         e.stopPropagation();
+        const related = e.relatedTarget as Node | null;
+        if (e.currentTarget.contains(related)) {
+          return;
+        }
         if (dragOverTargetKey === targetKey) {
           setDragOverTargetKey(null);
         }
