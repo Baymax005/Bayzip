@@ -830,6 +830,38 @@ export function ArchiveTreeInspector({
   };
 
   const handleDeleteItem = async (name: string, isDir: boolean, diskPath?: string) => {
+    // 0. Protection Guard: Never delete the root archive container node or the backing archive file (V-DATA-01)
+    const clean = name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+    const rootName = (archiveInfo?.filename || "").toLowerCase();
+    const isRootContainer =
+      !clean ||
+      clean === "" ||
+      clean === "." ||
+      clean.toLowerCase() === "archive root" ||
+      clean.toLowerCase() === "staged items" ||
+      name === "Archive Root" ||
+      name === "Staged Items" ||
+      (rootName !== "" && clean.toLowerCase() === rootName) ||
+      (rootName !== "" && name.toLowerCase() === rootName);
+
+    const normSelectedArchive = selectedArchive ? selectedArchive.replace(/\//g, "\\").toLowerCase() : "";
+    const isBackingArchiveFile = (pathToCheck?: string) => {
+      if (!normSelectedArchive || !pathToCheck) return false;
+      return pathToCheck.replace(/\//g, "\\").toLowerCase() === normSelectedArchive;
+    };
+
+    if (isRootContainer || isBackingArchiveFile(diskPath) || isBackingArchiveFile(name)) {
+      if (mode === "compress") {
+        if (onClearStagedItems) {
+          onClearStagedItems();
+        }
+        setLocalEntries([]);
+        setCurrentFolderPath("");
+      }
+      // Safely block physical deletion of the backing archive file
+      return;
+    }
+
     // 1. Determine target disk path if on physical filesystem
     let targetDiskPath = diskPath;
     if (!targetDiskPath) {
@@ -840,9 +872,13 @@ export function ArchiveTreeInspector({
           ? `${diskCurrentPath}${name}`
           : `${diskCurrentPath}\\${name}`;
       } else {
-        const clean = name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
-        targetDiskPath = getDiskPath(clean);
+        const cleanRel = name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
+        targetDiskPath = getDiskPath(cleanRel);
       }
+    }
+
+    if (isBackingArchiveFile(targetDiskPath)) {
+      return;
     }
 
     // 2. If it's a physical disk path, delete to recycle bin
@@ -882,7 +918,6 @@ export function ArchiveTreeInspector({
     }
 
     // 4. Update localEntries for archive/staged entries
-    const clean = name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");
     setLocalEntries((prev) =>
       prev.filter((e) => {
         const eNorm = e.name.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "");

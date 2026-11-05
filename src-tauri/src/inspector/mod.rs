@@ -30,15 +30,34 @@ const DOS_RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL",
     "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
     "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CONIN$", "CONOUT$",
 ];
 
 pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
-    let clean = raw.replace('\\', "/");
-    let trimmed = clean.trim_start_matches('/').trim_start_matches("./");
-    if trimmed.is_empty() || trimmed == "." {
+    if raw.is_empty() {
         return None;
     }
-    let p = Path::new(trimmed);
+    // Reject trailing periods and spaces anywhere on the path (Windows path normalization bypass)
+    if raw.ends_with('.') || raw.ends_with(' ') {
+        return None;
+    }
+
+    let clean = raw.replace('\\', "/");
+    if clean.is_empty() || clean == "." {
+        return None;
+    }
+
+    // Reject absolute paths, root paths, and UNC network paths
+    if clean.starts_with('/') || clean.starts_with('\\') {
+        return None;
+    }
+
+    // Reject drive prefix (e.g. C:, D:)
+    if clean.len() >= 2 && clean.as_bytes()[1] == b':' && clean.as_bytes()[0].is_ascii_alphabetic() {
+        return None;
+    }
+
+    let p = Path::new(&clean);
     let mut normalized = PathBuf::new();
     for component in p.components() {
         match component {
@@ -51,7 +70,11 @@ pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
                 if s.contains(':') || s.contains('\0') {
                     return None;
                 }
-                // Check DOS reserved device names (e.g. CON, AUX, NUL, COM1, regardless of extension)
+                // Reject trailing periods and spaces (Windows path normalization bypass, e.g. "malicious.exe .", "secret.txt.")
+                if s.ends_with('.') || s.ends_with(' ') || s.starts_with(' ') {
+                    return None;
+                }
+                // Check DOS reserved device names (e.g. CON, AUX, NUL, COM1-9, LPT1-9, CONIN$, CONOUT$, regardless of extension)
                 let stem = s.split('.').next().unwrap_or("").trim();
                 if DOS_RESERVED_NAMES.iter().any(|&r| stem.eq_ignore_ascii_case(r)) {
                     return None;
@@ -290,4 +313,74 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
         total_uncompressed_size,
         entries,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parent_traversal() {
+        assert_eq!(sanitize_archive_path("../../evil.txt"), None);
+        assert_eq!(sanitize_archive_path("foo/../../bar.txt"), None);
+        assert_eq!(sanitize_archive_path(".."), None);
+        assert_eq!(sanitize_archive_path("../"), None);
+        assert_eq!(sanitize_archive_path("a/b/../../../c.txt"), None);
+    }
+
+    #[test]
+    fn test_absolute_and_drive_paths() {
+        assert_eq!(sanitize_archive_path("/etc/passwd"), None);
+        assert_eq!(sanitize_archive_path(r"C:\Windows\System32\calc.exe"), None);
+        assert_eq!(sanitize_archive_path("C:/Windows/System32/calc.exe"), None);
+        assert_eq!(sanitize_archive_path(r"\\server\share\file.txt"), None);
+        assert_eq!(sanitize_archive_path(r"\Windows\System32"), None);
+    }
+
+    #[test]
+    fn test_trailing_period_and_space_evasion() {
+        assert_eq!(sanitize_archive_path("malicious.exe ."), None);
+        assert_eq!(sanitize_archive_path("secret.txt."), None);
+        assert_eq!(sanitize_archive_path("folder./file.txt"), None);
+        assert_eq!(sanitize_archive_path("folder /file.txt"), None);
+        assert_eq!(sanitize_archive_path("evil.txt "), None);
+    }
+
+    #[test]
+    fn test_dos_reserved_devices() {
+        assert_eq!(sanitize_archive_path("CON"), None);
+        assert_eq!(sanitize_archive_path("NUL"), None);
+        assert_eq!(sanitize_archive_path("CONIN$"), None);
+        assert_eq!(sanitize_archive_path("CONOUT$"), None);
+        assert_eq!(sanitize_archive_path("AUX.txt"), None);
+        assert_eq!(sanitize_archive_path("sub/con.zip"), None);
+        assert_eq!(sanitize_archive_path("PRN"), None);
+        assert_eq!(sanitize_archive_path("COM1"), None);
+        assert_eq!(sanitize_archive_path("com9.dat"), None);
+        assert_eq!(sanitize_archive_path("LPT1"), None);
+        assert_eq!(sanitize_archive_path("lpt5.txt"), None);
+    }
+
+    #[test]
+    fn test_valid_paths() {
+        let valid_nested = sanitize_archive_path("folder/subfolder/file.txt");
+        assert!(valid_nested.is_some());
+        assert_eq!(valid_nested.unwrap(), PathBuf::from("folder").join("subfolder").join("file.txt"));
+
+        let valid_curdir = sanitize_archive_path("./normal.txt");
+        assert!(valid_curdir.is_some());
+        assert_eq!(valid_curdir.unwrap(), PathBuf::from("normal.txt"));
+
+        let normal = sanitize_archive_path("normal.txt");
+        assert!(normal.is_some());
+        assert_eq!(normal.unwrap(), PathBuf::from("normal.txt"));
+    }
+
+    #[test]
+    fn test_empty_and_dot_paths() {
+        assert_eq!(sanitize_archive_path(""), None);
+        assert_eq!(sanitize_archive_path("   "), None);
+        assert_eq!(sanitize_archive_path("."), None);
+        assert_eq!(sanitize_archive_path("./"), None);
+    }
 }

@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter};
 use crate::types::{ArchiveEntryItem, CompressProgress};
 use crate::inspector::{safe_atomic_rename, get_optimal_read_slice, get_optimal_write_buffer};
 use crate::crypto::ChunkedAesWriter;
-use super::{is_compression_cancelled, calculate_target_threads, calculate_zstd_level, get_io_buffers};
+use super::{is_compression_cancelled, calculate_target_threads, calculate_zstd_level, get_io_buffers, is_gamer_preset};
 use super::utils::{is_precompressed_file, is_path_excluded};
 
 pub fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<ArchiveEntryItem>, depth: usize) {
@@ -303,7 +303,14 @@ pub fn compress_bay(
         let parent_dir = first_path.parent().unwrap_or_else(|| Path::new("."));
 
         let algo_lower = algorithm.to_lowercase();
-        let is_gamer = algo_lower.contains("gamer") || algo_lower.contains("bayg");
+        let ext_is_gamer = output_path.extension()
+            .and_then(|s| s.to_str())
+            .map(is_gamer_preset)
+            .unwrap_or(false);
+        let is_gamer = is_gamer_preset(&algo_lower)
+            || algo_lower.contains("bayg") 
+            || algo_lower.contains("gamer") 
+            || ext_is_gamer;
         let zstd_level = calculate_zstd_level(slider_value, is_gamer);
         let mut bytes_processed: u64 = 0;
         let mut last_emit = Instant::now();

@@ -1,4 +1,4 @@
-# 📦 Bayzip (v2.3.1)
+# 📦 Bayzip (v2.3.2)
 
 **Bayzip** is a modern, high-performance file archiver for Windows built with **Tauri 2**, **Rust**, and **React**. Engineered for maximum hardware utilization, it combines multi-threaded compression algorithms (Zstandard, Brotli, LZ4, LZMA2), a hierarchical directory tree explorer, zero-disk safe file previewing, zero-allocation streaming encryption, destination-aware storage buffer capping, smart pre-compressed media bypass, and seamless Windows File Explorer shell integration.
 
@@ -83,7 +83,7 @@
 - **In-Workspace Advanced Options Sidebar (Right Panel)**:
   - Accessible Advance Section drawer right inside the workspace canvas.
   - Real-time archive name editing and destination directory targeting.
-  - Format selection (`.bay`, `.bay_gamer`, `.zip`, `.tar.zst`, `.7z`), hardware core allocation slider, solid compression settings, encryption passwords, and smart media bypass.
+  - Format selection (`.bay`, `.bayg`, `.zip`, `.tar.zst`, `.7z`), hardware core allocation slider, solid compression settings, encryption passwords, and smart media bypass.
 - **Dual Real-Time Progress & Loading Indicators**:
   - **Running Emerald Bottom Progress Line**: High-visibility glowing emerald line across the bottom viewport edge (`h-1.5 bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.7)]`) with smooth shimmer sweep animation during active operations.
   - **Floating Pop-up / Pop-down Progress HUD**: Docked card in the bottom-right corner (`fixed bottom-6 right-6`) displaying active operation status, current filename, processed/total byte telemetry, and one-click operation cancellation.

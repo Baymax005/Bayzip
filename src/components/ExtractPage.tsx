@@ -28,7 +28,12 @@ export interface ExtractPageProps {
   handleIncludeAll: () => void;
   handleSelectArchive: () => void;
   handleSelectDestFolder: () => void;
-  handleExtract: () => void;
+  handleExtract: (options?: {
+    destination?: string;
+    extractToSubfolder?: boolean;
+    openFolderOnExtract?: boolean;
+    password?: string;
+  }) => Promise<void> | void;
   handleCancelExtract: () => void;
   onClearArchive: () => void;
   selectArchive: (filePath: string, pwd?: string) => void;
@@ -521,7 +526,7 @@ export function ExtractPage({
         <button
           type="button"
           disabled={isExtracting && isCancellingExtract}
-          onClick={isExtracting ? handleCancelExtract : handleExtract}
+          onClick={isExtracting ? handleCancelExtract : () => handleExtract()}
           className={`px-8 py-2.5 font-semibold rounded-md shadow-sm transition-all text-sm flex items-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
             isExtracting
               ? "bg-red-950/40 hover:bg-red-900/60 text-[#FF99A4] hover:text-[#FFB3BA] border border-red-800/60 hover:border-red-600"

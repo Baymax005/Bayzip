@@ -1042,13 +1042,36 @@ function App() {
     }
   };
 
-  const handleExtract = async () => {
+  const handleExtract = async (options?: {
+    destination?: string;
+    extractToSubfolder?: boolean;
+    openFolderOnExtract?: boolean;
+    password?: string;
+  }) => {
     if (!selectedArchive) {
       await handleSelectArchive();
       return;
     }
 
-    if (archiveInfo?.is_encrypted && !extractPassword.trim()) {
+    // Resolve parameters from WorkspaceExtractModal options or fallback to component state (V-INT-01)
+    const effectivePassword = options?.password !== undefined ? options.password : extractPassword;
+    const effectiveDest = options?.destination !== undefined && options.destination.trim() !== ""
+      ? options.destination
+      : extractDest;
+    const effectiveSubfolder = options?.extractToSubfolder !== undefined
+      ? options.extractToSubfolder
+      : extractToSubfolder;
+    const effectiveOpenFolder = options?.openFolderOnExtract !== undefined
+      ? options.openFolderOnExtract
+      : openFolderOnExtract;
+
+    // Synchronize parent state with options passed from modal
+    if (options?.destination && options.destination.trim() !== "") setExtractDest(options.destination);
+    if (options?.password !== undefined) setExtractPassword(options.password);
+    if (options?.extractToSubfolder !== undefined) setExtractToSubfolder(options.extractToSubfolder);
+    if (options?.openFolderOnExtract !== undefined) setOpenFolderOnExtract(options.openFolderOnExtract);
+
+    if (archiveInfo?.is_encrypted && !effectivePassword.trim()) {
       setExtractError("Password required: This archive is encrypted. Please enter the password to extract.");
       setIsPasswordPromptOpen(true);
       return;
@@ -1064,8 +1087,8 @@ function App() {
     });
 
     try {
-      let finalDest = extractDest;
-      if (extractToSubfolder) {
+      let finalDest = effectiveDest;
+      if (effectiveSubfolder) {
         // Check if all files in the archive already share a single common top-level root folder
         const entries = archiveInfo?.entries || [];
         let hasSingleRoot = false;
@@ -1097,7 +1120,7 @@ function App() {
         if (!hasSingleRoot) {
           const fallbackName = selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "archive";
           const stem = getArchiveStemName(archiveInfo?.filename || fallbackName);
-          const cleanDest = extractDest.replace(/[/\\]+$/, "");
+          const cleanDest = effectiveDest.replace(/[/\\]+$/, "");
           finalDest = `${cleanDest}/${stem}`;
         }
       }
@@ -1105,16 +1128,16 @@ function App() {
       const res = await invoke<ExtractResult>("extract_archive", {
         archivePath: selectedArchive,
         destination: finalDest,
-        password: extractPassword.trim() ? extractPassword.trim() : undefined,
+        password: effectivePassword.trim() ? effectivePassword.trim() : undefined,
         expectedSize: archiveInfo?.total_uncompressed_size || archiveInfo?.size || undefined,
-        extractToSubfolder: extractToSubfolder,
+        extractToSubfolder: effectiveSubfolder,
         excludedPaths: excludedPaths.size > 0 ? Array.from(excludedPaths) : undefined,
       });
 
       setExtractResult(res);
       setIsPasswordPromptOpen(false);
 
-      if (openFolderOnExtract && res.output_directory) {
+      if (effectiveOpenFolder && res.output_directory) {
         revealItemInDir(res.output_directory).catch(() => { });
       }
     } catch (err) {

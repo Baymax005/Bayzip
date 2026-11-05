@@ -2,6 +2,33 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.3.2] - 2026-11-05
+
+### 🛡️ Security, Stream Integrity & Path Sanitization Hardening (Phase 1 & Phase 2)
+- **Pre-Extraction Zip-Slip Defense (`V-SEC-01` / `extractor.rs`)**:
+  - `extract_with_system_tar` now runs `tar.exe -tf` to inspect the archive Table of Contents before extraction begins, validating all paths and aborting immediately if directory traversal (`..`, root paths, drive prefixes) is detected before writing to disk.
+- **Deep Path Sanitization Hardening (`V-SEC-08` / `inspector/mod.rs`)**:
+  - `sanitize_archive_path` now blocks Windows path normalization bypasses (trailing periods and spaces, e.g. `file.exe .`), root/UNC paths, Windows drive prefixes, NTFS Alternate Data Streams (`:`), null bytes, and all DOS reserved devices (including `CONIN$`, `CONOUT$`, `CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`).
+- **Strict Container Stream Alignment & Premature EOF Trapping (`V-SEC-02` / `extractor.rs`)**:
+  - Implemented `drain_bay_entry_bytes`, verifying exact consumption of `entry.uncompressed_size` bytes when draining excluded entries during streaming extraction. Catches premature EOF and stream read errors immediately, preventing container header desynchronization.
+- **Bounded Trailer TOC Memory Allocation (`V-SEC-03` / `inspector/bay.rs`)**:
+  - Enforced a strict 64 MB upper-bound memory cap (`MAX_TOC_SIZE`) and file-size bounds checks on `BAYTOC\x02\x00` and `BAYETOC\x03` trailers, safely rejecting corrupted or malicious archives before heap allocation can trigger out-of-memory crashes.
+- **Root Container Archive Deletion Safeguard (`V-DATA-01` / `ArchiveTreeInspector.tsx`)**:
+  - Guarded `handleDeleteItem` against deleting root container nodes or matching the backing archive file on disk, safely limiting deletion to clearing in-memory staged items.
+
+### ⚙️ Concurrency, OS Priority & Performance Hardening
+- **Thread-Local Priority Restoration (`V-CONC-01` / `priority.rs`)**:
+  - Refactored `ScopedPriorityGuard` to store calling thread's native Win32 thread priority (`GetThreadPriority`) and restore it on `Drop` specifically for that thread. Completely removed the global atomic refcount coupling, preventing Tokio worker threads from having their priority permanently depressed.
+- **Asynchronous System Specs Discovery (`V-PERF-04` / `lib.rs`)**:
+  - Converted `get_system_specs` to an `async fn` offloading hardware metric queries to `tauri::async_runtime::spawn_blocking`, ensuring the main Tauri IPC thread never blocks during app launch or settings queries.
+- **Gamer Preset Cap & Clean `.bayg` Unification (`V-PERF-05` / `compressor/`)**:
+  - Cleanly removed deprecated `.bay_gamer` across active production code and documentation, standardizing on **`.bayg`** as the official Gamer Preset format name.
+  - Normalized format matching across `bayg` and `gamer`, strictly enforcing Zstandard Level 3 caps across 75% and 100% hardware allocations (Rule 4 compliance).
+- **Desktop Extraction Modal Integration (`V-INT-01` / `App.tsx` & `ExtractPage.tsx`)**:
+  - Wired custom destination path, subfolder toggle, auto-open directory, and decryption password from `WorkspaceExtractModal` directly into backend extraction commands.
+- **Embedded Unit Test Suite**:
+  - 27 unit tests embedded natively across core modules (`cargo test --lib` passes in 0.00s with 0 failures).
+
 ## [v2.3.1] - 2026-10-26
 
 ### ⚡ Unified Desktop Archiver Workspace & Modal Extraction

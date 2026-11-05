@@ -80,6 +80,193 @@ pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem
     (items, count, total_size)
 }
 
+/// Maximum allowable memory allocation for archive Table of Contents (TOC) metadata (64 MB).
+pub const MAX_TOC_SIZE: u64 = 64 * 1024 * 1024;
+
+pub trait BayTrailerSource {
+    fn with_file<R, F: FnOnce(&mut File) -> Result<R, String>>(&mut self, f: F) -> Result<R, String>;
+}
+
+impl BayTrailerSource for &Path {
+    fn with_file<R, F: FnOnce(&mut File) -> Result<R, String>>(&mut self, f: F) -> Result<R, String> {
+        let mut file = File::open(self).map_err(|e| format!("Failed to open .bay archive: {}", e))?;
+        f(&mut file)
+    }
+}
+
+impl BayTrailerSource for std::path::PathBuf {
+    fn with_file<R, F: FnOnce(&mut File) -> Result<R, String>>(&mut self, f: F) -> Result<R, String> {
+        let mut file = File::open(self).map_err(|e| format!("Failed to open .bay archive: {}", e))?;
+        f(&mut file)
+    }
+}
+
+impl BayTrailerSource for &std::path::PathBuf {
+    fn with_file<R, F: FnOnce(&mut File) -> Result<R, String>>(&mut self, f: F) -> Result<R, String> {
+        let mut file = File::open(self).map_err(|e| format!("Failed to open .bay archive: {}", e))?;
+        f(&mut file)
+    }
+}
+
+impl BayTrailerSource for &mut File {
+    fn with_file<R, F: FnOnce(&mut File) -> Result<R, String>>(&mut self, f: F) -> Result<R, String> {
+        f(self)
+    }
+}
+
+impl BayTrailerSource for File {
+    fn with_file<R, F: FnOnce(&mut File) -> Result<R, String>>(&mut self, f: F) -> Result<R, String> {
+        f(self)
+    }
+}
+
+impl BayTrailerSource for &str {
+    fn with_file<R, F: FnOnce(&mut File) -> Result<R, String>>(&mut self, f: F) -> Result<R, String> {
+        let mut file = File::open(self).map_err(|e| format!("Failed to open .bay archive: {}", e))?;
+        f(&mut file)
+    }
+}
+
+/// Reads and parses the instant Table of Contents (TOC) trailer from a stream with known length.
+///
+/// Enforces strict bounded memory allocation safety caps (V-SEC-03):
+/// 1. Verifies declared TOC/ETOC size does not exceed `MAX_TOC_SIZE` (64 MB).
+/// 2. Verifies declared TOC/ETOC size does not exceed the remaining archive file bounds.
+/// Corrupted or maliciously crafted archives declaring oversized TOCs are rejected with an explicit error
+/// before heap allocation occurs.
+pub fn read_bay_trailer_stream<R: Read + Seek>(
+    reader: &mut R,
+    file_len: u64,
+    password: Option<&str>,
+) -> Result<(Vec<ArchiveEntryItem>, usize, u64), String> {
+    if file_len < 16 {
+        return Err("Archive file too small to contain a BAYTOC or BAYETOC trailer".into());
+    }
+
+    reader.seek(std::io::SeekFrom::End(-8))
+        .map_err(|e| format!("Failed to seek archive trailer: {}", e))?;
+    let mut trailer_magic = [0u8; 8];
+    reader.read_exact(&mut trailer_magic)
+        .map_err(|e| format!("Failed to read archive trailer magic: {}", e))?;
+
+    if &trailer_magic == b"BAYTOC\x02\x00" {
+        reader.seek(std::io::SeekFrom::End(-16))
+            .map_err(|e| format!("Failed to seek BAYTOC length: {}", e))?;
+        let mut len_bytes = [0u8; 8];
+        reader.read_exact(&mut len_bytes)
+            .map_err(|e| format!("Failed to read BAYTOC length: {}", e))?;
+        let toc_len = u64::from_le_bytes(len_bytes);
+
+        // V-SEC-03: Enforce strict bounded allocation safety checks
+        if toc_len == 0 {
+            return Err("Malformed archive: BAYTOC length declared as 0 bytes".into());
+        }
+        if toc_len > MAX_TOC_SIZE {
+            return Err(format!(
+                "Malformed archive: BAYTOC length ({} bytes) exceeds safety limit of {} bytes (64 MB)",
+                toc_len, MAX_TOC_SIZE
+            ));
+        }
+        if toc_len > file_len.saturating_sub(16) {
+            return Err(format!(
+                "Malformed archive: BAYTOC length ({} bytes) exceeds total archive file bounds ({} bytes)",
+                toc_len, file_len
+            ));
+        }
+
+        // Seek and allocate only after bounds verification passes
+        reader.seek(std::io::SeekFrom::End(-16 - toc_len as i64))
+            .map_err(|e| format!("Failed to seek to BAYTOC data: {}", e))?;
+        let mut toc_bytes = vec![0u8; toc_len as usize];
+        reader.read_exact(&mut toc_bytes)
+            .map_err(|e| format!("Failed to read BAYTOC payload: {}", e))?;
+
+        let entries: Vec<ArchiveEntryItem> = serde_json::from_slice(&toc_bytes)
+            .map_err(|e| format!("Failed to parse BAYTOC JSON metadata: {}", e))?;
+        let count = entries.len();
+        let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
+        return Ok((entries, count, total_uncompressed));
+    } else if &trailer_magic == b"BAYETOC\x03" {
+        let pwd = match password {
+            Some(p) if !p.trim().is_empty() => p.trim(),
+            _ => return Err("Password required: Encrypted BAYETOC trailer detected".into()),
+        };
+
+        if file_len < 44 {
+            return Err("Archive too small for BAYETOC trailer".into());
+        }
+
+        reader.seek(std::io::SeekFrom::End(-44))
+            .map_err(|e| format!("Failed to seek BAYETOC header: {}", e))?;
+        let mut meta = [0u8; 36];
+        reader.read_exact(&mut meta)
+            .map_err(|e| format!("Failed to read BAYETOC metadata: {}", e))?;
+
+        let mut len_bytes = [0u8; 8];
+        len_bytes.copy_from_slice(&meta[0..8]);
+        let enc_toc_len = u64::from_le_bytes(len_bytes);
+        let salt = &meta[8..24];
+        let nonce_bytes = &meta[24..36];
+
+        // V-SEC-03: Enforce strict bounded allocation safety checks
+        if enc_toc_len == 0 {
+            return Err("Malformed archive: Encrypted BAYETOC length declared as 0 bytes".into());
+        }
+        if enc_toc_len > MAX_TOC_SIZE {
+            return Err(format!(
+                "Malformed archive: Encrypted BAYETOC length ({} bytes) exceeds safety limit of {} bytes (64 MB)",
+                enc_toc_len, MAX_TOC_SIZE
+            ));
+        }
+        if enc_toc_len > file_len.saturating_sub(44) {
+            return Err(format!(
+                "Malformed archive: Encrypted BAYETOC length ({} bytes) exceeds total archive file bounds ({} bytes)",
+                enc_toc_len, file_len
+            ));
+        }
+
+        // Seek and allocate only after bounds verification passes
+        reader.seek(std::io::SeekFrom::End(-44 - enc_toc_len as i64))
+            .map_err(|e| format!("Failed to seek to encrypted BAYETOC data: {}", e))?;
+        let mut enc_bytes = vec![0u8; enc_toc_len as usize];
+        reader.read_exact(&mut enc_bytes)
+            .map_err(|e| format!("Failed to read encrypted BAYETOC payload: {}", e))?;
+
+        let key_bytes = derive_bay_key(pwd, salt);
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(nonce_bytes);
+
+        let decrypted = cipher.decrypt(nonce, enc_bytes.as_ref())
+            .map_err(|_| "Incorrect password or corrupted BAYETOC payload".to_string())?;
+
+        let entries: Vec<ArchiveEntryItem> = serde_json::from_slice(&decrypted)
+            .map_err(|e| format!("Failed to parse decrypted BAYETOC metadata: {}", e))?;
+        let count = entries.len();
+        let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
+        return Ok((entries, count, total_uncompressed));
+    }
+
+    Err("No valid BAYTOC or BAYETOC trailer magic found at archive EOF".into())
+}
+
+pub fn read_bay_trailer_from_file(
+    file: &mut File,
+    password: Option<&str>,
+) -> Result<(Vec<ArchiveEntryItem>, usize, u64), String> {
+    let file_len = file.metadata()
+        .map(|m| m.len())
+        .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    read_bay_trailer_stream(file, file_len, password)
+}
+
+pub fn read_bay_trailer<S: BayTrailerSource>(
+    mut source: S,
+    password: Option<&str>,
+) -> Result<(Vec<ArchiveEntryItem>, usize, u64), String> {
+    source.with_file(|file| read_bay_trailer_from_file(file, password))
+}
+
 pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut file = match File::open(p) {
         Ok(f) => f,
@@ -88,72 +275,14 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
 
     // Instant TOC (Table of Contents) check at EOF:
     // If BAYTOC or BAYETOC trailer exists, we read metadata in < 1ms without decompressing gigabytes!
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if file_len >= 24 {
-        if file.seek(std::io::SeekFrom::End(-8)).is_ok() {
-            let mut trailer_magic = [0u8; 8];
-            if file.read_exact(&mut trailer_magic).is_ok() {
-                if &trailer_magic == b"BAYTOC\x02\x00" {
-                    if file.seek(std::io::SeekFrom::End(-16)).is_ok() {
-                        let mut len_bytes = [0u8; 8];
-                        if file.read_exact(&mut len_bytes).is_ok() {
-                            let toc_len = u64::from_le_bytes(len_bytes);
-                            if toc_len > 0 && toc_len < file_len - 16 {
-                                if file.seek(std::io::SeekFrom::End(-16 - toc_len as i64)).is_ok() {
-                                    let mut toc_bytes = vec![0u8; toc_len as usize];
-                                    if file.read_exact(&mut toc_bytes).is_ok() {
-                                        if let Ok(entries) = serde_json::from_slice::<Vec<ArchiveEntryItem>>(&toc_bytes) {
-                                            let count = entries.len();
-                                            let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
-                                            return (entries, count, total_uncompressed);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if &trailer_magic == b"BAYETOC\x03" {
-                    let pwd = match password {
-                        Some(p) if !p.trim().is_empty() => p.trim(),
-                        _ => return (Vec::new(), 0, 0),
-                    };
-
-                    // Seek to SeekFrom::End(-44):
-                    // Layout: [enc_toc_bytes][enc_toc_len: 8B][salt: 16B][nonce: 12B][b"BAYETOC\x03": 8B]
-                    // Total trailer length after enc_toc_bytes = 44 bytes.
-                    if file_len >= 44 && file.seek(std::io::SeekFrom::End(-44)).is_ok() {
-                        let mut meta = [0u8; 36];
-                        if file.read_exact(&mut meta).is_ok() {
-                            let mut len_bytes = [0u8; 8];
-                            len_bytes.copy_from_slice(&meta[0..8]);
-                            let enc_toc_len = u64::from_le_bytes(len_bytes);
-                            let salt = &meta[8..24];
-                            let nonce_bytes = &meta[24..36];
-
-                            if enc_toc_len > 0 && enc_toc_len < file_len - 44 {
-                                if file.seek(std::io::SeekFrom::End(-44 - enc_toc_len as i64)).is_ok() {
-                                    let mut enc_bytes = vec![0u8; enc_toc_len as usize];
-                                    if file.read_exact(&mut enc_bytes).is_ok() {
-                                        let key_bytes = derive_bay_key(pwd, salt);
-                                        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-                                        let cipher = Aes256Gcm::new(key);
-                                        let nonce = Nonce::from_slice(nonce_bytes);
-
-                                        if let Ok(decrypted) = cipher.decrypt(nonce, enc_bytes.as_ref()) {
-                                            if let Ok(entries) = serde_json::from_slice::<Vec<ArchiveEntryItem>>(&decrypted) {
-                                                let count = entries.len();
-                                                let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
-                                                return (entries, count, total_uncompressed);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    return (Vec::new(), 0, 0);
-                }
-            }
+    match read_bay_trailer_from_file(&mut file, password) {
+        Ok(result) => return result,
+        Err(e) if e.contains("safety limit") || e.contains("exceeds total archive file bounds") => {
+            // Malformed/malicious archive declaring oversized TOC - safely reject
+            return (Vec::new(), 0, 0);
+        }
+        Err(_) => {
+            // No trailer or invalid password - fall back to stream decompression
         }
     }
 
@@ -376,5 +505,167 @@ pub fn preview_bay_entry_bytes(path: &Path, entry_name: &str, password: Option<&
         let _ = file.seek(std::io::SeekFrom::Start(0));
         let decoder = zstd::stream::Decoder::new(file).map_err(|e| e.to_string())?;
         read_bay_entry_from_stream(decoder, entry_name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_read_bay_trailer_rejects_oversized_toc() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(b"DUMMY_ARCHIVE_DATA_12345678");
+        let oversized_len: u64 = 100 * 1024 * 1024;
+        buffer.extend_from_slice(&oversized_len.to_le_bytes());
+        buffer.extend_from_slice(b"BAYTOC\x02\x00");
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = Cursor::new(buffer);
+        let result = read_bay_trailer_stream(&mut cursor, file_len, None);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("exceeds safety limit of 67108864 bytes (64 MB)"));
+    }
+
+    #[test]
+    fn test_read_bay_trailer_rejects_toc_exceeding_file_bounds() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(b"SMALL_ARCHIVE");
+        let bounds_exceeding_len: u64 = 1000;
+        buffer.extend_from_slice(&bounds_exceeding_len.to_le_bytes());
+        buffer.extend_from_slice(b"BAYTOC\x02\x00");
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = Cursor::new(buffer);
+        let result = read_bay_trailer_stream(&mut cursor, file_len, None);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("exceeds total archive file bounds"));
+    }
+
+    #[test]
+    fn test_read_bay_trailer_rejects_zero_toc_len() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(b"SOME_DATA_FOR_ARCHIVE");
+        let zero_len: u64 = 0;
+        buffer.extend_from_slice(&zero_len.to_le_bytes());
+        buffer.extend_from_slice(b"BAYTOC\x02\x00");
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = Cursor::new(buffer);
+        let result = read_bay_trailer_stream(&mut cursor, file_len, None);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("BAYTOC length declared as 0 bytes"));
+    }
+
+    #[test]
+    fn test_read_bay_trailer_valid_toc() {
+        let entries = vec![
+            ArchiveEntryItem {
+                name: "test.txt".to_string(),
+                size: 1234,
+                is_dir: false,
+            },
+            ArchiveEntryItem {
+                name: "folder/".to_string(),
+                size: 0,
+                is_dir: true,
+            },
+        ];
+        let json_bytes = serde_json::to_vec(&entries).unwrap();
+        let toc_len = json_bytes.len() as u64;
+
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(b"REAL_BAY_STREAM_PAYLOAD");
+        buffer.extend_from_slice(&json_bytes);
+        buffer.extend_from_slice(&toc_len.to_le_bytes());
+        buffer.extend_from_slice(b"BAYTOC\x02\x00");
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = Cursor::new(buffer);
+        let result = read_bay_trailer_stream(&mut cursor, file_len, None);
+
+        assert!(result.is_ok());
+        let (parsed_entries, count, total_size) = result.unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(total_size, 1234);
+        assert_eq!(parsed_entries[0].name, "test.txt");
+        assert_eq!(parsed_entries[1].name, "folder/");
+    }
+
+    #[test]
+    fn test_read_bay_trailer_rejects_oversized_encrypted_toc() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(b"DUMMY_ENCRYPTED_STREAM_PAYLOAD");
+        let oversized_len: u64 = 100 * 1024 * 1024;
+        buffer.extend_from_slice(&oversized_len.to_le_bytes()); // 8 bytes
+        buffer.extend_from_slice(&[0x11u8; 16]); // salt 16 bytes
+        buffer.extend_from_slice(&[0x22u8; 12]); // nonce 12 bytes
+        buffer.extend_from_slice(b"BAYETOC\x03"); // 8 bytes
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = Cursor::new(buffer);
+        let result = read_bay_trailer_stream(&mut cursor, file_len, Some("password123"));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Encrypted BAYETOC length"));
+        assert!(err.contains("exceeds safety limit of 67108864 bytes (64 MB)"));
+    }
+
+    #[test]
+    fn test_read_bay_trailer_rejects_encrypted_toc_exceeding_file_bounds() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(b"SHORT");
+        let bounds_exceeding_len: u64 = 5000;
+        buffer.extend_from_slice(&bounds_exceeding_len.to_le_bytes());
+        buffer.extend_from_slice(&[0x11u8; 16]);
+        buffer.extend_from_slice(&[0x22u8; 12]);
+        buffer.extend_from_slice(b"BAYETOC\x03");
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = Cursor::new(buffer);
+        let result = read_bay_trailer_stream(&mut cursor, file_len, Some("password123"));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Encrypted BAYETOC length"));
+        assert!(err.contains("exceeds total archive file bounds"));
+    }
+
+    #[test]
+    fn test_read_bay_trailer_rejects_zero_encrypted_toc_len() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(b"DUMMY_PAYLOAD");
+        let zero_len: u64 = 0;
+        buffer.extend_from_slice(&zero_len.to_le_bytes());
+        buffer.extend_from_slice(&[0x11u8; 16]);
+        buffer.extend_from_slice(&[0x22u8; 12]);
+        buffer.extend_from_slice(b"BAYETOC\x03");
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = Cursor::new(buffer);
+        let result = read_bay_trailer_stream(&mut cursor, file_len, Some("password123"));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Encrypted BAYETOC length declared as 0 bytes"));
+    }
+
+    #[test]
+    fn test_read_bay_trailer_rejects_file_too_small() {
+        let buffer = vec![0u8; 10];
+        let mut cursor = Cursor::new(buffer);
+        let result = read_bay_trailer_stream(&mut cursor, 10, None);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Archive file too small"));
     }
 }

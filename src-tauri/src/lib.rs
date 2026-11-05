@@ -47,8 +47,7 @@ fn set_smart_media_bypass(app: AppHandle, enabled: bool) {
     let _ = app.emit("smart_media_bypass_changed", enabled);
 }
 
-#[tauri::command]
-fn get_system_specs() -> SystemSpecs {
+pub fn collect_system_specs() -> SystemSpecs {
     // Ultra-fast query: only refresh memory, do not scan every process on the OS
     let mut sys = System::new();
     sys.refresh_memory();
@@ -64,6 +63,17 @@ fn get_system_specs() -> SystemSpecs {
         free_ram_gb,
         cpu_cores,
     }
+}
+
+#[tauri::command]
+async fn get_system_specs() -> SystemSpecs {
+    tauri::async_runtime::spawn_blocking(collect_system_specs)
+        .await
+        .unwrap_or_else(|_| SystemSpecs {
+            total_ram_gb: 8.0,
+            free_ram_gb: 4.0,
+            cpu_cores: 4,
+        })
 }
 
 #[tauri::command]
@@ -380,4 +390,17 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collect_system_specs() {
+        let specs = collect_system_specs();
+        assert!(specs.cpu_cores >= 1);
+        assert!(specs.total_ram_gb > 0.0);
+        assert!(specs.free_ram_gb >= 0.0);
+    }
 }

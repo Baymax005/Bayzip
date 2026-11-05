@@ -101,6 +101,41 @@ pub fn is_path_excluded(raw_path: &str, excluded: Option<&std::collections::Hash
     }
 }
 
+/// Strictly drains exactly `bytes_to_drain` uncompressed bytes from the archive decompressor.
+/// If EOF or an I/O error occurs before all bytes are drained, returns an explicit error
+/// to abort extraction immediately and prevent container stream desynchronization (V-SEC-02).
+pub fn drain_bay_entry_bytes<R: Read>(
+    decoder: &mut R,
+    bytes_to_drain: u64,
+    buf: &mut [u8],
+) -> Result<(), String> {
+    let mut remaining = bytes_to_drain;
+    while remaining > 0 {
+        if is_extraction_cancelled() {
+            return Err("Extraction cancelled by user".to_string());
+        }
+        let to_read = (remaining as usize).min(buf.len());
+        match decoder.read(&mut buf[..to_read]) {
+            Ok(0) => {
+                return Err(format!(
+                    "Decompression stream desynchronization: premature EOF encountered while draining entry bytes ({} bytes remaining of {})",
+                    remaining, bytes_to_drain
+                ));
+            }
+            Ok(n) => {
+                remaining -= n as u64;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "I/O error while draining entry payload from decompressor: {}",
+                    e
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn extract_bay_stream<R: Read>(
     mut decoder: R,
     dest_dir: &Path,
@@ -186,15 +221,7 @@ pub fn extract_bay_stream<R: Read>(
         let safe_rel_path = match sanitize_archive_path(&rel_path_str) {
             Some(p) if !is_excluded => p,
             _ => {
-                let mut remaining = file_size;
-                while remaining > 0 {
-                    let to_read = (remaining as usize).min(io_buf.len());
-                    match decoder.read(&mut io_buf[..to_read]) {
-                        Ok(0) => break,
-                        Ok(n) => remaining -= n as u64,
-                        Err(_) => break,
-                    }
-                }
+                drain_bay_entry_bytes(&mut decoder, file_size, &mut io_buf)?;
                 continue;
             }
         };
@@ -205,15 +232,7 @@ pub fn extract_bay_stream<R: Read>(
                     Some(stripped) => {
                         if stripped.as_os_str().is_empty() {
                             let _ = std::fs::create_dir_all(dest_dir);
-                            let mut remaining = file_size;
-                            while remaining > 0 {
-                                let to_read = (remaining as usize).min(io_buf.len());
-                                match decoder.read(&mut io_buf[..to_read]) {
-                                    Ok(0) => break,
-                                    Ok(n) => remaining -= n as u64,
-                                    Err(_) => break,
-                                }
-                            }
+                            drain_bay_entry_bytes(&mut decoder, file_size, &mut io_buf)?;
                             continue;
                         }
                         stripped.to_path_buf()
@@ -230,15 +249,7 @@ pub fn extract_bay_stream<R: Read>(
         if is_dir {
             let _ = std::fs::create_dir_all(&out_path);
             extracted_files.push(out_path.to_string_lossy().to_string());
-            let mut remaining = file_size;
-            while remaining > 0 {
-                let to_read = (remaining as usize).min(io_buf.len());
-                match decoder.read(&mut io_buf[..to_read]) {
-                    Ok(0) => break,
-                    Ok(n) => remaining -= n as u64,
-                    Err(_) => break,
-                }
-            }
+            drain_bay_entry_bytes(&mut decoder, file_size, &mut io_buf)?;
             continue;
         }
 
@@ -1098,6 +1109,43 @@ pub fn extract_with_system_tar(
     app: Option<&AppHandle>,
     excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
+    let _priority_guard = ScopedPriorityGuard::new();
+
+    // Pre-inspect archive entries with tar.exe -tf to strictly prevent Zip-Slip / path traversal before writing to disk
+    let mut check_cmd = Command::new("tar.exe");
+    check_cmd.args(["-tf", &archive_path.to_string_lossy()]);
+    #[cfg(target_os = "windows")]
+    check_cmd.creation_flags(CREATE_NO_WINDOW);
+    check_cmd.stdout(Stdio::piped());
+    check_cmd.stderr(Stdio::piped());
+
+    let output = check_cmd
+        .output()
+        .map_err(|e| format!("Failed to inspect archive with system tar: {}", e))?;
+
+    if !output.status.success() {
+        let err_text = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("System tar archive inspection failed: {}", err_text.trim()));
+    }
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    for raw_line in stdout_str.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let clean = trimmed.replace('\\', "/");
+        if clean == "." || clean == "./" {
+            continue;
+        }
+        if sanitize_archive_path(&clean).is_none() {
+            return Err(format!(
+                "Security violation: archive entry '{}' contains dangerous path or traversal pattern. Extraction aborted.",
+                trimmed
+            ));
+        }
+    }
+
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
 
@@ -1548,4 +1596,75 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
         let _ = refresh_cmd.output();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_drain_bay_entry_bytes_exact_match() {
+        let payload = vec![0xABu8; 1024];
+        let mut cursor = Cursor::new(payload);
+        let mut buf = vec![0u8; 256];
+
+        let result = drain_bay_entry_bytes(&mut cursor, 1024, &mut buf);
+        assert!(result.is_ok());
+        assert_eq!(cursor.position(), 1024);
+    }
+
+    #[test]
+    fn test_drain_bay_entry_bytes_premature_eof() {
+        let payload = vec![0xCDu8; 500];
+        let mut cursor = Cursor::new(payload);
+        let mut buf = vec![0u8; 256];
+
+        let result = drain_bay_entry_bytes(&mut cursor, 1000, &mut buf);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Decompression stream desynchronization: premature EOF encountered"));
+        assert!(err.contains("500 bytes remaining of 1000"));
+    }
+
+    #[test]
+    fn test_drain_bay_entry_bytes_zero_length() {
+        let payload = vec![0xEFu8; 10];
+        let mut cursor = Cursor::new(payload);
+        let mut buf = vec![0u8; 256];
+
+        let result = drain_bay_entry_bytes(&mut cursor, 0, &mut buf);
+        assert!(result.is_ok());
+        assert_eq!(cursor.position(), 0);
+    }
+
+    #[test]
+    fn test_drain_bay_entry_bytes_unaligned_chunking() {
+        let payload = vec![0x42u8; 997];
+        let mut cursor = Cursor::new(payload);
+        let mut buf = vec![0u8; 13]; // Unaligned prime chunk size
+
+        let result = drain_bay_entry_bytes(&mut cursor, 997, &mut buf);
+        assert!(result.is_ok());
+        assert_eq!(cursor.position(), 997);
+    }
+
+    struct FailingReader;
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "simulated broken pipe"))
+        }
+    }
+
+    #[test]
+    fn test_drain_bay_entry_bytes_io_error() {
+        let mut failing = FailingReader;
+        let mut buf = vec![0u8; 64];
+
+        let result = drain_bay_entry_bytes(&mut failing, 100, &mut buf);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("I/O error while draining entry payload from decompressor"));
+        assert!(err.contains("simulated broken pipe"));
+    }
 }

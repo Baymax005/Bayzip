@@ -172,6 +172,15 @@ pub fn get_io_buffers(slider_value: i32) -> (usize, usize) {
     }
 }
 
+/// Returns true if the requested format or preset corresponds to Gamer Preset (.bayg / .bay_gamer).
+pub fn is_gamer_preset(format: &str) -> bool {
+    let clean = format.trim_start_matches('.').to_lowercase();
+    matches!(
+        clean.as_str(),
+        "bayg" | "gamer" | "bay_gamer" | "baygamer"
+    )
+}
+
 pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<(), String> {
     headless_quick_compress_targets(format, &[target_path_str])
 }
@@ -218,7 +227,7 @@ pub fn headless_quick_compress_targets(format: &str, targets: &[&str]) -> Result
         "zip" => headless_quick_compress_zip_items(&valid_paths, &output_path)?,
         "7z" => headless_quick_compress_7z_items(&valid_paths, &output_path)?,
         "tar" => headless_quick_compress_tar_items(&valid_paths, &output_path)?,
-        "bayg" => headless_quick_compress_bay_items(&valid_paths, &output_path, true)?,
+        s if is_gamer_preset(s) => headless_quick_compress_bay_items(&valid_paths, &output_path, true)?,
         _ => headless_quick_compress_bay_items(&valid_paths, &output_path, false)?,
     }
 
@@ -326,7 +335,7 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
         "7z" => {
             compress_7z(&payload.files, &output_path, payload.slider_value, pwd_ref, &app, total_original, excluded_ref)
         },
-        "bayg" => {
+        s if is_gamer_preset(s) => {
             compress_bay(
                 &payload.files,
                 &output_path,
@@ -389,4 +398,57 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
         elapsed_ms: start_time.elapsed().as_millis() as u64,
         error: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_gamer_preset_normalization() {
+        assert!(is_gamer_preset("bayg"));
+        assert!(is_gamer_preset(".bayg"));
+        assert!(is_gamer_preset("gamer"));
+        assert!(is_gamer_preset(".gamer"));
+        assert!(is_gamer_preset("bay_gamer"));
+        assert!(is_gamer_preset(".bay_gamer"));
+        assert!(is_gamer_preset("baygamer"));
+        assert!(is_gamer_preset(".baygamer"));
+        assert!(is_gamer_preset("BAYG"));
+        assert!(is_gamer_preset("BAY_GAMER"));
+        assert!(is_gamer_preset(".BAY_GAMER"));
+
+        assert!(!is_gamer_preset("bay"));
+        assert!(!is_gamer_preset(".bay"));
+        assert!(!is_gamer_preset("zip"));
+        assert!(!is_gamer_preset("7z"));
+        assert!(!is_gamer_preset("tar"));
+    }
+
+    #[test]
+    fn test_calculate_zstd_level_gamer_preset_cap() {
+        // Gamer preset capped at Level 3 across 75% and 100%
+        assert_eq!(calculate_zstd_level(0, true), -2);
+        assert_eq!(calculate_zstd_level(25, true), -2);
+        assert_eq!(calculate_zstd_level(50, true), 1);
+        assert_eq!(calculate_zstd_level(75, true), 3);
+        assert_eq!(calculate_zstd_level(100, true), 3);
+
+        // Standard .bay scales up to 19
+        assert_eq!(calculate_zstd_level(0, false), 1);
+        assert_eq!(calculate_zstd_level(25, false), 3);
+        assert_eq!(calculate_zstd_level(50, false), 6);
+        assert_eq!(calculate_zstd_level(75, false), 9);
+        assert_eq!(calculate_zstd_level(100, false), 19);
+    }
+
+    #[test]
+    fn test_calculate_target_threads_scaling() {
+        let total_cores = 16;
+        assert_eq!(calculate_target_threads(0, total_cores), 1);
+        assert_eq!(calculate_target_threads(25, total_cores), 4);
+        assert_eq!(calculate_target_threads(50, total_cores), 8);
+        assert_eq!(calculate_target_threads(75, total_cores), 12);
+        assert_eq!(calculate_target_threads(100, total_cores), 16);
+    }
 }
