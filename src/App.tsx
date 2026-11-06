@@ -673,17 +673,19 @@ function App() {
             setActiveMode("compress");
             setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
           } else if (cmd.action === "extract") {
-            if (cmd.paths.length === 1 && isArchiveFile(cmd.paths[0])) {
+            const archivePaths = cmd.paths.filter(isArchiveFile);
+            if (archivePaths.length > 0) {
               setActiveMode("extract");
-              selectArchive(cmd.paths[0]);
+              selectArchive(archivePaths[0]);
             } else {
               setActiveMode("compress");
               setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
             }
           } else {
-            if (cmd.paths.length === 1 && isArchiveFile(cmd.paths[0])) {
+            const archivePaths = cmd.paths.filter(isArchiveFile);
+            if (archivePaths.length > 0 && archivePaths.length === cmd.paths.length) {
               setActiveMode("extract");
-              selectArchive(cmd.paths[0]);
+              selectArchive(archivePaths[0]);
             } else {
               setActiveMode("compress");
               setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);

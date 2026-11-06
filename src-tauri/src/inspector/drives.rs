@@ -259,6 +259,9 @@ pub fn rename_path_sync(old_path_str: &str, new_path_str: &str) -> Result<(), St
 }
 
 pub fn copy_path_sync(src_str: &str, dest_parent_dir: &str) -> Result<String, String> {
+    if crate::compressor::is_compression_cancelled() || crate::extractor::is_extraction_cancelled() {
+        return Err("Operation cancelled by user".to_string());
+    }
     let src = std::path::Path::new(src_str);
     if !src.exists() {
         return Err("Source does not exist".to_string());
@@ -298,8 +301,14 @@ pub fn copy_path_sync(src_str: &str, dest_parent_dir: &str) -> Result<String, St
 }
 
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    if crate::compressor::is_compression_cancelled() || crate::extractor::is_extraction_cancelled() {
+        return Err("Operation cancelled by user".to_string());
+    }
     std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
+        if crate::compressor::is_compression_cancelled() || crate::extractor::is_extraction_cancelled() {
+            return Err("Operation cancelled by user".to_string());
+        }
         let entry_path = entry.path();
         let entry_target = dst.join(entry.file_name());
         if entry_path.is_dir() {

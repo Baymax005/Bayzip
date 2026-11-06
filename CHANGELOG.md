@@ -2,6 +2,41 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.3.3] - 2026-11-07
+
+### 🖥️ Desktop Archiver Workspace & Dialog UX (Phase 3)
+- **Titlebar HUD Click Interception (V-UX-04 / WorkspaceHeaderProgressHUD.tsx)**:
+  - Attached `onMouseDown={(e) => e.stopPropagation()}` to Dynamic Island HUD cancel buttons, chevron toggle, and dropdown container, preventing Windows DWM window dragging from intercepting clicks.
+- **Parent Directory (..) Double Navigation Fix (V-UX-07 / ArchiveTreeInspector.tsx)**:
+  - Removed conflicting onClick handlers from all parent directory navigation rows, strictly adhering to Windows Explorer double-click conventions and preventing multi-tier leaps.
+- **Disk VirtualScrollList ScrollTop Reset (V-UX-08 / ArchiveTreeInspector.tsx)**:
+  - Attached dynamic path keys (disk-virtual-pane1-... and disk-virtual-pane2-...) to VirtualScrollList instances, resetting scrollTop to 0 upon folder changes and eliminating blank view states.
+- **WorkspaceExtractModal Keyboard Navigation Hardening (V-UX-09 / WorkspaceExtractModal.tsx)**:
+  - Refined Enter key handling so focused buttons (Browse, Cancel) retain their native click activation without triggering extraction.
+  - Implemented cyclic Tab focus trapping and auto-focusing on destination or password fields.
+- **Context Menu Visual Hierarchy & Deletion Hazard Resolution (V-UX-02 / WorkspaceContextMenu.tsx)**:
+  - Visually distinguished non-destructive queue unstaging (⊖ Remove from Staged in neutral slate/amber) and non-destructive folder/file exclusion (⊘ Exclude Folder in neutral slate/cyan) from destructive physical disk deletion (🗑️ Delete to Recycle Bin with dedicated divider and crimson danger styling).
+- **Multi-Archive CLI / Context Menu Mode Detection (V-UX-01 / App.tsx)**:
+  - Corrected startup argument handling using cmd.paths.filter(isArchiveFile) so multi-archive selection launches cleanly into Extract mode for the selected archives.
+- **Tauri Drag Region Cleanup & Modal Dismissal Standardization (TAURI-01 & UX-02)**:
+  - Removed invalid boolean data-tauri-drag-region="false" attributes across Titlebar, WorkspaceHeader, HUD, and context menus.
+  - Introduced useModalDismiss hook with Escape key and backdrop dismissal across PasswordModal, ResultModals, and WorkspaceExtractModal.
+
+### 🔄 Drag-and-Drop Lifecycle & Live Telemetry Polish (Phase 4)
+- **Persistent Drag Highlight Ghost Elimination (V-UX-03 / useWorkspaceDragDrop.ts)**:
+  - Added `onDragEnd: () => setDragOverTargetKey(null)` to both archive and disk item drag properties, immediately clearing hover highlight ghosts upon drag abort or Escape dismissal.
+- **Root Directory Split Drop Failure & Pane 2 Drop Intent Conflict (V-UX-05 / WorkspaceDualPaneView.tsx)**:
+  - Enabled `targetFolder === ""` to be accepted as the archive root during split-view drops.
+  - Routed file drops directly onto active Pane 2 to staging (onDropDiskItemToStage) rather than navigating Pane 2 away.
+- **Splitter Ratio Pixel Clamping on Narrow Windows (WS-12 / WorkspaceDualPaneView.tsx)**:
+  - Enforced a minimum 200px width per pane during split resizing, preventing panels from squishing into unreadable widths.
+- **Win32 Drive Root Navigation Auto-Formatting (WS-10 / WorkspaceNavBar.tsx)**:
+  - Automatically appends a trailing backslash when typing single drive letters (e.g. C: becomes C:\), preventing Win32 drive relative path bugs.
+- **Cancellable Recursive Directory Copying (V-PERF-06 / drives.rs)**:
+  - Injected cooperative cancellation checks (is_compression_cancelled() and is_extraction_cancelled()) inside copy_dir_recursive and copy_path_sync, allowing users to interrupt multi-gigabyte transfers cleanly.
+- **Throughput & ETA Calculation Stabilization (V-UX-06 / WorkspaceHeaderProgressHUD.tsx)**:
+  - Keyed operation timer resets to total bytes rather than per-file label changes, eliminating speed spikes and continuous ETA resets.
+
 ## [v2.3.2] - 2026-11-05
 
 ### 🛡️ Security, Stream Integrity & Path Sanitization Hardening (Phase 1 & Phase 2)

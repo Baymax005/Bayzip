@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useModalDismiss } from "../../hooks/useModalDismiss";
 
 export interface WorkspaceExtractModalProps {
   isOpen: boolean;
@@ -85,27 +86,29 @@ export const WorkspaceExtractModal: React.FC<WorkspaceExtractModalProps> = ({
   extractError,
   onConfirmExtract,
 }) => {
+  const modalContainerRef = useRef<HTMLDivElement>(null);
+  const destInputRef = useRef<HTMLInputElement>(null);
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const stem = getArchiveStem(archiveFilename);
 
-  // Auto-focus password input if archive is encrypted
-  useEffect(() => {
-    if (isOpen && isEncrypted && passwordInputRef.current) {
-      setTimeout(() => passwordInputRef.current?.focus(), 80);
-    }
-  }, [isOpen, isEncrypted]);
+  const { handleBackdropClick } = useModalDismiss({
+    isOpen,
+    onClose,
+    disabled: isExtracting,
+  });
 
-  // Handle ESC key to dismiss
+  // Auto-focus input when modal opens (password if encrypted, destination otherwise)
   useEffect(() => {
     if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isExtracting) {
-        onClose();
+    const timer = setTimeout(() => {
+      if (isEncrypted && passwordInputRef.current) {
+        passwordInputRef.current.focus();
+      } else if (destInputRef.current) {
+        destInputRef.current.focus();
       }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isExtracting, onClose]);
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [isOpen, isEncrypted]);
 
   if (!isOpen) return null;
 
@@ -125,24 +128,52 @@ export const WorkspaceExtractModal: React.FC<WorkspaceExtractModalProps> = ({
     }
   };
 
-  const handleKeyDownSubmit = (e: React.KeyboardEvent) => {
+  // Keyboard navigation & submission handler
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // 1. Enter key submission (avoid triggering if focused on a button)
     if (e.key === "Enter" && !isExtracting) {
+      const target = e.target as HTMLElement | null;
+      if (target?.tagName === "BUTTON") {
+        return;
+      }
+      e.preventDefault();
       onConfirmExtract();
+      return;
+    }
+
+    // 2. Tab focus trap within modal dialog
+    if (e.key === "Tab" && modalContainerRef.current) {
+      const focusableElements = modalContainerRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusableElements.length > 0) {
+        const firstEl = focusableElements[0];
+        const lastEl = focusableElements[focusableElements.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === firstEl) {
+            e.preventDefault();
+            lastEl.focus();
+          }
+        } else {
+          if (document.activeElement === lastEl) {
+            e.preventDefault();
+            firstEl.focus();
+          }
+        }
+      }
     }
   };
 
   return (
     <div
+      onClick={handleBackdropClick}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150 select-none"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !isExtracting) {
-          onClose();
-        }
-      }}
     >
       <div
+        ref={modalContainerRef}
         className="bg-[#1E1E1E] border border-[#3E3E3E] rounded-xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col text-white font-sans animate-in zoom-in-95 duration-150"
-        onKeyDown={handleKeyDownSubmit}
+        onKeyDown={handleKeyDown}
       >
         {/* Header: Title & Close */}
         <div className="px-5 py-3.5 bg-[#252525] border-b border-[#333333] flex items-center justify-between">
@@ -209,6 +240,7 @@ export const WorkspaceExtractModal: React.FC<WorkspaceExtractModalProps> = ({
             </div>
             <div className="flex items-center space-x-2">
               <input
+                ref={destInputRef}
                 type="text"
                 disabled={isExtracting}
                 value={destination}

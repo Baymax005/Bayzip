@@ -86,12 +86,11 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             </span>
 
             {/* Desktop Archiver Primary Action Toolbar */}
-            <div className="flex items-center space-x-1.5" data-tauri-drag-region="false">
+            <div className="flex items-center space-x-1.5">
               {/* 1. Open Archive Button */}
               {onSelectArchive && (
                 <button
                   type="button"
-                  data-tauri-drag-region="false"
                   onClick={onSelectArchive}
                   className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[#202020] hover:bg-[#282828] text-[#D0D0D0] hover:text-white border border-[#3E3E3E] hover:border-[#60CDFF]/50 transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm"
                   title="Open Archive File from PC (.bay, .zip, .7z, .tar, .rar) [Ctrl+O]"
@@ -107,7 +106,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               {onOpenExtractModal && (
                 <button
                   type="button"
-                  data-tauri-drag-region="false"
                   onClick={onOpenExtractModal}
                   className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm ${
                     hasArchiveLoaded
@@ -125,7 +123,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               {onAddOrCompress && (
                 <button
                   type="button"
-                  data-tauri-drag-region="false"
                   onClick={onAddOrCompress}
                   className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm ${
                     isRightPanelOpen
@@ -143,7 +140,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               {onTestArchive && hasArchiveLoaded && (
                 <button
                   type="button"
-                  data-tauri-drag-region="false"
                   onClick={onTestArchive}
                   className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[#202020] hover:bg-[#282828] text-[#D0D0D0] hover:text-white border border-[#3E3E3E] hover:border-emerald-500/50 transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm"
                   title="Test Archive Integrity"
@@ -186,7 +182,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
 
       {/* Center: Running Operation HUD Banner */}
       {operationProgress && (
-        <div className="flex-1 flex justify-center items-center min-w-0 px-2" data-tauri-drag-region="false">
+        <div className="flex-1 flex justify-center items-center min-w-0 px-2">
           <WorkspaceHeaderProgressHUD
             progress={operationProgress}
             isOpen={isHeaderHUDOpen}
@@ -197,7 +193,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       )}
 
       {/* Right Controls Cluster */}
-      <div className="flex items-center space-x-2 shrink-0" data-tauri-drag-region="false">
+      <div className="flex items-center space-x-2 shrink-0">
 
         {/* + New Folder Button */}
         {onStartNewFolder && (
@@ -310,7 +306,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             </div>
 
             {/* Native Windows Titlebar Window Controls */}
-            <div className="flex items-center h-full ml-1 border-l border-[#333333] pl-1.5 space-x-0.5" data-tauri-drag-region="false">
+            <div className="flex items-center h-full ml-1 border-l border-[#333333] pl-1.5 space-x-0.5">
               {/* Minimize */}
               <button
                 type="button"

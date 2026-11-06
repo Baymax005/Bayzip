@@ -66,8 +66,11 @@ export const WorkspaceNavBar: React.FC<WorkspaceNavBarProps> = ({
   }, [isEditingPath]);
 
   const handleCommitPath = () => {
-    const trimmed = inputPath.trim();
+    let trimmed = inputPath.trim();
     if (trimmed) {
+      if (/^[a-zA-Z]:$/.test(trimmed)) {
+        trimmed = `${trimmed}\\`;
+      }
       onNavigate(trimmed);
     }
     setIsEditingPath(false);

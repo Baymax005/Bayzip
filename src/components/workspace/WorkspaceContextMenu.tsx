@@ -88,7 +88,6 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
         style={{ left: `${clampedX}px`, top: `${clampedY}px` }}
         className="fixed z-[130] min-w-[220px] bg-[#1E1E1E]/95 backdrop-blur-md border border-[#3E3E3E] rounded-lg shadow-2xl p-1 text-xs select-none animate-in fade-in duration-100 font-sans"
         onClick={(e) => e.stopPropagation()}
-        data-tauri-drag-region="false"
       >
         {target && (
           <>
@@ -156,13 +155,13 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
                       onUnstage(target.diskPath || target.name);
                       onClose();
                     }}
-                    className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/70 hover:text-white text-rose-300 transition-colors cursor-pointer"
+                    className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#2A2A2A] hover:text-[#60CDFF] text-[#D0D0D0] transition-colors cursor-pointer"
                   >
                     <div className="flex items-center space-x-2">
-                      <span className="text-sm font-bold text-rose-400">✕</span>
+                      <span className="text-sm font-bold text-amber-400">⊖</span>
                       <span className="font-semibold">Remove from Staged</span>
                     </div>
-                    <span className="text-[10px] text-rose-400/80 font-mono">Unstage</span>
+                    <span className="text-[10px] text-amber-400/80 font-mono">Unstage</span>
                   </button>
                 ) : onStage ? (
                   <button
@@ -191,13 +190,13 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
                   onUnstage(target.matchedStagedPath!);
                   onClose();
                 }}
-                className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/70 hover:text-white text-rose-300 transition-colors cursor-pointer"
+                className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-[#2A2A2A] hover:text-[#60CDFF] text-[#D0D0D0] transition-colors cursor-pointer"
               >
                 <div className="flex items-center space-x-2">
-                  <span className="text-sm font-bold text-rose-400">✕</span>
+                  <span className="text-sm font-bold text-amber-400">⊖</span>
                   <span className="font-semibold">Remove from Archive</span>
                 </div>
-                <span className="text-[10px] text-rose-400/80 font-mono">Unstage</span>
+                <span className="text-[10px] text-amber-400/80 font-mono">Unstage</span>
               </button>
             )}
 
@@ -210,11 +209,15 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
                   onToggleExclude(target.name, target.isDir);
                   onClose();
                 }}
-                className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/70 hover:text-white text-rose-300 transition-colors cursor-pointer"
+                className={`w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between transition-colors cursor-pointer ${
+                  target.isExcluded
+                    ? "hover:bg-emerald-950/50 hover:text-white text-emerald-300"
+                    : "hover:bg-[#252525] hover:text-[#60CDFF] text-[#D0D0D0]"
+                }`}
               >
                 <div className="flex items-center space-x-2">
-                  <span className="text-sm font-bold text-rose-400">
-                    {target.isExcluded ? "↺" : "✕"}
+                  <span className={`text-sm font-bold ${target.isExcluded ? "text-emerald-400" : "text-amber-400"}`}>
+                    {target.isExcluded ? "↺" : "⊘"}
                   </span>
                   <span className="font-semibold">
                     {target.isExcluded
@@ -222,7 +225,7 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
                       : target.isDir ? "Exclude Folder" : mode === "compress" ? "Exclude from Archive" : "Exclude from Extraction"}
                   </span>
                 </div>
-                <span className="text-[10px] text-rose-400/80 font-mono">
+                <span className={`text-[10px] font-mono ${target.isExcluded ? "text-emerald-400/80" : "text-amber-400/80"}`}>
                   {target.isExcluded ? "Restore" : "Skip"}
                 </span>
               </button>
@@ -269,20 +272,20 @@ export const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
             {/* Action 7: Recycle Bin delete for physical disk files */}
             {browserSource === "filesystem" && onDeleteDisk && (
               <>
-                <div className="my-1 border-t border-[#2E2E2E]" />
+                <div className="my-1 border-t border-[#3E2225]" />
                 <button
                   type="button"
                   onClick={() => {
                     onDeleteDisk(target.name, target.isDir, target.diskPath);
                     onClose();
                   }}
-                  className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between hover:bg-rose-950/60 hover:text-rose-300 text-rose-400 transition-colors cursor-pointer"
+                  className="w-full text-left px-2.5 py-1.5 rounded flex items-center justify-between bg-rose-950/20 hover:bg-rose-950/80 text-rose-300 hover:text-white border border-rose-900/40 hover:border-rose-600/70 transition-all cursor-pointer"
                 >
                   <div className="flex items-center space-x-2">
                     <span className="text-sm">🗑️</span>
-                    <span>Delete to Recycle Bin</span>
+                    <span className="font-semibold">Delete to Recycle Bin</span>
                   </div>
-                  <span className="text-[10px] text-rose-400/80 font-mono">Del</span>
+                  <span className="text-[10px] text-rose-300/80 font-mono font-bold">Del</span>
                 </button>
               </>
             )}

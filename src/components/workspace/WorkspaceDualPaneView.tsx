@@ -70,8 +70,14 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const relativeX = e.clientX - rect.left;
-      const newRatio = relativeX / rect.width;
-      updateRatio(newRatio);
+      const totalWidth = rect.width;
+      if (totalWidth <= 0) return;
+      const minPx = Math.min(200, totalWidth * 0.4);
+      const minRatio = minPx / totalWidth;
+      const maxRatio = 1 - minRatio;
+      const rawRatio = relativeX / totalWidth;
+      const clamped = Math.max(minRatio, Math.min(maxRatio, rawRatio));
+      updateRatio(clamped);
     };
 
     const handleMouseUp = () => {
@@ -143,7 +149,7 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
       }
     }
 
-    if (onDropFolderToSplit && targetFolder !== undefined && targetFolder !== "") {
+    if (onDropFolderToSplit && targetFolder !== undefined && (targetFolder !== "" || !isDisk)) {
       onDropFolderToSplit(targetFolder, isDisk);
     } else if (diskPath && onDropDiskItemToStage) {
       onDropDiskItemToStage(diskPath);
@@ -266,7 +272,13 @@ export const WorkspaceDualPaneView: React.FC<WorkspaceDualPaneViewProps> = ({
               onDrop={(e) => {
                 e.preventDefault();
                 setIsPane2DragOver(false);
-                handleDropPayload(e);
+                const diskPath = e.dataTransfer.getData("application/bayzip-disk-path");
+                const isDir = e.dataTransfer.getData("application/bayzip-is-dir") === "true";
+                if (diskPath && !isDir && onDropDiskItemToStage) {
+                  onDropDiskItemToStage(diskPath);
+                } else {
+                  handleDropPayload(e);
+                }
               }}
               className="flex flex-col min-w-0 h-full overflow-hidden relative border-l border-[#262626]"
             >

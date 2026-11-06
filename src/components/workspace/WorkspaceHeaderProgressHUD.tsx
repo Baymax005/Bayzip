@@ -27,11 +27,12 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
 
   const [localCancelling, setLocalCancelling] = React.useState<boolean>(false);
 
-  // Reset timer and local state on new operation
+  // Reset timer and local state on new operation (keyed stably to total_bytes to prevent ETA spikes)
+  const opIdentifier = progress.total_bytes ?? 0;
   useEffect(() => {
     startTimeRef.current = Date.now();
     setLocalCancelling(false);
-  }, [progress.label]);
+  }, [opIdentifier]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -87,15 +88,17 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
   };
 
   return (
-    <div className="relative flex items-center justify-center select-none" data-tauri-drag-region="false">
+    <div className="relative flex items-center justify-center select-none">
       {/* Centered Top Header Progress Pill (Dynamic Island Style) */}
       <div
-        data-tauri-drag-region="false"
         className={`px-3 py-1 rounded-full flex items-center space-x-2 border transition-all cursor-pointer ${
           isOpen
             ? "bg-[#183325] border-emerald-500/80 shadow-[0_0_18px_rgba(16,185,129,0.35)]"
             : "bg-[#14231b] hover:bg-[#1a3327] border-emerald-600/40 hover:border-emerald-500/80 shadow-[0_0_10px_rgba(16,185,129,0.15)]"
         }`}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+        }}
         onClick={(e) => {
           e.stopPropagation();
           onToggleOpen();
@@ -128,7 +131,9 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
         {/* Dropdown chevron indicator */}
         <button
           type="button"
-          data-tauri-drag-region="false"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+          }}
           onClick={(e) => {
             e.stopPropagation();
             onToggleOpen();
@@ -152,7 +157,9 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
         {progress.onCancel && (
           <button
             type="button"
-            data-tauri-drag-region="false"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+            }}
             onClick={handleCancelClick}
             disabled={isActuallyCancelling}
             className="ml-0.5 p-1 rounded-full hover:bg-rose-950/80 text-rose-300 hover:text-white transition-all cursor-pointer border border-transparent hover:border-rose-600/60 disabled:opacity-50"
@@ -176,16 +183,16 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
       {isOpen && (
         <div
           ref={dropdownRef}
-          data-tauri-drag-region="false"
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
-          className="absolute top-9 left-1/2 -translate-x-1/2 z-50 w-88 sm:w-96 bg-[#161616]/95 backdrop-blur-xl border border-emerald-500/40 rounded-xl shadow-[0_16px_50px_rgba(0,0,0,0.85)] p-4 space-y-3 animate-in slide-in-from-top-2 duration-200 text-xs select-none"
+          className="absolute top-full mt-2 w-80 bg-[#161616]/95 backdrop-blur-md border border-[#2D4536] rounded-xl shadow-2xl p-3.5 text-xs text-white z-50 space-y-3 animate-in fade-in slide-in-from-top-2 duration-150 font-sans"
         >
-          {/* Header Row */}
-          <div className="flex items-center justify-between" data-tauri-drag-region="false">
+          {/* Header */}
+          <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2 min-w-0">
-              <span className="text-emerald-400 font-bold text-sm">⚡</span>
-              <span className="font-semibold text-white tracking-wide text-xs truncate">
-                {progress.label}
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className="font-semibold text-xs text-emerald-300 truncate">
+                {isActuallyCancelling ? "Cancelling Task" : "Operation in Progress"}
               </span>
             </div>
 
@@ -195,7 +202,7 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
               </span>
               <button
                 type="button"
-                data-tauri-drag-region="false"
+                onMouseDown={(e) => e.stopPropagation()}
                 onClick={onClose}
                 className="p-1 rounded text-[#888888] hover:text-white hover:bg-[#252525] cursor-pointer"
                 title="Collapse details"
@@ -207,36 +214,29 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
             </div>
           </div>
 
-          {/* Large Progress Bar with Shimmer */}
-          <div className="w-full h-2 bg-[#252525] rounded-full overflow-hidden border border-[#3A3A3A] relative">
-            <div
-              className="h-full bg-gradient-to-r from-[#059669] via-[#10B981] to-[#34D399] rounded-full shadow-[0_0_12px_rgba(16,185,129,0.7)] transition-all duration-150 relative overflow-hidden"
-              style={{ width: `${Math.max(percent, 2)}%` }}
-            >
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent animate-shimmer" />
+          {/* Main Progress Bar */}
+          <div className="space-y-1">
+            <div className="w-full h-2 bg-[#222222] rounded-full overflow-hidden border border-[#333333]">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-[#60CDFF] rounded-full transition-all duration-150 relative overflow-hidden"
+                style={{ width: `${percent}%` }}
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer" />
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center text-[10px] text-[#A8A8A8] font-mono pt-0.5">
+              <span>{etaText}</span>
+              {speedText && <span className="text-emerald-400 font-semibold">{speedText}</span>}
             </div>
           </div>
 
-          {/* Real-time Telemetry: ETA, Speed, & Bytes */}
-          <div className="grid grid-cols-2 gap-2 bg-[#1C1C1C] p-2 rounded-lg border border-[#2D2D2D]">
-            <div className="flex flex-col">
-              <span className="text-[10px] uppercase font-mono text-[#888888]">Estimated Time</span>
-              <span className="text-[11px] font-mono text-emerald-300 font-semibold truncate">
-                {etaText}
-              </span>
+          {/* Current File / Status Display */}
+          <div className="bg-[#1C1C1C] rounded-lg p-2.5 border border-[#2A2A2A] space-y-1">
+            <div className="text-[10px] uppercase tracking-wider text-[#777777] font-semibold">
+              Active Task / File
             </div>
-
-            <div className="flex flex-col items-end">
-              <span className="text-[10px] uppercase font-mono text-[#888888]">Speed / Throughput</span>
-              <span className="text-[11px] font-mono text-[#60CDFF] font-semibold truncate">
-                {speedText || "Calculating..."}
-              </span>
-            </div>
-          </div>
-
-          {/* Current File & Total Bytes */}
-          <div className="flex items-center justify-between text-[11px] text-[#A8A8A8] pt-0.5">
-            <span className="truncate max-w-[200px] font-mono text-[10px] text-white" title={progress.current_file}>
+            <span className="text-[11px] text-[#D8D8D8] font-mono block truncate" title={progress.current_file || progress.label}>
               {progress.current_file || "Finalizing operations..."}
             </span>
 
@@ -250,10 +250,10 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
 
           {/* Action Cancel Button inside Dropdown */}
           {progress.onCancel && (
-            <div className="pt-1 border-t border-[#2A2A2A]" data-tauri-drag-region="false">
+            <div className="pt-1 border-t border-[#2A2A2A]">
               <button
                 type="button"
-                data-tauri-drag-region="false"
+                onMouseDown={(e) => e.stopPropagation()}
                 onClick={handleCancelClick}
                 disabled={isActuallyCancelling}
                 className="w-full py-1.5 text-center text-xs font-semibold text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 rounded-lg transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-1.5"
@@ -277,5 +277,3 @@ export const WorkspaceHeaderProgressHUD: React.FC<WorkspaceHeaderProgressHUDProp
     </div>
   );
 };
-
-

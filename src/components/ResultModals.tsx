@@ -1,5 +1,6 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CompressResult, ExtractResult, ArchiveInfo } from "../types";
+import { useModalDismiss } from "../hooks/useModalDismiss";
 
 interface ResultModalsProps {
   compressResult: CompressResult | null;
@@ -32,6 +33,16 @@ export function ResultModals({
   onCloseExtractResult,
   formatBytes,
 }: ResultModalsProps) {
+  const { handleBackdropClick: handleCompressBackdrop } = useModalDismiss({
+    isOpen: Boolean(compressResult),
+    onClose: onCloseCompressResult,
+  });
+
+  const { handleBackdropClick: handleExtractBackdrop } = useModalDismiss({
+    isOpen: Boolean(extractResult),
+    onClose: onCloseExtractResult,
+  });
+
   const compressSpeed = compressResult && compressResult.elapsed_ms > 0
     ? `${formatBytes(compressResult.original_size / (compressResult.elapsed_ms / 1000))}/s`
     : null;
@@ -40,8 +51,11 @@ export function ResultModals({
     <>
       {/* Compression Result Modal */}
       {compressResult && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-md w-full shadow-2xl relative space-y-5">
+        <div
+          onClick={handleCompressBackdrop}
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 select-none animate-in fade-in duration-150"
+        >
+          <div className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-md w-full shadow-2xl relative space-y-5 animate-in zoom-in-95 duration-150">
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
@@ -84,7 +98,7 @@ export function ResultModals({
                 <div className="flex items-center space-x-2 text-xs text-[#8BBEE8] mt-0.5">
                   <span className="font-mono font-medium text-white">{formatBytes(compressResult.compressed_size)}</span>
                   <span>•</span>
-                  <span>Bayzip Ultra Package</span>
+                  <span>Bayzip Package</span>
                 </div>
               </div>
             </div>
@@ -141,8 +155,11 @@ export function ResultModals({
 
       {/* Extraction Result Modal */}
       {extractResult && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-md w-full shadow-2xl relative space-y-5">
+        <div
+          onClick={handleExtractBackdrop}
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 select-none animate-in fade-in duration-150"
+        >
+          <div className="bg-[#202020] border border-[#3E3E3E] rounded-xl p-8 max-w-md w-full shadow-2xl relative space-y-5 animate-in zoom-in-95 duration-150">
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">

@@ -33,6 +33,7 @@ export interface FolderDropProps {
 export interface ItemDragProps {
   draggable: true;
   onDragStart: (e: React.DragEvent) => void;
+  onDragEnd?: (e: React.DragEvent) => void;
 }
 
 export function useWorkspaceDragDrop({
@@ -215,6 +216,9 @@ export function useWorkspaceDragDrop({
       e.dataTransfer.setData("text/plain", entryPath);
       e.dataTransfer.effectAllowed = "copyMove";
     },
+    onDragEnd: () => {
+      setDragOverTargetKey(null);
+    },
   });
 
   // Helper to generate drag props for a disk entry (file or folder)
@@ -229,6 +233,9 @@ export function useWorkspaceDragDrop({
       }
       e.dataTransfer.setData("text/plain", diskPath);
       e.dataTransfer.effectAllowed = "copyMove";
+    },
+    onDragEnd: () => {
+      setDragOverTargetKey(null);
     },
   });
 

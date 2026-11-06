@@ -26,7 +26,7 @@ export function Titlebar() {
       <div data-tauri-drag-region className="flex-1 h-full cursor-default" />
 
       {/* Window Controls */}
-      <div className="flex h-full" data-tauri-drag-region="false">
+      <div className="flex h-full">
         {/* Windows Minimize */}
         <button
           type="button"

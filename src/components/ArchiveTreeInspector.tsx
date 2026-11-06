@@ -1666,7 +1666,6 @@ export function ArchiveTreeInspector({
           return (
             <div
               onDoubleClick={handleDiskUp}
-              onClick={handleDiskUp}
               {...parentDropProps.handlers}
               style={{ height: "34px" }}
               className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0 ${
@@ -1689,6 +1688,7 @@ export function ArchiveTreeInspector({
         })()}
 
         <VirtualScrollList
+          key={`disk-virtual-pane1-${diskCurrentPath}-${searchQuery}`}
           items={filtered}
           rowHeight={34}
           className="flex-1 h-full"
@@ -2265,7 +2265,6 @@ export function ArchiveTreeInspector({
           return (
             <div
               onDoubleClick={handlePane2ArchiveUp}
-              onClick={handlePane2ArchiveUp}
               {...parentDropProps.handlers}
               style={{ height: "34px" }}
               className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0 ${
@@ -2480,7 +2479,6 @@ export function ArchiveTreeInspector({
           return (
             <div
               onDoubleClick={handlePane2DiskUp}
-              onClick={handlePane2DiskUp}
               {...parentDropProps.handlers}
               style={{ height: "34px" }}
               className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0 ${
@@ -2501,6 +2499,7 @@ export function ArchiveTreeInspector({
         })()}
 
         <VirtualScrollList
+          key={`disk-virtual-pane2-${pane2DiskPath}-${searchQuery}`}
           items={filtered}
           rowHeight={34}
           className="flex-1 h-full"
@@ -2768,7 +2767,6 @@ export function ArchiveTreeInspector({
           return (
             <div
               onDoubleClick={navigateUp}
-              onClick={navigateUp}
               {...parentDropProps.handlers}
               style={{ height: "34px" }}
               className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#222222] select-none text-[#A8A8A8] hover:text-[#60CDFF] shrink-0 ${

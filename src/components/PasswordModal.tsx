@@ -1,3 +1,5 @@
+import { useModalDismiss } from "../hooks/useModalDismiss";
+
 interface PasswordModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -21,11 +23,20 @@ export function PasswordModal({
   extractError,
   onSubmit,
 }: PasswordModalProps) {
+  const { handleBackdropClick } = useModalDismiss({
+    isOpen,
+    onClose,
+    disabled: isExtracting,
+  });
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-[#252525] border border-[#3E3E3E] rounded-xl w-full max-w-md shadow-2xl p-6 space-y-4">
+    <div
+      onClick={handleBackdropClick}
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150"
+    >
+      <div className="bg-[#252525] border border-[#3E3E3E] rounded-xl w-full max-w-md shadow-2xl p-6 space-y-4 animate-in zoom-in-95 duration-150">
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 rounded-full bg-[#60CDFF]/15 border border-[#60CDFF]/30 flex items-center justify-center shrink-0">
             <svg className="w-5 h-5 text-[#60CDFF]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -48,7 +59,8 @@ export function PasswordModal({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && password.trim()) {
+                if (e.key === "Enter" && password.trim() && !isExtracting) {
+                  e.preventDefault();
                   onSubmit();
                 }
               }}
@@ -85,8 +97,9 @@ export function PasswordModal({
         <div className="flex justify-end space-x-2 pt-2">
           <button
             type="button"
+            disabled={isExtracting}
             onClick={onClose}
-            className="px-4 py-2 bg-[#333] hover:bg-[#3D3D3D] text-[#CCCCCC] text-xs font-medium rounded-lg transition-colors cursor-pointer"
+            className="px-4 py-2 bg-[#333] hover:bg-[#3D3D3D] text-[#CCCCCC] text-xs font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-50"
           >
             Cancel
           </button>
