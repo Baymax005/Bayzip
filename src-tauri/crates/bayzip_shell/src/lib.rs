@@ -31,32 +31,10 @@ fn to_co_task_mem_pwstr(s: &str) -> windows::core::Result<PWSTR> {
 }
 
 fn get_bayzip_exe_path() -> std::path::PathBuf {
-    // 1. Try %LOCALAPPDATA%\Bayzip\bayzip_path.txt
+    // V-SEC-07: Secure binary resolution without plaintext file fallback or relative PATH hijacking.
+    // 1. Try %LOCALAPPDATA%\Bayzip\bayzip.exe
     if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-        let path_file = std::path::PathBuf::from(&local_appdata)
-            .join("Bayzip")
-            .join("bayzip_path.txt");
-        if let Ok(content) = std::fs::read_to_string(&path_file) {
-            let candidate = std::path::PathBuf::from(content.trim().trim_matches('\"'));
-            if candidate.exists() {
-                return candidate;
-            }
-        }
-    }
-
-    // 2. Try adjacent to this DLL
-    if let Ok(dll_path) = std::env::current_exe() {
-        if let Some(parent) = dll_path.parent() {
-            let candidate = parent.join("bayzip.exe");
-            if candidate.exists() {
-                return candidate;
-            }
-        }
-    }
-
-    // 3. Try %LOCALAPPDATA%\Bayzip\bayzip.exe
-    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-        let candidate = std::path::PathBuf::from(local_appdata)
+        let candidate = std::path::PathBuf::from(&local_appdata)
             .join("Bayzip")
             .join("bayzip.exe");
         if candidate.exists() {
@@ -64,8 +42,30 @@ fn get_bayzip_exe_path() -> std::path::PathBuf {
         }
     }
 
-    // 4. Fallback to just "bayzip.exe" in PATH
-    std::path::PathBuf::from("bayzip.exe")
+    // 2. Try %ProgramFiles%\Bayzip\bayzip.exe
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        let candidate = std::path::PathBuf::from(&program_files)
+            .join("Bayzip")
+            .join("bayzip.exe");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    // 3. Try %ProgramFiles(x86)%\Bayzip\bayzip.exe
+    if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
+        let candidate = std::path::PathBuf::from(&program_files_x86)
+            .join("Bayzip")
+            .join("bayzip.exe");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    // Fallback securely to absolute LOCALAPPDATA path
+    std::env::var("LOCALAPPDATA")
+        .map(|p| std::path::PathBuf::from(p).join("Bayzip").join("bayzip.exe"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("C:\\Program Files\\Bayzip\\bayzip.exe"))
 }
 
 fn get_bayzip_icon_path() -> String {

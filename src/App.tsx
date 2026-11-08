@@ -1,3 +1,5 @@
+import { formatBytes } from "./utils/format";
+import { getArchiveStemName } from "./utils/archive";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -53,26 +55,7 @@ const ARCHIVE_EXTS = [
   ".cab",
 ];
 
-function getArchiveStemName(filename: string): string {
-  if (!filename) return "extracted";
-  const lower = filename.toLowerCase();
-  const compoundExts = [
-    ".tar.gz",
-    ".tar.zst",
-    ".tar.bz2",
-    ".tar.xz",
-    ".tar.lz4",
-    ".tar.zstd",
-    ".tar.br",
-    ".bayg",
-  ];
-  for (const ext of compoundExts) {
-    if (lower.endsWith(ext)) {
-      return filename.slice(0, -ext.length);
-    }
-  }
-  return filename.replace(/\.[^/.]+$/, "");
-}
+// getArchiveStemName imported from src/utils/archive (V-CODE-01)
 
 function isArchiveFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();
@@ -1161,13 +1144,7 @@ function App() {
     }
   };
 
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return (bytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
-  };
+  // formatBytes imported from src/utils/format (V-CODE-01)
 
 
   return (

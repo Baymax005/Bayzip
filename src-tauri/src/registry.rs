@@ -50,8 +50,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
             let _ = std::fs::write(icons_dir.join("Square150x150Logo.png"), include_bytes!("../icons/Square150x150Logo.png"));
             let _ = std::fs::write(icons_dir.join("Square44x44Logo.png"), include_bytes!("../icons/Square44x44Logo.png"));
 
-            // Write executable path for modern shell extension and copy binary if separate
-            let _ = std::fs::write(app_dir.join("bayzip_path.txt"), exe_str.as_bytes());
+            // Copy binary to app directory if separate
             let dest_exe = app_dir.join("bayzip.exe");
             if exe_path != dest_exe {
                 let _ = std::fs::copy(&exe_path, &dest_exe);
@@ -59,7 +58,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             // Deploy bayzip_shell.dll to %LOCALAPPDATA%\Bayzip\bayzip_shell.dll (Embedded directly in binary)
             let dest_dll = app_dir.join("bayzip_shell.dll");
-            let embedded_dll = include_bytes!("../crates/bayzip_shell/target/release/bayzip_shell.dll");
+            let embedded_dll = include_bytes!(concat!(env!("OUT_DIR"), "/bayzip_shell.dll"));
             if embedded_dll.len() > 1024 {
                 let _ = std::fs::write(&dest_dll, embedded_dll);
             }
@@ -251,15 +250,17 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 ));
             }
 
-            // Write as UTF-16 LE with BOM (Required by Windows reg.exe)
-            let temp_reg = std::env::temp_dir().join("bayzip_context.reg");
+            // Write as UTF-16 LE with BOM (Required by Windows reg.exe) in private app directory (V-SEC-05)
+            let temp_reg = app_dir.join(format!("bayzip_reg_{}_{}.reg", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
             let mut utf16_bytes: Vec<u8> = vec![0xFF, 0xFE];
             for u in reg_content.encode_utf16() {
                 utf16_bytes.extend_from_slice(&u.to_le_bytes());
             }
 
             if std::fs::write(&temp_reg, utf16_bytes).is_ok() {
-                let mut cmd = Command::new("reg");
+                let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+                let reg_exe = std::path::PathBuf::from(&system_root).join("System32\\reg.exe");
+                let mut cmd = Command::new(if reg_exe.exists() { reg_exe } else { std::path::PathBuf::from("reg.exe") });
                 cmd.args(["import", &temp_reg.to_string_lossy()]);
                 cmd.creation_flags(CREATE_NO_WINDOW);
                 let _ = cmd.output();
@@ -290,11 +291,15 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 }
 
                 if is_win11 && dest_dll.exists() && manifest_file.exists() {
-                    let mut ps_cmd = Command::new("powershell");
+                    let manifest_escaped = manifest_file.to_string_lossy().replace('\'', "''");
+                    let app_dir_escaped = app_dir.to_string_lossy().replace('\'', "''");
+                    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+                    let ps_exe = std::path::PathBuf::from(&system_root).join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+                    let mut ps_cmd = Command::new(if ps_exe.exists() { ps_exe } else { std::path::PathBuf::from("powershell.exe") });
                     let ps_script = format!(
-                        "Add-AppxPackage -Register '{}\\AppxManifest.xml' -ExternalLocation '{}' -ErrorAction SilentlyContinue",
-                        app_dir.to_string_lossy(),
-                        app_dir.to_string_lossy()
+                        "Add-AppxPackage -Register '{}' -ExternalLocation '{}' -ErrorAction SilentlyContinue",
+                        manifest_escaped,
+                        app_dir_escaped
                     );
                     ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
                     ps_cmd.creation_flags(CREATE_NO_WINDOW);
@@ -357,14 +362,18 @@ pub fn unregister_context_menu_sync() -> Result<String, String> {
             ));
         }
 
-        let temp_reg = std::env::temp_dir().join("bayzip_unreg.reg");
+        let app_dir = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join("Bayzip");
+        let _ = std::fs::create_dir_all(&app_dir);
+        let temp_reg = app_dir.join(format!("bayzip_unreg_{}_{}.reg", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
         let mut utf16_bytes: Vec<u8> = vec![0xFF, 0xFE];
         for u in reg_content.encode_utf16() {
             utf16_bytes.extend_from_slice(&u.to_le_bytes());
         }
 
         if std::fs::write(&temp_reg, utf16_bytes).is_ok() {
-            let mut cmd = Command::new("reg");
+            let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+            let reg_exe = std::path::PathBuf::from(&system_root).join("System32\\reg.exe");
+            let mut cmd = Command::new(if reg_exe.exists() { reg_exe } else { std::path::PathBuf::from("reg.exe") });
             cmd.args(["import", &temp_reg.to_string_lossy()]);
             cmd.creation_flags(CREATE_NO_WINDOW);
             let _ = cmd.output();

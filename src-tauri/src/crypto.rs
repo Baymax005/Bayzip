@@ -167,8 +167,11 @@ impl<R: Read> ChunkedAesReader<R> {
         match self.inner.read_exact(&mut len_bytes) {
             Ok(_) => {},
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                self.eof_reached = true;
-                return Ok(false);
+                // Reject unexpected EOF without valid chunk_len == 0 end marker (V-SEC-04)
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Cryptographic Error: Encrypted archive stream truncated unexpectedly without valid end-of-stream marker",
+                ));
             },
             Err(e) => return Err(e),
         }
@@ -231,3 +234,71 @@ impl<R: Read> Read for ChunkedAesReader<R> {
         Ok(to_copy)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunked_aes_roundtrip() {
+        let password = "test_password_123";
+        let original_data = b"Hello, Bayzip secure encrypted world! Testing chunked AES streaming.";
+
+        let mut encrypted = Vec::new();
+        {
+            let mut writer = ChunkedAesWriter::new(&mut encrypted, password).expect("Writer init");
+            writer.write_all(original_data).expect("Write data");
+            writer.finish().expect("Finish writer");
+        }
+
+        let mut decrypted = Vec::new();
+        {
+            // Readers expect stream positioned after 8-byte magic header (matching extractor.rs & bay.rs)
+            let mut reader = ChunkedAesReader::new(&encrypted[8..], password).expect("Reader init");
+            reader.read_to_end(&mut decrypted).expect("Read data");
+        }
+
+        assert_eq!(&decrypted, original_data);
+    }
+
+    #[test]
+    fn test_chunked_aes_truncation_detection() {
+        let password = "test_password_123";
+        let original_data = b"Sensitive payload that must not be truncated without detection.";
+
+        let mut encrypted = Vec::new();
+        {
+            let mut writer = ChunkedAesWriter::new(&mut encrypted, password).expect("Writer init");
+            writer.write_all(original_data).expect("Write data");
+            writer.finish().expect("Finish writer");
+        }
+
+        // Truncate the 4-byte EOF zero marker (last 4 bytes)
+        let truncated = &encrypted[8..encrypted.len() - 4];
+        let mut reader = ChunkedAesReader::new(truncated, password).expect("Reader init");
+        let mut decrypted = Vec::new();
+        let res = reader.read_to_end(&mut decrypted);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn test_chunked_aes_wrong_password() {
+        let password = "correct_password";
+        let original_data = b"Secret data";
+
+        let mut encrypted = Vec::new();
+        {
+            let mut writer = ChunkedAesWriter::new(&mut encrypted, password).expect("Writer init");
+            writer.write_all(original_data).expect("Write data");
+            writer.finish().expect("Finish writer");
+        }
+
+        let mut reader = ChunkedAesReader::new(&encrypted[8..], "wrong_password").expect("Reader init");
+        let mut decrypted = Vec::new();
+        let res = reader.read_to_end(&mut decrypted);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    }
+}
+

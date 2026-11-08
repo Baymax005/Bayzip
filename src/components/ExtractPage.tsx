@@ -1,3 +1,5 @@
+import { formatBytes } from "../utils/format";
+import { getArchiveStemName } from "../utils/archive";
 import { useState } from "react";
 import { ArchiveInfo, ExtractProgress } from "../types";
 import { ArchiveTreeInspector } from "./ArchiveTreeInspector";
@@ -43,34 +45,7 @@ export interface ExtractPageProps {
   onSwitchMode?: (newMode: "compress" | "extract") => void;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-function getArchiveStemName(filename: string): string {
-  if (!filename) return "extracted";
-  const lower = filename.toLowerCase();
-  const compoundExts = [
-    ".tar.gz",
-    ".tar.zst",
-    ".tar.bz2",
-    ".tar.xz",
-    ".tar.lz4",
-    ".tar.zstd",
-    ".tar.br",
-    ".bayg",
-  ];
-  for (const ext of compoundExts) {
-    if (lower.endsWith(ext)) {
-      return filename.slice(0, -ext.length);
-    }
-  }
-  return filename.replace(/\.[^/.]+$/, "");
-}
+// formatBytes and getArchiveStemName imported from src/utils/ (V-CODE-01)
 
 export function ExtractPage({
   selectedArchive,

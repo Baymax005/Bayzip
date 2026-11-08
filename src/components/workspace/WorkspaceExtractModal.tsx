@@ -1,3 +1,5 @@
+import { formatBytes } from "../../utils/format";
+import { getArchiveStemName } from "../../utils/archive";
 import React, { useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useModalDismiss } from "../../hooks/useModalDismiss";
@@ -34,34 +36,7 @@ export interface WorkspaceExtractModalProps {
   onConfirmExtract: () => void;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-function getArchiveStem(filename: string): string {
-  if (!filename) return "extracted";
-  const lower = filename.toLowerCase();
-  const compoundExts = [
-    ".tar.gz",
-    ".tar.zst",
-    ".tar.bz2",
-    ".tar.xz",
-    ".tar.lz4",
-    ".tar.zstd",
-    ".tar.br",
-    ".bayg",
-  ];
-  for (const ext of compoundExts) {
-    if (lower.endsWith(ext)) {
-      return filename.slice(0, -ext.length);
-    }
-  }
-  return filename.replace(/\.[^/.]+$/, "");
-}
+// formatBytes and getArchiveStemName imported from src/utils/ (V-CODE-01)
 
 export const WorkspaceExtractModal: React.FC<WorkspaceExtractModalProps> = ({
   isOpen,
@@ -89,7 +64,7 @@ export const WorkspaceExtractModal: React.FC<WorkspaceExtractModalProps> = ({
   const modalContainerRef = useRef<HTMLDivElement>(null);
   const destInputRef = useRef<HTMLInputElement>(null);
   const passwordInputRef = useRef<HTMLInputElement>(null);
-  const stem = getArchiveStem(archiveFilename);
+  const stem = getArchiveStemName(archiveFilename);
 
   const { handleBackdropClick } = useModalDismiss({
     isOpen,

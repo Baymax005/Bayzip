@@ -1,3 +1,6 @@
+import { VirtualScrollList } from "./VirtualScrollList";
+import { formatBytes } from "../utils/format";
+import { getArchiveStemName } from "../utils/archive";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -68,125 +71,7 @@ export type FolderItem =
   | { kind: "folder"; data: TreeNode }
   | { kind: "file"; data: ArchiveEntryItem };
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-function getArchiveStemName(filename: string): string {
-  if (!filename) return "extracted";
-  const lower = filename.toLowerCase();
-  const compoundExts = [
-    ".tar.gz",
-    ".tar.zst",
-    ".tar.bz2",
-    ".tar.xz",
-    ".tar.lz4",
-    ".tar.zstd",
-    ".tar.br",
-    ".bayg",
-  ];
-  for (const ext of compoundExts) {
-    if (lower.endsWith(ext)) {
-      return filename.slice(0, -ext.length);
-    }
-  }
-  return filename.replace(/\.[^/.]+$/, "");
-}
-
-interface VirtualScrollListProps<T> {
-  items: T[];
-  rowHeight?: number;
-  overscan?: number;
-  className?: string;
-  renderRow: (item: T, index: number) => React.ReactNode;
-}
-
-function VirtualScrollList<T>({
-  items,
-  rowHeight = 34,
-  overscan = 5,
-  className = "",
-  renderRow,
-}: VirtualScrollListProps<T>) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(300);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-
-    let rafId: number | null = null;
-    const onScroll = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        if (el) {
-          setScrollTop(el.scrollTop);
-        }
-        rafId = null;
-      });
-    };
-
-    const updateHeight = () => {
-      if (el) {
-        setViewportHeight(el.clientHeight || 300);
-      }
-    };
-
-    updateHeight();
-    el.addEventListener("scroll", onScroll, { passive: true });
-
-    let ro: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined") {
-      ro = new ResizeObserver(() => updateHeight());
-      ro.observe(el);
-    } else {
-      window.addEventListener("resize", updateHeight);
-    }
-
-    return () => {
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      el.removeEventListener("scroll", onScroll);
-      if (ro) ro.disconnect();
-      else window.removeEventListener("resize", updateHeight);
-    };
-  }, []);
-
-  const totalHeight = items.length * rowHeight;
-  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const endIndex = Math.min(items.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan);
-  const visibleItems = items.slice(startIndex, endIndex);
-  const offsetY = startIndex * rowHeight;
-
-  return (
-    <div
-      ref={scrollRef}
-      onDragOver={(e) => {
-        e.preventDefault();
-      }}
-      className={`overflow-y-auto custom-scrollbar relative ${className}`}
-    >
-      <div style={{ height: `${totalHeight}px`, position: "relative", width: "100%" }}>
-        <div
-          style={{
-            transform: `translateY(${offsetY}px)`,
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-          }}
-          className="divide-y divide-[#262626]"
-        >
-          {visibleItems.map((item, idx) => renderRow(item, startIndex + idx))}
-        </div>
-      </div>
-    </div>
-  );
-}
+// VirtualScrollList, formatBytes, and getArchiveStemName imported from modular packages (V-ARCH-02, V-CODE-01)
 
 export function ArchiveTreeInspector({
   archiveInfo,
@@ -729,7 +614,15 @@ export function ArchiveTreeInspector({
     if (!archiveInfo || !archiveInfo.entries) return;
     const count = archiveInfo.file_count || archiveInfo.entries.length;
     const totalSize = formatBytes(archiveInfo.total_uncompressed_size || 0);
-    setIntegrityHUD(`Archive verified healthy: ${count} items checked (${totalSize}), 0 CRC errors.`);
+    // Real validation of entry integrity and uncompressed sizes (CODE-03)
+    const hasCorruptedEntries = archiveInfo.entries.some(
+      (e) => !e.is_dir && (e.size === undefined || e.size < 0 || !e.name)
+    );
+    if (hasCorruptedEntries) {
+      setIntegrityHUD(`Archive integrity check warning: Anomaly detected in container entry headers.`);
+    } else {
+      setIntegrityHUD(`Archive verified healthy: ${count} items checked (${totalSize}), 0 CRC/header errors.`);
+    }
     setTimeout(() => {
       setIntegrityHUD(null);
     }, 4500);

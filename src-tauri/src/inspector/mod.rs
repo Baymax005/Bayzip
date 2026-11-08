@@ -30,7 +30,7 @@ const DOS_RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL",
     "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
     "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    "CONIN$", "CONOUT$",
+    "CONIN$", "CONOUT$", "CLOCK$", "CONFIG$",
 ];
 
 pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
@@ -66,8 +66,9 @@ pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
             | std::path::Component::Prefix(_) => return None,
             std::path::Component::Normal(os_str) => {
                 let s = os_str.to_string_lossy();
-                // Block NTFS Alternate Data Streams (ADS), null bytes, and colons
-                if s.contains(':') || s.contains('\0') {
+                // Block NTFS Alternate Data Streams (ADS), null bytes, colons, and illegal Windows characters (V-SEC-08)
+                const INVALID_CHARS: &[char] = &[':', '\0', '<', '>', '"', '|', '?', '*'];
+                if s.chars().any(|c| INVALID_CHARS.contains(&c) || (c as u32) < 32) {
                     return None;
                 }
                 // Reject trailing periods and spaces (Windows path normalization bypass, e.g. "malicious.exe .", "secret.txt.")
@@ -352,6 +353,8 @@ mod tests {
         assert_eq!(sanitize_archive_path("NUL"), None);
         assert_eq!(sanitize_archive_path("CONIN$"), None);
         assert_eq!(sanitize_archive_path("CONOUT$"), None);
+        assert_eq!(sanitize_archive_path("CLOCK$"), None);
+        assert_eq!(sanitize_archive_path("CONFIG$"), None);
         assert_eq!(sanitize_archive_path("AUX.txt"), None);
         assert_eq!(sanitize_archive_path("sub/con.zip"), None);
         assert_eq!(sanitize_archive_path("PRN"), None);
@@ -359,6 +362,19 @@ mod tests {
         assert_eq!(sanitize_archive_path("com9.dat"), None);
         assert_eq!(sanitize_archive_path("LPT1"), None);
         assert_eq!(sanitize_archive_path("lpt5.txt"), None);
+    }
+
+    #[test]
+    fn test_invalid_characters() {
+        assert_eq!(sanitize_archive_path("test:file.txt"), None);
+        assert_eq!(sanitize_archive_path("test<file.txt"), None);
+        assert_eq!(sanitize_archive_path("test>file.txt"), None);
+        assert_eq!(sanitize_archive_path("test\"file.txt"), None);
+        assert_eq!(sanitize_archive_path("test|file.txt"), None);
+        assert_eq!(sanitize_archive_path("test?file.txt"), None);
+        assert_eq!(sanitize_archive_path("test*file.txt"), None);
+        assert_eq!(sanitize_archive_path("test\0file.txt"), None);
+        assert_eq!(sanitize_archive_path("test\x1Ffile.txt"), None);
     }
 
     #[test]
