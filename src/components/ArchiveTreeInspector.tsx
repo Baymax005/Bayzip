@@ -64,6 +64,10 @@ export interface TreeNode {
   files: ArchiveEntryItem[];
 }
 
+export type FolderItem =
+  | { kind: "folder"; data: TreeNode }
+  | { kind: "file"; data: ArchiveEntryItem };
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
@@ -116,8 +120,15 @@ function VirtualScrollList<T>({
     const el = scrollRef.current;
     if (!el) return;
 
+    let rafId: number | null = null;
     const onScroll = () => {
-      setScrollTop(el.scrollTop);
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        if (el) {
+          setScrollTop(el.scrollTop);
+        }
+        rafId = null;
+      });
     };
 
     const updateHeight = () => {
@@ -138,6 +149,7 @@ function VirtualScrollList<T>({
     }
 
     return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
       el.removeEventListener("scroll", onScroll);
       if (ro) ro.disconnect();
       else window.removeEventListener("resize", updateHeight);
@@ -1039,7 +1051,7 @@ export function ArchiveTreeInspector({
     if (!excludedPaths || excludedPaths.size === 0) return false;
     const clean = normalizeArchiveEntryPath(filePath).replace(/\/+$/, "");
     if (excludedPaths.has(clean)) return true;
-    for (const exc of Array.from(excludedPaths)) {
+    for (const exc of excludedPaths) {
       const excClean = exc.replace(/\/+$/, "");
       if (clean.startsWith(excClean + "/")) return true;
     }
@@ -1050,17 +1062,16 @@ export function ArchiveTreeInspector({
     if (!excludedPaths || excludedPaths.size === 0) return false;
     const cleanDir = normalizeArchiveEntryPath(dirPath).replace(/\/+$/, "");
     if (excludedPaths.has(cleanDir)) return true;
-    for (const exc of Array.from(excludedPaths)) {
+    for (const exc of excludedPaths) {
       const excClean = exc.replace(/\/+$/, "");
       if (cleanDir.startsWith(excClean + "/")) return true;
     }
-    const prefix = cleanDir ? `${cleanDir}/` : "";
-    const allEntries = archiveInfo?.entries || [];
-    const filesInDir = allEntries.filter((e) => !e.is_dir && normalizeArchiveEntryPath(e.name).replace(/\/+$/, "").startsWith(prefix));
-    if (filesInDir.length > 0 && filesInDir.every((f) => isFileExcluded(f.name))) {
-      return true;
-    }
-    return false;
+    // Fast path: inspect pre-indexed TreeNode hierarchy (V-PERF-01)
+    const node = getNodeByPath(cleanDir);
+    if (!node || node.totalItemCount === 0) return false;
+    const filesOk = node.files.length === 0 || node.files.every((f) => isFileExcluded(f.name));
+    const subsOk = node.subfolders.length === 0 || node.subfolders.every((s) => isDirExcluded(s.path));
+    return filesOk && subsOk;
   };
 
   const excludedBytes = useMemo(() => {
@@ -1271,13 +1282,13 @@ export function ArchiveTreeInspector({
       }
     }
 
-    // Sort subfolders and files alphabetically, and calculate recursive statistics
+    // Sort subfolders and files alphabetically, and calculate recursive statistics (V-PERF-03)
     const computeStats = (node: TreeNode): { size: number; totalCount: number } => {
-      node.subfolders.sort((a, b) => a.name.localeCompare(b.name));
+      node.subfolders.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       node.files.sort((a, b) => {
-        const nameA = a.name.split("/").pop() || "";
-        const nameB = b.name.split("/").pop() || "";
-        return nameA.localeCompare(nameB);
+        const leafA = a.name.includes("/") ? a.name.slice(a.name.lastIndexOf("/") + 1) : a.name;
+        const leafB = b.name.includes("/") ? b.name.slice(b.name.lastIndexOf("/") + 1) : b.name;
+        return leafA < leafB ? -1 : leafA > leafB ? 1 : 0;
       });
 
       let totalSize = node.files.reduce((acc, f) => acc + f.size, 0);
@@ -1378,6 +1389,27 @@ export function ArchiveTreeInspector({
     const q = searchQuery.toLowerCase();
     return currentFolderNode.files.filter((f) => f.name.toLowerCase().includes(q));
   }, [currentFolderNode.files, searchQuery]);
+
+  // Memoized folder items for Pane 1 and Pane 2 to eliminate GC allocations on 50ms progress events (V-PERF-02)
+  const folderItems = useMemo<FolderItem[]>(() => {
+    return [
+      ...currentFolderNode.subfolders.map((node) => ({ kind: "folder" as const, data: node })),
+      ...filteredCurrentFiles.map((file) => ({ kind: "file" as const, data: file })),
+    ];
+  }, [currentFolderNode.subfolders, filteredCurrentFiles]);
+
+  const filteredPane2Files = useMemo(() => {
+    if (!searchQuery.trim()) return pane2FolderNode.files;
+    const q = searchQuery.toLowerCase();
+    return pane2FolderNode.files.filter((f) => f.name.toLowerCase().includes(q));
+  }, [pane2FolderNode.files, searchQuery]);
+
+  const pane2FolderItems = useMemo<FolderItem[]>(() => {
+    return [
+      ...pane2FolderNode.subfolders.map((node) => ({ kind: "folder" as const, data: node })),
+      ...filteredPane2Files.map((file) => ({ kind: "file" as const, data: file })),
+    ];
+  }, [pane2FolderNode.subfolders, filteredPane2Files]);
 
   // Quick Access Shortcuts (Desktop, Downloads, Documents, Pictures, etc.)
   const renderQuickAccess = () => {
@@ -2220,19 +2252,8 @@ export function ArchiveTreeInspector({
 
   // Pane 2 Archive Contents Renderer
   const renderPane2ArchiveContents = () => {
-    const p2Node = pane2FolderNode;
-    const p2Files = searchQuery.trim()
-      ? p2Node.files.filter((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
-      : p2Node.files;
-
-    type FolderItem =
-      | { kind: "folder"; data: TreeNode }
-      | { kind: "file"; data: ArchiveEntryItem };
-
-    const items: FolderItem[] = [
-      ...p2Node.subfolders.map((node) => ({ kind: "folder" as const, data: node })),
-      ...p2Files.map((file) => ({ kind: "file" as const, data: file })),
-    ];
+    // Uses memoized pane2FolderItems (V-PERF-02)
+    const items = pane2FolderItems;
 
     if (items.length === 0 && !isCreatingFolder) {
       return (
@@ -2676,14 +2697,7 @@ export function ArchiveTreeInspector({
       );
     }
 
-    type FolderItem =
-      | { kind: "folder"; data: TreeNode }
-      | { kind: "file"; data: ArchiveEntryItem };
-
-    const folderItems: FolderItem[] = [
-      ...currentFolderNode.subfolders.map((node) => ({ kind: "folder" as const, data: node })),
-      ...filteredCurrentFiles.map((file) => ({ kind: "file" as const, data: file })),
-    ];
+    // folderItems is memoized at component level (V-PERF-02)
 
     return (
       <div
