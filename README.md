@@ -9,21 +9,21 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.3.4-0078D4?style=for-the-badge&logo=semver&logoColor=white" alt="Version 2.3.4" /></a>
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=for-the-badge&logo=windows11&logoColor=white" alt="Platform Windows" />
-  <img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=for-the-badge&logo=tauri&logoColor=black" alt="Tauri 2" />
-  <img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" />
-  <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 19" />
-  <img src="https://img.shields.io/badge/TypeScript-5.6-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.3.5-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.3.5" /></a>
+  <a href="#windows-shell-integration"><img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows 10 | 11" /></a>
+  <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2.0" /></a>
+  <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021 Edition" /></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/React-19.1-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 19.1" /></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/TypeScript-~6.0-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript ~6.0" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-059669?style=flat-square" alt="MIT License" /></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Security-AES--256--GCM%20AEAD-10B981?style=for-the-badge&logo=shield&logoColor=white" alt="AES-256-GCM AEAD" />
-  <img src="https://img.shields.io/badge/Tests-31%2F31%20Passing-success?style=for-the-badge&logo=checkmarx&logoColor=white" alt="31/31 Tests Passing" />
-  <img src="https://img.shields.io/badge/Engine-Zstandard%20%7C%20LZ4%20%7C%20Brotli-F59E0B?style=for-the-badge&logo=speedtest&logoColor=white" alt="Compression Engine" />
-  <img src="https://img.shields.io/badge/Shell-Windows%2011%20Native%20COM-6366F1?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 11 Shell" />
-  <img src="https://img.shields.io/badge/Audit-35%2F35%20Verified-8B5CF6?style=for-the-badge&logo=target&logoColor=white" alt="Audit 35/35" />
-  <img src="https://img.shields.io/badge/License-MIT-059669?style=for-the-badge" alt="License MIT" />
+  <a href="src-tauri/src/crypto.rs"><img src="https://img.shields.io/badge/security-AES--256--GCM%20AEAD-10B981?style=flat-square&logo=shield&logoColor=white" alt="AES-256-GCM AEAD Security" /></a>
+  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-31%2F31%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="31/31 Automated Tests Passing" /></a>
+  <a href="src-tauri/src/compressor/mod.rs"><img src="https://img.shields.io/badge/engine-Zstandard%20%7C%20LZ4%20%7C%20Brotli-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Compression Engine" /></a>
+  <a href="src-tauri/crates/bayzip_shell/src/lib.rs"><img src="https://img.shields.io/badge/shell-Windows%2011%20COM-6366F1?style=flat-square&logo=windows&logoColor=white" alt="Windows 11 COM Shell Extension" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/audit-35%2F35%20remediated-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="35/35 Technical Audit Findings Remediated" /></a>
 </p>
 
 <p align="center">
@@ -32,6 +32,7 @@
   <a href="#-zero-allocation-streaming-aes-256-gcm-encryption"><b>🔒 Security & Cryptography</b></a> •
   <a href="#-windows-file-explorer-integration"><b>🪟 Shell Extension</b></a> •
   <a href="#-supported-formats"><b>📂 Supported Formats</b></a> •
+  <a href="TESTS.md"><b>🧪 Test Report</b></a> •
   <a href="#-building--running"><b>🚀 Quick Start</b></a> •
   <a href="CHANGELOG.md"><b>📋 Changelog</b></a>
 </p>
@@ -150,6 +151,7 @@ flowchart TD
 ---
 
 ## 🪟 Windows File Explorer Integration
+<a id="windows-shell-integration"></a>
 
 - **Native Windows 11 Top-Level Context Menu (`IExplorerCommand`)**:
   - Implements Microsoft's modern Windows 11 shell extension standard via companion in-process COM DLL (`bayzip_shell.dll`).
@@ -190,7 +192,7 @@ flowchart TD
 
 ### Prerequisites
 - [Node.js](https://nodejs.org/) (v18+)
-- [Rust](https://www.rust-lang.org/) (1.75+) with `x86_64-pc-windows-msvc` target
+- [Rust](https://www.rust-lang.org/) (2021 Edition / 1.77+) with `x86_64-pc-windows-msvc` target
 - Windows 10 or 11 (64-bit)
 
 ### Development
@@ -212,6 +214,7 @@ npm run tauri build
 ```
 The compiled installer will be located in `src-tauri/target/release/bundle/nsis/`.
 
+<a id="automated-tests"></a>
 ### Run Test Suite
 ```bash
 # Backend unit tests (crypto, path sanitization, priority guards, specs)

@@ -41,6 +41,9 @@ pub fn list_tar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
             }
         }
     }
+    if items.is_empty() {
+        return super::rar::list_rar_entries(p);
+    }
     let count = items.len();
     (items, count, total_uncompressed)
 }
@@ -92,5 +95,5 @@ pub fn preview_tar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>
         }
     }
 
-    Err(format!("Entry '{}' not found in tar archive", entry_name))
+    super::rar::preview_rar_entry_bytes(path, entry_name)
 }

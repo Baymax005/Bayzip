@@ -2,9 +2,12 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
-# 📋 Bayzip Changelog & Release Notes
+## [v2.3.5] - 2026-11-08
 
-All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
+### 🔍 Archive Inspection & Format Preview Hardening
+- **Libarchive Fallback for Compound Tar, ISO & Cabinet Archives (`inspector/tar.rs`)**:
+  - Automatically queries Windows system `tar.exe` (libarchive 3.8) when pure Rust parsers return 0 items.
+  - Enables full directory tree hierarchy exploration and safe in-memory previews for `.iso`, `.cab`, `.tar.xz`, `.tar.bz2`, and `.tar.zst` files.
 
 ## [v2.3.4] - 2026-11-08
 
@@ -917,3 +920,4 @@ All notable changes, version milestones, security fixes, and performance enhance
 
 - Universal extraction support for `.bay`, `.zip`, `.7z`, and `.tar`.
 - Hardware-scaled thread allocation and `ScopedPriorityGuard` OS prioritization.
+
