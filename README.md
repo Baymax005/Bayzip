@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/bayzip-private/releases"><img src="https://img.shields.io/badge/version-v2.3.4-0078D4?style=for-the-badge&logo=semver&logoColor=white" alt="Version 2.3.4" /></a>
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.3.4-0078D4?style=for-the-badge&logo=semver&logoColor=white" alt="Version 2.3.4" /></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=for-the-badge&logo=windows11&logoColor=white" alt="Platform Windows" />
   <img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=for-the-badge&logo=tauri&logoColor=black" alt="Tauri 2" />
   <img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" />
@@ -196,8 +196,8 @@ flowchart TD
 ### Development
 ```bash
 # Clone the repository
-git clone https://github.com/Baymax005/bayzip-private.git
-cd bayzip-private
+git clone https://github.com/Baymax005/Bayzip.git
+cd Bayzip
 
 # Install frontend dependencies
 npm install
