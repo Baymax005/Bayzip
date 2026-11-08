@@ -5,8 +5,7 @@
 <h1 align="center">Bayzip</h1>
 
 <p align="center">
-  <b>Next-Generation, Hardware-Accelerated High-Throughput Archiver for Windows</b><br>
-  <i>Engineered with Tauri 2, Rust & React 19 for maximum multi-core saturation, streaming AEAD encryption, and native Windows 11 Fluent shell integration.</i>
+  Fast, hardware-accelerated archiver for Windows built with Tauri 2, Rust, and React.
 </p>
 
 <p align="center">
@@ -224,12 +223,10 @@ npx tsc --noEmit
 
 ---
 
+## 👤 Author
+
+**Muhammad Ali** ([@Baymax005](https://github.com/Baymax005))
+
 ## 📜 License
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
-
----
-
-<p align="center">
-  <b>Bayzip</b> • Engineered with ❤️ by <a href="https://github.com/Baymax005">Muhammad Ali (Baymax)</a>
-</p>
+Distributed under the MIT License. See [LICENSE](LICENSE) for details.
