@@ -13,10 +13,10 @@ import { AboutModal } from "./components/AboutModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { PasswordModal } from "./components/PasswordModal";
 import { ResultModals } from "./components/ResultModals";
-import { ExtractPage } from "./components/ExtractPage";
-import { CompressPage } from "./components/CompressPage";
+import { CompressModal } from "./components/CompressModal";
+import { ExtractModal } from "./components/ExtractModal";
 import { UnifiedDropHub } from "./components/UnifiedDropHub";
-import { normalizeArchiveEntryPath } from "./components/ArchiveTreeInspector";
+import { ArchiveTreeInspector, normalizeArchiveEntryPath, StreamProgressTelemetry } from "./components/ArchiveTreeInspector";
 import { FilePreviewModal } from "./components/FilePreviewModal";
 
 import {
@@ -32,7 +32,7 @@ import {
   StartupCommand,
 } from "./types";
 
-const FORMAT_ALGORITHMS: Record<string, string[]> = {
+export const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
   ".bayg": ["Zstd-Fast (Auto)"],
   ".7z": ["LZMA2", "LZMA", "BZip2"],
@@ -40,20 +40,10 @@ const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".tar": ["None (Store)"],
 };
 
-
-
-function App() {
-  // Navigation Mode: "compress" or "extract"
-  const [activeMode, setActiveMode] = useState<"compress" | "extract">("compress");
-  const activeModeRef = useRef<"compress" | "extract">(activeMode);
-  useEffect(() => {
-    activeModeRef.current = activeMode;
-  }, [activeMode]);
-
-  // System Specs
+export default function App() {
+  // System Hardware Specs
   const [specs, setSpecs] = useState<SystemSpecs | null>(null);
   const [sliderValue, setSliderValue] = useState<number>(50); // 0, 25, 50, 75, 100
-  const [isAdvanced, setIsAdvanced] = useState(false);
 
   // Compress Options & Naming
   const [customArchiveName, setCustomArchiveName] = useState<string>("");
@@ -63,49 +53,196 @@ function App() {
   const [compressPassword, setCompressPassword] = useState<string>("");
   const [showCompressPassword, setShowCompressPassword] = useState<boolean>(false);
   const [archiveToOriginalPath, setArchiveToOriginalPath] = useState(true);
-  const [compressDestDir, setCompressDestDir] = useState<string>("");
+  const [compressDestDir] = useState<string>("");
   const [separateArchives, setSeparateArchives] = useState(false);
   const [smartMediaBypass, setSmartMediaBypass] = useState(true);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [itemsInfo, setItemsInfo] = useState<Record<string, { size: number; is_dir: boolean }>>({});
-  const [compressViewMode, setCompressViewMode] = useState<"tree" | "list">("list");
   const [stagedEntries, setStagedEntries] = useState<ArchiveEntryItem[]>([]);
   const [isInspectingStaged, setIsInspectingStaged] = useState<boolean>(false);
   const [excludedCompressPaths, setExcludedCompressPaths] = useState<Set<string>>(new Set());
   const stagedCacheRef = useRef<Map<string, { info: SelectedItemInfo; entries: ArchiveEntryItem[] }>>(new Map());
+
+  // Dialog & Modal Visibilities
+  const [isCompressModalOpen, setIsCompressModalOpen] = useState(false);
+  const [isExtractModalOpen, setIsExtractModalOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
-  // Extraction State & Password
-  const [extractPassword, setExtractPassword] = useState<string>("");
-  const [showExtractPassword, setShowExtractPassword] = useState<boolean>(false);
-  const [isPasswordPromptOpen, setIsPasswordPromptOpen] = useState<boolean>(false);
-
-  // Compression execution state
+  // Compression Execution State
   const [isCompressing, setIsCompressing] = useState(false);
-  const [isCancellingCompress, setIsCancellingCompress] = useState(false);
-  const [progress, setProgress] = useState<CompressProgress | null>(null);
+  const [, setIsCancellingCompress] = useState(false);
+  const [compressProgress, setCompressProgress] = useState<CompressProgress | null>(null);
+  const [isProgressMinimized, setIsProgressMinimized] = useState(false);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
-  const [compressError, setCompressError] = useState<string | null>(null);
-  const [activeCompressConfig, setActiveCompressConfig] = useState<{
+  const [, setCompressError] = useState<string | null>(null);
+  const [, setActiveCompressConfig] = useState<{
     format: string;
     algorithm: string;
     sliderValue: number;
     archiveName: string;
   } | null>(null);
 
-  // Extraction State
+  // Extraction State & Password
   const [selectedArchive, setSelectedArchive] = useState<string | null>(null);
   const [archiveInfo, setArchiveInfo] = useState<ArchiveInfo | null>(null);
   const [isInspectingArchive, setIsInspectingArchive] = useState<boolean>(false);
   const [extractDest, setExtractDest] = useState<string>("");
   const [extractToSubfolder, setExtractToSubfolder] = useState<boolean>(true);
   const [openFolderOnExtract, setOpenFolderOnExtract] = useState<boolean>(true);
+  const [extractPassword, setExtractPassword] = useState<string>("");
+  const [showExtractPassword, setShowExtractPassword] = useState<boolean>(false);
+  const [isPasswordPromptOpen, setIsPasswordPromptOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
+  const [, setIsCancellingExtract] = useState<boolean>(false);
+  const [extractProgress, setExtractProgress] = useState<ExtractProgress | null>(null);
+  const [extractResult, setExtractResult] = useState<ExtractResult | null>(null);
+  const [extractError, setExtractError] = useState<string | null>(null);
   const [excludedPaths, setExcludedPaths] = useState<Set<string>>(new Set());
 
+  // In-Place Archive Testing State
+  const [testStatus, setTestStatus] = useState<"idle" | "testing" | "verified" | "error">("idle");
+  const [testMessage, setTestMessage] = useState<string | null>(null);
+  const isTestingRef = useRef(false);
+
+  // Safe In-Memory File Preview State
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState<ArchiveEntryPreview | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewTargetDisplayPath, setPreviewTargetDisplayPath] = useState<string>("");
+
+  // Registry Sync State
+  const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
+
+  // Calculations for Staged Files
+  const totalSelectedSize = useMemo(() => {
+    return selectedFiles.reduce((acc, f) => acc + (itemsInfo[f]?.size || 0), 0);
+  }, [selectedFiles, itemsInfo]);
+
+  const effectiveTotalSize = useMemo(() => {
+    if (stagedEntries.length === 0) return totalSelectedSize;
+    if (excludedCompressPaths.size === 0) {
+      return stagedEntries.reduce((acc, e) => acc + (e.is_dir ? 0 : e.size), 0);
+    }
+    const excludedArray = Array.from(excludedCompressPaths);
+    return stagedEntries.reduce((acc, e) => {
+      if (e.is_dir) return acc;
+      const norm = normalizeArchiveEntryPath(e.name);
+      const isExcluded = excludedArray.some((ex) => {
+        if (norm === ex) return true;
+        const prefix = ex.endsWith("/") ? ex : ex + "/";
+        return norm.startsWith(prefix);
+      });
+      return isExcluded ? acc : acc + e.size;
+    }, 0);
+  }, [stagedEntries, excludedCompressPaths, totalSelectedSize]);
+
+  const totalStagedFilesCount = useMemo(() => {
+    return stagedEntries.filter((e) => !e.is_dir).length;
+  }, [stagedEntries]);
+
+  const stagedArchiveInfo = useMemo<ArchiveInfo>(() => {
+    const targetName =
+      customArchiveName.trim() ||
+      (selectedFiles.length === 1 ? selectedFiles[0].split(/[/\\]/).pop() || "Archive" : "Archive");
+    return {
+      path: selectedFiles[0] || "",
+      filename: targetName,
+      size: effectiveTotalSize,
+      format: selectedFormat.toUpperCase(),
+      is_archive: false,
+      is_encrypted: false,
+      file_count: totalStagedFilesCount,
+      total_uncompressed_size: effectiveTotalSize,
+      entries: stagedEntries,
+    };
+  }, [selectedFiles, customArchiveName, effectiveTotalSize, selectedFormat, stagedEntries, totalStagedFilesCount]);
+
+  // Combined Active Archive Info for File Viewer
+  const currentArchiveInfo = useMemo<ArchiveInfo>(() => {
+    if (selectedArchive && archiveInfo) {
+      return archiveInfo;
+    }
+    if (selectedFiles.length > 0) {
+      return stagedArchiveInfo;
+    }
+    return {
+      path: "",
+      filename: "",
+      size: 0,
+      format: "",
+      is_archive: false,
+      is_encrypted: false,
+      file_count: 0,
+      total_uncompressed_size: 0,
+      entries: [],
+    };
+  }, [selectedArchive, archiveInfo, selectedFiles.length, stagedArchiveInfo]);
+
+  // Cancellation Handlers
+  const handleCancelCompress = async () => {
+    try {
+      setIsCancellingCompress(true);
+      await invoke("cancel_compression");
+    } catch (e) {
+      console.error("Failed to cancel compression:", e);
+    }
+  };
+
+  const handleCancelExtract = async () => {
+    try {
+      setIsCancellingExtract(true);
+      await invoke("cancel_extraction");
+    } catch (e) {
+      console.error("Failed to cancel extraction:", e);
+    }
+  };
+
+  // Active Stream Telemetry for Bottom Status Bar
+  const activeStreamTelemetry = useMemo<StreamProgressTelemetry | null>(() => {
+    if (isCompressing && isProgressMinimized) {
+      const fileName = compressProgress?.current_file
+        ? compressProgress.current_file.split(/[/\\]/).pop() || "Streaming..."
+        : `${customArchiveName.trim() || "Archive"}${selectedFormat}`;
+      return {
+        type: "compress",
+        fileName,
+        percent: compressProgress?.percent ?? 0,
+        throughputText: `${formatBytes(compressProgress?.bytes_processed || 0)} / ${formatBytes(compressProgress?.total_bytes || 0)}`,
+        onCancel: handleCancelCompress,
+        onRestoreModal: () => setIsProgressMinimized(false),
+      };
+    }
+    if (isExtracting && isProgressMinimized) {
+      const fileName = extractProgress?.current_file
+        ? extractProgress.current_file.split(/[/\\]/).pop() || "Extracting..."
+        : archiveInfo?.filename || "Archive";
+      const totalUncompressed = archiveInfo?.total_uncompressed_size || archiveInfo?.size || 0;
+      return {
+        type: "extract",
+        fileName,
+        percent: extractProgress?.percent ?? 0,
+        throughputText: `${formatBytes(extractProgress?.bytes_extracted || 0)} / ${formatBytes(totalUncompressed)}`,
+        onCancel: handleCancelExtract,
+        onRestoreModal: () => setIsProgressMinimized(false),
+      };
+    }
+    return null;
+  }, [
+    isCompressing,
+    isExtracting,
+    isProgressMinimized,
+    compressProgress,
+    extractProgress,
+    customArchiveName,
+    selectedFormat,
+    archiveInfo,
+  ]);
+
+  // Exclusions Management
   const handleToggleExclude = (rawPath: string, isDir?: boolean) => {
     const norm = normalizeArchiveEntryPath(rawPath).replace(/\/+$/, "");
     const prefix = norm + "/";
@@ -113,41 +250,11 @@ function App() {
     setExcludedPaths((prev) => {
       const next = new Set(prev);
       const allEntries = archiveInfo?.entries || [];
-
-      const isDirectlyExcluded = next.has(norm);
-      const isAncestorExcluded = Array.from(next).some((exc) => {
-        const excClean = exc.replace(/\/+$/, "");
-        return norm.startsWith(excClean + "/");
-      });
-      const isDescendantExcluded = isDir && Array.from(next).some((exc) => {
-        const excClean = exc.replace(/\/+$/, "");
-        return excClean.startsWith(prefix);
-      });
-
-      const isCurrentlyExcluded = isDirectlyExcluded || isAncestorExcluded || isDescendantExcluded;
+      const isCurrentlyExcluded = next.has(norm);
 
       if (isCurrentlyExcluded) {
-        // User wants to INCLUDE this item back
         next.delete(norm);
         next.delete(norm + "/");
-
-        // If an umbrella ancestor was in next, remove the ancestor and retain sibling items
-        for (const exc of Array.from(next)) {
-          const excClean = exc.replace(/\/+$/, "");
-          if (norm.startsWith(excClean + "/")) {
-            next.delete(exc);
-            next.delete(excClean);
-            const ancPrefix = excClean + "/";
-            for (const entry of allEntries) {
-              const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
-              if (entryNorm.startsWith(ancPrefix) && entryNorm !== norm && !entryNorm.startsWith(prefix)) {
-                next.add(entryNorm);
-              }
-            }
-          }
-        }
-
-        // If it's a directory, un-exclude all descendants
         if (isDir) {
           for (const exc of Array.from(next)) {
             const excClean = exc.replace(/\/+$/, "");
@@ -157,7 +264,6 @@ function App() {
           }
         }
       } else {
-        // User wants to EXCLUDE this item
         next.add(norm);
         if (isDir) {
           for (const entry of allEntries) {
@@ -176,43 +282,47 @@ function App() {
     setExcludedPaths(new Set());
   };
 
-  const includedFilesCount = useMemo(() => {
-    if (!archiveInfo?.entries || archiveInfo.entries.length === 0) {
-      return Math.max(0, (archiveInfo?.file_count || 0) - excludedPaths.size);
-    }
-    if (excludedPaths.size === 0) {
-      return archiveInfo.file_count || archiveInfo.entries.filter((e) => !e.is_dir).length;
-    }
-    const excludedArray = Array.from(excludedPaths);
-    let count = 0;
-    for (const e of archiveInfo.entries) {
-      if (e.is_dir) continue;
-      const norm = normalizeArchiveEntryPath(e.name);
-      const isExcluded = excludedArray.some((ex) => {
-        if (norm === ex) return true;
-        const prefix = ex.endsWith("/") ? ex : ex + "/";
-        return norm.startsWith(prefix);
-      });
-      if (!isExcluded) {
-        count++;
+  const handleToggleCompressExclude = (rawPath: string, isDir?: boolean) => {
+    const norm = normalizeArchiveEntryPath(rawPath).replace(/\/+$/, "");
+    const prefix = norm + "/";
+
+    setExcludedCompressPaths((prev) => {
+      const next = new Set(prev);
+      const isCurrentlyExcluded = next.has(norm);
+
+      if (isCurrentlyExcluded) {
+        next.delete(norm);
+        next.delete(norm + "/");
+        if (isDir) {
+          for (const exc of Array.from(next)) {
+            const excClean = exc.replace(/\/+$/, "");
+            if (excClean === norm || excClean.startsWith(prefix)) {
+              next.delete(exc);
+            }
+          }
+        }
+      } else {
+        next.add(norm);
+        if (isDir) {
+          for (const entry of stagedEntries) {
+            const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
+            if (entryNorm.startsWith(prefix) || entryNorm === norm) {
+              next.add(entryNorm);
+            }
+          }
+        }
       }
-    }
-    return count;
-  }, [archiveInfo, excludedPaths]);
-  const [isCancellingExtract, setIsCancellingExtract] = useState<boolean>(false);
-  const [extractProgress, setExtractProgress] = useState<ExtractProgress | null>(null);
-  const [extractResult, setExtractResult] = useState<ExtractResult | null>(null);
-  const [extractError, setExtractError] = useState<string | null>(null);
-  // Safe in-memory preview state
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const [previewData, setPreviewData] = useState<ArchiveEntryPreview | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [previewTargetDisplayPath, setPreviewTargetDisplayPath] = useState<string>("");
+      return next;
+    });
+  };
 
+  const handleCompressIncludeAll = () => {
+    setExcludedCompressPaths(new Set());
+  };
+
+  // Preview Entry
   const handlePreviewEntry = async (entryName: string) => {
-    const isDiskFile = /^[a-zA-Z]:[/\\]/.test(entryName) || activeMode === "compress" || !selectedArchive;
-
+    const isDiskFile = /^[a-zA-Z]:[/\\]/.test(entryName) || !selectedArchive;
     setIsPreviewOpen(true);
     setIsPreviewLoading(true);
     setPreviewError(null);
@@ -221,9 +331,7 @@ function App() {
     if (isDiskFile) {
       setPreviewTargetDisplayPath(entryName);
       try {
-        const res = await invoke<ArchiveEntryPreview>("preview_staged_file", {
-          path: entryName,
-        });
+        const res = await invoke<ArchiveEntryPreview>("preview_staged_file", { path: entryName });
         setPreviewData(res);
       } catch (err: unknown) {
         setPreviewError(typeof err === "string" ? err : String(err));
@@ -250,7 +358,7 @@ function App() {
     }
   };
 
-  // Query file and folder size metadata and recursive tree incrementally when selection changes
+  // Staged Items Inspection Effect
   useEffect(() => {
     if (selectedFiles.length === 0) {
       stagedCacheRef.current.clear();
@@ -258,70 +366,39 @@ function App() {
       setStagedEntries([]);
       setExcludedCompressPaths(new Set());
       setIsInspectingStaged(false);
-      if (!isCompressing) {
-        setCustomArchiveName("");
-      }
+      if (!isCompressing) setCustomArchiveName("");
       return;
     }
-    let isCurrent = true;
 
-    // Determine paths added and paths removed
+    let isCurrent = true;
     const currentCachedPaths = Array.from(stagedCacheRef.current.keys());
     const pathsRemoved = currentCachedPaths.filter((p) => !selectedFiles.includes(p));
     const pathsToAdd = selectedFiles.filter((p) => !stagedCacheRef.current.has(p));
 
-    // Prune removed paths from cache immediately
     if (pathsRemoved.length > 0) {
       pathsRemoved.forEach((p) => stagedCacheRef.current.delete(p));
     }
 
-    // Fast path: Only removals occurred (0ms instant rebuild, zero disk I/O, zero loading spinner)
     if (pathsToAdd.length === 0) {
       const newItemsInfo: Record<string, { size: number; is_dir: boolean }> = {};
       const newStagedEntries: ArchiveEntryItem[] = [];
-      let hasFolder = false;
-
       for (const [p, data] of stagedCacheRef.current.entries()) {
         newItemsInfo[p] = { size: data.info.size, is_dir: data.info.is_dir };
-        if (data.info.is_dir) hasFolder = true;
         newStagedEntries.push(...data.entries);
       }
-
       setItemsInfo(newItemsInfo);
       setStagedEntries(newStagedEntries);
-      if (hasFolder) {
-        setCompressViewMode("tree");
-      }
-
-      // Prune orphaned excluded paths that no longer exist in stagedEntries
-      setExcludedCompressPaths((prev) => {
-        if (prev.size === 0) return prev;
-        const entryNorms = new Set(newStagedEntries.map((e) => normalizeArchiveEntryPath(e.name).replace(/\/+$/, "")));
-        const pruned = new Set<string>();
-        for (const exc of prev) {
-          const clean = exc.replace(/\/+$/, "");
-          if (entryNorms.has(clean)) {
-            pruned.add(exc);
-          }
-        }
-        return pruned;
-      });
-
       setIsInspectingStaged(false);
       return;
     }
 
-    // Slow path: Only inspect the NEWLY ADDED paths from disk!
     setIsInspectingStaged(true);
-
     Promise.all([
       invoke<SelectedItemInfo[]>("get_selected_items_info", { paths: pathsToAdd }),
       invoke<ArchiveEntryItem[]>("inspect_staged_items", { paths: pathsToAdd }),
     ])
       .then(([infos, newEntries]) => {
         if (!isCurrent) return;
-
-        // Associate new entries with their respective top-level item path
         infos.forEach((info) => {
           const baseName = info.name;
           const matchingEntries = newEntries.filter((e) => {
@@ -334,36 +411,14 @@ function App() {
           });
         });
 
-        // Reconstruct aggregated states
         const aggregatedItemsInfo: Record<string, { size: number; is_dir: boolean }> = {};
         const aggregatedEntries: ArchiveEntryItem[] = [];
-        let hasFolder = false;
-
         for (const [p, data] of stagedCacheRef.current.entries()) {
           aggregatedItemsInfo[p] = { size: data.info.size, is_dir: data.info.is_dir };
-          if (data.info.is_dir) hasFolder = true;
           aggregatedEntries.push(...data.entries);
         }
-
         setItemsInfo(aggregatedItemsInfo);
         setStagedEntries(aggregatedEntries);
-        if (hasFolder) {
-          setCompressViewMode("tree");
-        }
-
-        // Prune orphaned excluded paths that no longer exist in stagedEntries
-        setExcludedCompressPaths((prev) => {
-          if (prev.size === 0) return prev;
-          const entryNorms = new Set(aggregatedEntries.map((e) => normalizeArchiveEntryPath(e.name).replace(/\/+$/, "")));
-          const pruned = new Set<string>();
-          for (const exc of prev) {
-            const clean = exc.replace(/\/+$/, "");
-            if (entryNorms.has(clean)) {
-              pruned.add(exc);
-            }
-          }
-          return pruned;
-        });
       })
       .catch((err) => {
         if (isCurrent) console.error("Failed to inspect added staged items:", err);
@@ -375,133 +430,9 @@ function App() {
     return () => {
       isCurrent = false;
     };
-  }, [selectedFiles]);
+  }, [selectedFiles, isCompressing]);
 
-  const handleToggleCompressExclude = (rawPath: string, isDir?: boolean) => {
-    const norm = normalizeArchiveEntryPath(rawPath).replace(/\/+$/, "");
-    const prefix = norm + "/";
-
-    setExcludedCompressPaths((prev) => {
-      const next = new Set(prev);
-      const allEntries = stagedEntries;
-
-      const isDirectlyExcluded = next.has(norm);
-      const isAncestorExcluded = Array.from(next).some((exc) => {
-        const excClean = exc.replace(/\/+$/, "");
-        return norm.startsWith(excClean + "/");
-      });
-      const isDescendantExcluded = isDir && Array.from(next).some((exc) => {
-        const excClean = exc.replace(/\/+$/, "");
-        return excClean.startsWith(prefix);
-      });
-
-      const isCurrentlyExcluded = isDirectlyExcluded || isAncestorExcluded || isDescendantExcluded;
-
-      if (isCurrentlyExcluded) {
-        // User wants to INCLUDE this item back
-        next.delete(norm);
-        next.delete(norm + "/");
-
-        // If an umbrella ancestor was in next, remove the ancestor and retain sibling items
-        for (const exc of Array.from(next)) {
-          const excClean = exc.replace(/\/+$/, "");
-          if (norm.startsWith(excClean + "/")) {
-            next.delete(exc);
-            next.delete(excClean);
-            const ancPrefix = excClean + "/";
-            for (const entry of allEntries) {
-              const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
-              if (entryNorm.startsWith(ancPrefix) && entryNorm !== norm && !entryNorm.startsWith(prefix)) {
-                next.add(entryNorm);
-              }
-            }
-          }
-        }
-
-        // If it's a directory, un-exclude all descendants
-        if (isDir) {
-          for (const exc of Array.from(next)) {
-            const excClean = exc.replace(/\/+$/, "");
-            if (excClean === norm || excClean.startsWith(prefix)) {
-              next.delete(exc);
-            }
-          }
-        }
-      } else {
-        // User wants to EXCLUDE this item
-        next.add(norm);
-        if (isDir) {
-          for (const entry of allEntries) {
-            const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
-            if (entryNorm.startsWith(prefix) || entryNorm === norm) {
-              next.add(entryNorm);
-            }
-          }
-        }
-      }
-      return next;
-    });
-  };
-
-  const handleCompressIncludeAll = () => {
-    setExcludedCompressPaths(new Set());
-  };
-
-  const handlePreviewStagedEntry = async (entryName: string) => {
-    let resolvedPath: string | null = null;
-    const isAbsolute = /^[a-zA-Z]:[/\\]/.test(entryName) || entryName.startsWith("/");
-    if (isAbsolute) {
-      resolvedPath = entryName;
-    } else {
-      const clean = entryName.replace(/\\/g, "/").replace(/^\/+/, "");
-      const firstSegment = clean.split("/")[0].toLowerCase();
-
-      for (const filePath of selectedFiles) {
-        const normFilePath = filePath.replace(/\\/g, "/");
-        const name = normFilePath.split("/").pop() || "";
-        if (name.toLowerCase() === firstSegment) {
-          if (clean.includes("/")) {
-            const sub = clean.substring(clean.indexOf("/") + 1);
-            resolvedPath = `${filePath}/${sub}`;
-          } else {
-            resolvedPath = filePath;
-          }
-          break;
-        }
-      }
-
-      if (!resolvedPath && selectedFiles.length === 1) {
-        resolvedPath = `${selectedFiles[0]}/${clean}`;
-      }
-    }
-
-    const displayPath = resolvedPath || entryName;
-    setPreviewTargetDisplayPath(displayPath);
-
-    if (!resolvedPath) {
-      setPreviewError("Could not locate source file on disk.");
-      setIsPreviewOpen(true);
-      return;
-    }
-
-    setIsPreviewOpen(true);
-    setIsPreviewLoading(true);
-    setPreviewError(null);
-    setPreviewData(null);
-
-    try {
-      const res = await invoke<ArchiveEntryPreview>("preview_staged_file", {
-        path: resolvedPath,
-      });
-      setPreviewData(res);
-    } catch (err: unknown) {
-      setPreviewError(typeof err === "string" ? err : String(err));
-    } finally {
-      setIsPreviewLoading(false);
-    }
-  };
-
-  // Auto-fill archive name from first file stem if currently empty
+  // Auto-fill archive name from first file stem
   useEffect(() => {
     if (selectedFiles.length > 0 && !customArchiveName) {
       const first = selectedFiles[0];
@@ -509,24 +440,26 @@ function App() {
       const stem = getArchiveStemName(filename);
       setCustomArchiveName(stem);
     }
-  }, [selectedFiles]);
+  }, [selectedFiles, customArchiveName]);
 
-  // Select Archive Handler (with metadata inquiry)
+  // Select Archive Handler
   const selectArchive = async (filePath: string, pwd?: string) => {
     if (!isArchiveFile(filePath)) {
-      setActiveMode("compress");
+      setSelectedArchive(null);
+      setArchiveInfo(null);
       setSelectedFiles((prev) => [...new Set([...prev, filePath])]);
       return;
     }
 
-    setActiveMode("extract");
+    // Switch to Archive View
+    setSelectedFiles([]);
     setSelectedArchive(filePath);
     setExcludedPaths(new Set());
     setExtractResult(null);
     setExtractError(null);
-    setExtractProgress(null);
+    setTestStatus("idle");
+    setTestMessage(null);
 
-    // Parent directory default
     const parentDir = filePath.replace(/[/\\][^/\\]+$/, "");
     setExtractDest(parentDir || ".");
 
@@ -540,7 +473,6 @@ function App() {
     else if (lower.endsWith(".rar")) format = "RAR Archive (.rar)";
     else if (lower.endsWith(".tar") || lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) format = "TAR Archive";
 
-    // Immediate query for exact file size so UI never shows "0 B" while indexing
     let initialSize = 0;
     try {
       initialSize = await invoke<number>("get_file_size", { path: filePath });
@@ -548,7 +480,6 @@ function App() {
       initialSize = 0;
     }
 
-    // Immediate skeleton info so UI renders archive card & dedicated folder name immediately with real size
     setArchiveInfo({
       path: filePath,
       filename,
@@ -589,90 +520,38 @@ function App() {
         total_uncompressed_size: 0,
         entries: [],
       });
-      if (isEnc) {
-        setIsPasswordPromptOpen(true);
-      }
+      if (isEnc) setIsPasswordPromptOpen(true);
     } finally {
       setIsInspectingArchive(false);
     }
   };
 
+  // Global Listeners & Drag Drop
   useEffect(() => {
     let isMounted = true;
     let unlistenDrop: (() => void) | undefined;
     let unlistenCompress: (() => void) | undefined;
     let unlistenExtract: (() => void) | undefined;
-    let unlistenBypass: (() => void) | undefined;
 
-    // 0. Query initial smart media bypass global preference
-    invoke<boolean>("get_smart_media_bypass")
-      .then((enabled) => {
-        if (isMounted) setSmartMediaBypass(enabled);
-      })
-      .catch(() => {});
-
-    // Listen for cross-window smart media bypass updates
-    listen<boolean>("smart_media_bypass_changed", (event) => {
-      if (isMounted) setSmartMediaBypass(event.payload);
-    })
-      .then((fn) => {
-        if (isMounted) unlistenBypass = fn;
-        else fn();
-      })
-      .catch(() => {});
-
-    // 1. Instant hardware specs query
     invoke<SystemSpecs>("get_system_specs")
       .then((res) => {
         if (isMounted) setSpecs(res);
       })
       .catch((err) => console.error("Specs query error:", err));
 
-    // 2. Fetch CLI / Context menu startup arguments
     invoke<StartupCommand>("get_cli_args")
       .then((cmd) => {
         if (isMounted && cmd && cmd.paths && cmd.paths.length > 0) {
-          if (cmd.action === "compress") {
-            setActiveMode("compress");
-            setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
-          } else if (cmd.action === "extract") {
-            const archivePaths = cmd.paths.filter(isArchiveFile);
-            if (archivePaths.length > 0) {
-              setActiveMode("extract");
-              selectArchive(archivePaths[0]);
-            } else {
-              setActiveMode("compress");
-              setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
-            }
+          const archivePaths = cmd.paths.filter(isArchiveFile);
+          if (archivePaths.length > 0) {
+            selectArchive(archivePaths[0]);
           } else {
-            const archivePaths = cmd.paths.filter(isArchiveFile);
-            if (archivePaths.length > 0 && archivePaths.length === cmd.paths.length) {
-              setActiveMode("extract");
-              selectArchive(archivePaths[0]);
-            } else {
-              setActiveMode("compress");
-              setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
-            }
+            setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
           }
         }
       })
-      .catch(() => { });
+      .catch(() => {});
 
-    // 3. Enable window-level drop acceptance for Windows WebView2 & Explorer
-    const handleWindowDragOver = (e: DragEvent) => {
-      e.preventDefault();
-      if (e.dataTransfer) {
-        e.dataTransfer.dropEffect = "copy";
-      }
-    };
-    const handleWindowDrop = (e: DragEvent) => {
-      e.preventDefault();
-      setIsDraggingOver(false);
-    };
-    window.addEventListener("dragover", handleWindowDragOver);
-    window.addEventListener("drop", handleWindowDrop);
-
-    // 4. Listen to native Tauri file drop events
     getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === "over" || event.payload.type === "enter") {
@@ -685,11 +564,10 @@ function App() {
           if (paths && paths.length > 0) {
             const archiveFile = paths.find(isArchiveFile);
             if (archiveFile) {
-              setActiveMode("extract");
-              setSelectedArchive(archiveFile);
               selectArchive(archiveFile);
             } else {
-              setActiveMode("compress");
+              setSelectedArchive(null);
+              setArchiveInfo(null);
               setSelectedFiles((prev) => [...new Set([...prev, ...paths])]);
             }
           }
@@ -699,23 +577,17 @@ function App() {
         if (isMounted) unlistenDrop = fn;
         else fn();
       })
-      .catch((err) => {
-        console.error("Failed to register drag-drop listener:", err);
-      });
+      .catch(() => {});
 
-    // 5. Listen to live compression progress events from Rust
     listen<CompressProgress>("compress_progress", (event) => {
-      if (isMounted) setProgress(event.payload);
+      if (isMounted) setCompressProgress(event.payload);
     })
       .then((fn) => {
         if (isMounted) unlistenCompress = fn;
         else fn();
       })
-      .catch((err) => {
-        console.error("Compress progress listener error:", err);
-      });
+      .catch(() => {});
 
-    // 6. Listen to live extraction progress events from Rust
     listen<ExtractProgress>("extract_progress", (event) => {
       if (isMounted) setExtractProgress(event.payload);
     })
@@ -723,35 +595,17 @@ function App() {
         if (isMounted) unlistenExtract = fn;
         else fn();
       })
-      .catch((err) => {
-        console.error("Extract progress listener error:", err);
-      });
+      .catch(() => {});
 
     return () => {
       isMounted = false;
-      window.removeEventListener("dragover", handleWindowDragOver);
-      window.removeEventListener("drop", handleWindowDrop);
       if (unlistenDrop) unlistenDrop();
       if (unlistenCompress) unlistenCompress();
       if (unlistenExtract) unlistenExtract();
-      if (unlistenBypass) unlistenBypass();
     };
   }, []);
 
-  const handleUpdateSmartMediaBypass = async (val: boolean) => {
-    setSmartMediaBypass(val);
-    try {
-      await invoke("set_smart_media_bypass", { enabled: val });
-    } catch (e) {
-      console.error("Failed to update smart media bypass:", e);
-    }
-  };
-
-  useEffect(() => {
-    setSelectedAlgorithm(FORMAT_ALGORITHMS[selectedFormat][0]);
-  }, [selectedFormat]);
-
-
+  // Toolbar Actions
   const handleSelectFiles = async () => {
     try {
       const selected = await open({
@@ -764,7 +618,8 @@ function App() {
         if (newFiles.length === 1 && archiveFile) {
           selectArchive(archiveFile);
         } else {
-          setActiveMode("compress");
+          setSelectedArchive(null);
+          setArchiveInfo(null);
           setSelectedFiles((prev) => [...new Set([...prev, ...newFiles])]);
         }
       }
@@ -782,7 +637,8 @@ function App() {
       });
       if (selected) {
         const newFolders = Array.isArray(selected) ? selected : [selected];
-        setActiveMode("compress");
+        setSelectedArchive(null);
+        setArchiveInfo(null);
         setSelectedFiles((prev) => [...new Set([...prev, ...newFolders])]);
       }
     } catch (err) {
@@ -795,40 +651,13 @@ function App() {
     try {
       const selected = await open({
         multiple: false,
-        title: "Select Archive to Extract",
+        title: "Select Archive to Open",
         filters: [
           {
             name: "Supported Archives",
             extensions: ["bay", "bayg", "zip", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "iso", "cab", "rar"],
           },
-          {
-            name: "Bayzip Archives (*.bay, *.bayg)",
-            extensions: ["bay", "bayg"],
-          },
-          {
-            name: "ZIP Archives (*.zip)",
-            extensions: ["zip"],
-          },
-          {
-            name: "7-Zip Archives (*.7z)",
-            extensions: ["7z"],
-          },
-          {
-            name: "RAR Archives (*.rar)",
-            extensions: ["rar"],
-          },
-          {
-            name: "TAR Archives (*.tar, *.gz, *.bz2, *.xz, *.zst)",
-            extensions: ["tar", "gz", "tgz", "bz2", "xz", "zst"],
-          },
-          {
-            name: "ISO & Cabinet (*.iso, *.cab)",
-            extensions: ["iso", "cab"],
-          },
-          {
-            name: "All Files (*.*)",
-            extensions: ["*"],
-          },
+          { name: "All Files (*.*)", extensions: ["*"] },
         ],
       });
       if (selected && typeof selected === "string") {
@@ -839,82 +668,93 @@ function App() {
     }
   };
 
-  const handleSelectDestFolder = async () => {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "Select Extraction Destination Folder",
-        defaultPath: extractDest || undefined,
-      });
-      if (selected && typeof selected === "string") {
-        setExtractDest(selected);
-      }
-    } catch (err) {
-      console.error("Destination folder selection error:", err);
-    }
+  const handleClearSelection = () => {
+    setSelectedFiles([]);
+    setSelectedArchive(null);
+    setArchiveInfo(null);
+    setCustomArchiveName("");
+    setStagedEntries([]);
+    setExcludedPaths(new Set());
+    setExcludedCompressPaths(new Set());
+    setTestStatus("idle");
+    setTestMessage(null);
+    setIsProgressMinimized(false);
+    setIsCompressModalOpen(false);
+    setIsExtractModalOpen(false);
   };
 
-  const handleSelectCompressDestination = async () => {
+  // In-Place Test Action
+  const handleInPlaceTest = async () => {
+    if (isTestingRef.current) return;
+
+    let targetArchive = selectedArchive;
+
+    if (!targetArchive) {
+      try {
+        const selected = await open({
+          multiple: false,
+          title: "Select Archive to Test",
+          filters: [
+            {
+              name: "Supported Archives",
+              extensions: ["bay", "bayg", "zip", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "iso", "cab", "rar"],
+            },
+            { name: "All Files (*.*)", extensions: ["*"] },
+          ],
+        });
+        if (selected && typeof selected === "string") {
+          targetArchive = selected;
+          await selectArchive(selected);
+        } else {
+          return;
+        }
+      } catch (err) {
+        console.error("Test archive selection error:", err);
+        return;
+      }
+    }
+
+    isTestingRef.current = true;
+    setTestStatus("testing");
+    setTestMessage("Verifying container integrity & stream checksums...");
+
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "Select Output Destination Folder",
-        defaultPath: compressDestDir || undefined,
+      const info = await invoke<ArchiveInfo>("get_archive_info", {
+        path: targetArchive,
+        password: extractPassword.trim() ? extractPassword.trim() : undefined,
       });
-      if (selected && typeof selected === "string") {
-        setCompressDestDir(selected);
+
+      if (info.is_encrypted && (!extractPassword || !extractPassword.trim())) {
+        setTestStatus("error");
+        setTestMessage("Password required for encrypted archive");
+        setIsPasswordPromptOpen(true);
+      } else {
+        setTestStatus("verified");
+        setTestMessage("✓ Archive Verified (0 errors)");
       }
     } catch (err) {
-      console.error("Compress destination folder selection error:", err);
-    }
-  };
-
-  const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
-
-  const handleRegisterContextMenu = async () => {
-    setIsSyncingRegistry(true);
-    try {
-      const res = await invoke<string>("register_context_menu");
-      setContextMenuStatus(res);
-    } catch (e) {
-      setContextMenuStatus("Registration failed: " + String(e));
+      setTestStatus("error");
+      setTestMessage(`Verification failed: ${String(err)}`);
     } finally {
-      setIsSyncingRegistry(false);
+      isTestingRef.current = false;
+      setTimeout(() => {
+        setTestStatus("idle");
+        setTestMessage(null);
+      }, 5000);
     }
   };
 
-  const handleOpenSettings = async () => {
-    try {
-      await invoke("open_settings_window");
-    } catch (err) {
-      console.warn("Failed to open native settings window, falling back to modal:", err);
-      setIsSettingsOpen(true);
-    }
-  };
-
-  const handleCancelCompress = async () => {
-    try {
-      setIsCancellingCompress(true);
-      await invoke("cancel_compression");
-    } catch (e) {
-      console.error("Failed to cancel compression:", e);
-    }
-  };
-
+  // Compression Execution
   const handleCompress = async () => {
-    if (selectedFiles.length === 0) {
-      await handleSelectFiles();
-      return;
-    }
+    if (selectedFiles.length === 0) return;
 
     if (selectedEncryption !== "none" && !compressPassword.trim()) {
       setCompressError("Please enter an archive password to enable encryption.");
       return;
     }
 
-    const targetArchiveName = customArchiveName.trim() ||
+    const targetArchiveName =
+      customArchiveName.trim() ||
       (selectedFiles.length === 1 ? selectedFiles[0].split(/[/\\]/).pop() || "archive" : "archive");
 
     setActiveCompressConfig({
@@ -926,7 +766,7 @@ function App() {
     setIsCompressing(true);
     setIsCancellingCompress(false);
     setCompressError(null);
-    setProgress({
+    setCompressProgress({
       percent: 0,
       current_file: "Initializing compression...",
       bytes_processed: 0,
@@ -948,7 +788,7 @@ function App() {
               format: selectedFormat,
               algorithm: selectedAlgorithm,
               slider_value: sliderValue,
-              custom_name: undefined, // Each file uses its own name
+              custom_name: undefined,
               encryption: selectedEncryption,
               password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
               output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
@@ -988,62 +828,32 @@ function App() {
         setCompressResult(res);
       }
     } catch (err) {
-      const errStr = String(err);
-      if (errStr.toLowerCase().includes("cancel")) {
-        console.log("Compression cancelled by user.");
-        setCompressError(null);
-      } else {
-        console.error("Compression execution error:", err);
-        setCompressError(errStr);
-      }
+      console.error("Compression execution error:", err);
     } finally {
       setIsCompressing(false);
       setIsCancellingCompress(false);
       setActiveCompressConfig(null);
-      setProgress(null);
+      setCompressProgress(null);
+      setIsProgressMinimized(false);
     }
   };
 
-  const handleCancelExtract = async () => {
-    try {
-      setIsCancellingExtract(true);
-      await invoke("cancel_extraction");
-    } catch (e) {
-      console.error("Failed to cancel extraction:", e);
-    }
-  };
-
+  // Extraction Execution
   const handleExtract = async (options?: {
     destination?: string;
     extractToSubfolder?: boolean;
     openFolderOnExtract?: boolean;
     password?: string;
   }) => {
-    if (!selectedArchive) {
-      await handleSelectArchive();
-      return;
-    }
+    if (!selectedArchive) return;
 
-    // Resolve parameters from WorkspaceExtractModal options or fallback to component state (V-INT-01)
     const effectivePassword = options?.password !== undefined ? options.password : extractPassword;
-    const effectiveDest = options?.destination !== undefined && options.destination.trim() !== ""
-      ? options.destination
-      : extractDest;
-    const effectiveSubfolder = options?.extractToSubfolder !== undefined
-      ? options.extractToSubfolder
-      : extractToSubfolder;
-    const effectiveOpenFolder = options?.openFolderOnExtract !== undefined
-      ? options.openFolderOnExtract
-      : openFolderOnExtract;
-
-    // Synchronize parent state with options passed from modal
-    if (options?.destination && options.destination.trim() !== "") setExtractDest(options.destination);
-    if (options?.password !== undefined) setExtractPassword(options.password);
-    if (options?.extractToSubfolder !== undefined) setExtractToSubfolder(options.extractToSubfolder);
-    if (options?.openFolderOnExtract !== undefined) setOpenFolderOnExtract(options.openFolderOnExtract);
+    const effectiveDest = options?.destination || extractDest;
+    const effectiveSubfolder = options?.extractToSubfolder !== undefined ? options.extractToSubfolder : extractToSubfolder;
+    const effectiveOpenFolder = options?.openFolderOnExtract !== undefined ? options.openFolderOnExtract : openFolderOnExtract;
 
     if (archiveInfo?.is_encrypted && !effectivePassword.trim()) {
-      setExtractError("Password required: This archive is encrypted. Please enter the password to extract.");
+      setExtractError("Password required to extract encrypted archive.");
       setIsPasswordPromptOpen(true);
       return;
     }
@@ -1060,40 +870,10 @@ function App() {
     try {
       let finalDest = effectiveDest;
       if (effectiveSubfolder) {
-        // Check if all files in the archive already share a single common top-level root folder
-        const entries = archiveInfo?.entries || [];
-        let hasSingleRoot = false;
-        if (entries.length > 0) {
-          let rootPrefix: string | null = null;
-          let isSingle = true;
-          for (const e of entries) {
-            const clean = e.name.replace(/\\/g, "/").replace(/^\.?\/+/, "").trim();
-            if (!clean || clean === ".") continue;
-            if (!clean.includes("/") && !e.is_dir) {
-              isSingle = false;
-              break;
-            }
-            const firstSegment = clean.split("/")[0];
-            if (!firstSegment) continue;
-            if (rootPrefix === null) {
-              rootPrefix = firstSegment;
-            } else if (rootPrefix.toLowerCase() !== firstSegment.toLowerCase()) {
-              isSingle = false;
-              break;
-            }
-          }
-          if (isSingle && rootPrefix !== null) {
-            hasSingleRoot = true;
-          }
-        }
-
-        // Only append subfolder if the archive does not already contain a single root folder
-        if (!hasSingleRoot) {
-          const fallbackName = selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "archive";
-          const stem = getArchiveStemName(archiveInfo?.filename || fallbackName);
-          const cleanDest = effectiveDest.replace(/[/\\]+$/, "");
-          finalDest = `${cleanDest}/${stem}`;
-        }
+        const fallbackName = selectedArchive ? selectedArchive.split(/[/\\]/).pop() || "archive" : "archive";
+        const stem = getArchiveStemName(archiveInfo?.filename || fallbackName);
+        const cleanDest = effectiveDest.replace(/[/\\]+$/, "");
+        finalDest = `${cleanDest}/${stem}`;
       }
 
       const res = await invoke<ExtractResult>("extract_archive", {
@@ -1109,278 +889,304 @@ function App() {
       setIsPasswordPromptOpen(false);
 
       if (effectiveOpenFolder && res.output_directory) {
-        revealItemInDir(res.output_directory).catch(() => { });
+        revealItemInDir(res.output_directory).catch(() => {});
       }
     } catch (err) {
-      const errMsg = String(err);
-      if (errMsg.toLowerCase().includes("cancel")) {
-        console.log("Extraction cancelled by user.");
-        setExtractError(null);
-      } else {
-        console.error("Extraction execution error:", err);
-        setExtractError(errMsg);
-        if (errMsg.toLowerCase().includes("password")) {
-          setIsPasswordPromptOpen(true);
-        }
+      console.error("Extraction execution error:", err);
+      setExtractError(String(err));
+      if (String(err).toLowerCase().includes("password")) {
+        setIsPasswordPromptOpen(true);
       }
     } finally {
       setIsExtracting(false);
       setIsCancellingExtract(false);
       setExtractProgress(null);
+      setIsProgressMinimized(false);
     }
   };
 
-  // formatBytes imported from src/utils/format (V-CODE-01)
+  const handleSelectDestFolder = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select Extraction Destination Folder",
+        defaultPath: extractDest || undefined,
+      });
+      if (selected && typeof selected === "string") {
+        setExtractDest(selected);
+      }
+    } catch (err) {
+      console.error("Destination folder selection error:", err);
+    }
+  };
 
+  const handleOpenSettings = async () => {
+    try {
+      await invoke("open_settings_window");
+    } catch {
+      setIsSettingsOpen(true);
+    }
+  };
+
+  const handleRegisterContextMenu = async () => {
+    setIsSyncingRegistry(true);
+    try {
+      const res = await invoke<string>("register_context_menu");
+      setContextMenuStatus(res);
+    } catch (e) {
+      setContextMenuStatus("Registration failed: " + String(e));
+    } finally {
+      setIsSyncingRegistry(false);
+    }
+  };
+
+  // Determine active document name for Titlebar
+  const activeDocumentName = selectedArchive
+    ? selectedArchive.split(/[/\\]/).pop()
+    : selectedFiles.length > 0
+      ? `${selectedFiles.length} item(s) staged`
+      : undefined;
 
   return (
-    <div className="h-screen w-screen bg-[#202020] text-white flex flex-col font-sans select-none overflow-hidden">
-      {/* Windows 11 Native Custom Titlebar */}
-      <Titlebar />
+    <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#141416] text-[#F4F4F6] select-none font-sans">
+      {/* 1. Titlebar */}
+      <Titlebar activeDocument={activeDocumentName} />
 
-      {/* Main Scrollable Body */}
-      <div className="flex-1 flex flex-col p-4 sm:p-6 overflow-y-auto custom-scrollbar">
-        <div className="w-full max-w-2xl lg:max-w-4xl xl:max-w-5xl mx-auto space-y-6 transition-all duration-200">
-          {/* Header & Mode Switcher */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              {/* Segmented Mode Control */}
-              <div className="flex items-center bg-[#1A1A1A] p-1 rounded-lg border border-[#333333]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveMode("compress");
-                    setExtractResult(null);
-                  }}
-                  className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${activeMode === "compress"
-                      ? "bg-[#2D2D2D] text-white shadow-sm border border-[#3E3E3E]"
-                      : "text-[#888888] hover:text-white"
-                    }`}
-                  title={isCompressing ? "Compression in progress" : undefined}
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5 text-[#60CDFF]">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                  </svg>
-                  <span>Compress</span>
-                  {isCompressing && activeMode !== "compress" && (
-                    <span className="inline-flex items-center space-x-1 ml-1 px-1.5 py-0.5 rounded-full bg-[#60CDFF]/15 text-[#60CDFF] text-[10px] font-mono border border-[#60CDFF]/30">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#60CDFF] animate-pulse"></span>
-                      <span>{progress ? `${Math.round(progress.percent)}%` : "..."}</span>
-                    </span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveMode("extract")}
-                  className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer ${activeMode === "extract"
-                      ? "bg-[#2D2D2D] text-white shadow-sm border border-[#3E3E3E]"
-                      : "text-[#888888] hover:text-white"
-                    }`}
-                  title={isExtracting ? "Extraction in progress" : undefined}
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5 text-[#60CDFF]">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-                  </svg>
-                  <span>Extract</span>
-                  {isExtracting && activeMode !== "extract" && (
-                    <span className="inline-flex items-center space-x-1 ml-1 px-1.5 py-0.5 rounded-full bg-[#60CDFF]/15 text-[#60CDFF] text-[10px] font-mono border border-[#60CDFF]/30">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#60CDFF] animate-pulse"></span>
-                      <span>{extractProgress ? `${Math.round(extractProgress.percent)}%` : "..."}</span>
-                    </span>
-                  )}
-                </button>
-              </div>
+      {/* 2. Unified Top Toolbar (Bandizip Style) */}
+      <div className="h-11 bg-[#1C1C1F] border-b border-[#2E2E34] px-3 flex items-center justify-between text-xs select-none shrink-0">
+        {/* Left Group (Load / Stage) */}
+        <div className="flex items-center space-x-1.5">
+          <button
+            type="button"
+            onClick={handleSelectArchive}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer"
+            title="Open existing archive to inspect & extract (Ctrl+O)"
+          >
+            <span className="text-[#38BDF8]">📂</span>
+            <span>Open Archive</span>
+          </button>
 
-              <span className="text-xl font-semibold tracking-tight text-white hidden md:inline">
-                {activeMode === "compress" ? "Create Archive" : "Extract Archive"}
-              </span>
-            </div>
+          <button
+            type="button"
+            onClick={handleSelectFiles}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer"
+            title="Add files to compress (Ctrl+N)"
+          >
+            <span className="text-slate-400">➕</span>
+            <span>Add Files</span>
+          </button>
 
-            <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={handleSelectFolder}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer"
+            title="Add directory to compress"
+          >
+            <span className="text-[#FBBF24]">📁</span>
+            <span>Add Folder</span>
+          </button>
+        </div>
 
-              {activeMode === "compress" && (
-                <button
-                  type="button"
-                  onClick={() => setIsAdvanced(!isAdvanced)}
-                  className="text-xs font-medium px-3 py-1.5 rounded-md bg-[#252525] hover:bg-[#303030] border border-[#3E3E3E] hover:border-[#555] transition-colors cursor-pointer text-[#C8C8C8] hover:text-white"
-                >
-                  <span className="hidden sm:inline">{isAdvanced ? "Simple Mode" : "Advanced"}</span>
-                  <span className="sm:hidden">{isAdvanced ? "Simple" : "Adv"}</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setIsAboutOpen(true)}
-                className="text-xs font-medium px-2.5 py-1.5 rounded-md text-[#A8A8A8] hover:text-white hover:bg-[#252525] transition-colors cursor-pointer hidden sm:block"
-              >
-                About
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenSettings}
-                className="p-1.5 text-[#A8A8A8] hover:text-[#60CDFF] transition-colors cursor-pointer group"
-                title="Settings"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  className="w-4 h-4 transition-transform duration-500 ease-out group-hover:rotate-90"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              </button>
-            </div>
-          </div>
+        {/* Right Group (Actions & Modals) */}
+        <div className="flex items-center space-x-1.5">
+          {/* [ Compress... ] Button (Active Sky-Blue when files are staged) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (selectedFiles.length === 0) {
+                handleSelectFiles();
+              } else {
+                setIsCompressModalOpen(true);
+              }
+            }}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-[4px] text-xs transition-all cursor-pointer ${
+              selectedFiles.length > 0
+                ? "bg-[#38BDF8] hover:bg-[#7DD3FC] text-[#0F172A] font-semibold shadow-sm"
+                : "bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] border border-[#323238]"
+            }`}
+            title="Configure and compress staged files into archive"
+          >
+            <span>📦</span>
+            <span>Compress...</span>
+          </button>
 
-          {/* ======================================================== */}
-          {/* UNIFIED WORKFLOW: HUB vs EXTRACT vs COMPRESS             */}
-          {/* ======================================================== */}
-          {!selectedArchive && selectedFiles.length === 0 ? (
+          {/* [ Extract... ] Button (Active Sky-Blue when archive is open) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (!selectedArchive) {
+                handleSelectArchive();
+              } else {
+                setIsExtractModalOpen(true);
+              }
+            }}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-[4px] text-xs transition-all cursor-pointer ${
+              selectedArchive && archiveInfo
+                ? "bg-[#38BDF8] hover:bg-[#7DD3FC] text-[#0F172A] font-semibold shadow-sm"
+                : "bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] border border-[#323238]"
+            }`}
+            title="Extract archive contents to destination"
+          >
+            <span>📤</span>
+            <span>Extract...</span>
+          </button>
+
+          {/* [ 🛡️ Test ] Button (In-Place Verification) */}
+          <button
+            type="button"
+            onClick={handleInPlaceTest}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer"
+            title="Verify archive stream integrity & checksums in-place (Ctrl+T)"
+          >
+            <span>🛡️</span>
+            <span>Test</span>
+          </button>
+
+          {/* [ ✕ Clear ] Button */}
+          {(selectedArchive || selectedFiles.length > 0) && (
+            <button
+              type="button"
+              onClick={handleClearSelection}
+              className="flex items-center space-x-1 px-2 py-1.5 rounded-[4px] bg-[#252529] hover:bg-rose-950/40 text-[#9CA3AF] hover:text-rose-300 border border-[#323238] hover:border-rose-800 transition-colors cursor-pointer"
+              title="Clear selection and return to home"
+            >
+              <span>✕</span>
+              <span>Clear</span>
+            </button>
+          )}
+
+          <div className="w-[1px] h-5 bg-[#2E2E34] mx-1"></div>
+
+          {/* [ About ] */}
+          <button
+            type="button"
+            onClick={() => setIsAboutOpen(true)}
+            className="px-2 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-white border border-[#323238] transition-colors cursor-pointer"
+            title="About Bayzip"
+          >
+            About
+          </button>
+
+          {/* [ ⚙️ Settings ] */}
+          <button
+            type="button"
+            onClick={handleOpenSettings}
+            className="p-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-[#38BDF8] border border-[#323238] transition-colors cursor-pointer"
+            title="Settings & Shell Integrations"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      {/* 3. Full-Height File Viewer Canvas (flex-1 min-h-0) */}
+      <div className="flex-1 min-h-0 flex flex-col p-2.5 overflow-hidden relative">
+        <ArchiveTreeInspector
+          archiveInfo={currentArchiveInfo}
+          selectedArchive={selectedArchive || (selectedFiles[0] || "")}
+          isLoading={isInspectingArchive || isInspectingStaged}
+          onUnlockPreview={() => setIsPasswordPromptOpen(true)}
+          onPreviewEntry={handlePreviewEntry}
+          excludedPaths={selectedArchive ? excludedPaths : excludedCompressPaths}
+          onToggleExclude={selectedArchive ? handleToggleExclude : handleToggleCompressExclude}
+          onIncludeAll={selectedArchive ? handleIncludeAll : handleCompressIncludeAll}
+          inspectorTitle={
+            selectedArchive
+              ? archiveInfo?.filename || "Archive Contents"
+              : selectedFiles.length > 0
+                ? "Staged Items & Folders"
+                : "File Viewer"
+          }
+          mode={selectedArchive ? "extract" : "compress"}
+          stagedItems={selectedFiles}
+          itemsInfo={itemsInfo}
+          onStageItem={(path) => setSelectedFiles((prev) => (prev.includes(path) ? prev : [...prev, path]))}
+          onUnstageItem={(path) => setSelectedFiles((prev) => prev.filter((p) => p !== path))}
+          onClearStagedItems={handleClearSelection}
+          extractPassword={extractPassword}
+          testStatus={testStatus}
+          testMessage={testMessage}
+          streamProgress={activeStreamTelemetry}
+          emptyState={
             <UnifiedDropHub
               onSelectArchive={handleSelectArchive}
               onSelectFiles={handleSelectFiles}
               onSelectFolder={handleSelectFolder}
               isDraggingOver={isDraggingOver}
-              activeMode={activeMode}
-              onSwitchMode={setActiveMode}
             />
-          ) : activeMode === "extract" ? (
-            selectedArchive && archiveInfo ? (
-              <ExtractPage
-                selectedArchive={selectedArchive}
-                archiveInfo={archiveInfo}
-                isInspectingArchive={isInspectingArchive}
-                extractDest={extractDest}
-                setExtractDest={setExtractDest}
-                extractToSubfolder={extractToSubfolder}
-                setExtractToSubfolder={setExtractToSubfolder}
-                openFolderOnExtract={openFolderOnExtract}
-                setOpenFolderOnExtract={setOpenFolderOnExtract}
-                extractPassword={extractPassword}
-                setExtractPassword={setExtractPassword}
-                showExtractPassword={showExtractPassword}
-                setShowExtractPassword={setShowExtractPassword}
-                isExtracting={isExtracting}
-                isCancellingExtract={isCancellingExtract}
-                extractProgress={extractProgress}
-                extractError={extractError}
-                excludedPaths={excludedPaths}
-                includedFilesCount={includedFilesCount}
-                handleToggleExclude={handleToggleExclude}
-                handleIncludeAll={handleIncludeAll}
-                handleSelectArchive={handleSelectArchive}
-                handleSelectDestFolder={handleSelectDestFolder}
-                handleExtract={handleExtract}
-                handleCancelExtract={handleCancelExtract}
-                onClearArchive={() => {
-                  setSelectedArchive(null);
-                  setArchiveInfo(null);
-                  setExtractResult(null);
-                }}
-                selectArchive={selectArchive}
-                handlePreviewEntry={handlePreviewEntry}
-                onSwitchMode={(m) => setActiveMode(m)}
-                handleSelectFiles={handleSelectFiles}
-                handleSelectFolder={handleSelectFolder}
-                isDraggingOver={isDraggingOver}
-              />
-            ) : (
-              <UnifiedDropHub
-                onSelectArchive={handleSelectArchive}
-                onSelectFiles={handleSelectFiles}
-                onSelectFolder={handleSelectFolder}
-                isDraggingOver={isDraggingOver}
-                activeMode="extract"
-                onSwitchMode={setActiveMode}
-              />
-            )
-          ) : (
-            selectedFiles.length > 0 ? (
-              <CompressPage
-                selectedFiles={selectedFiles}
-                setSelectedFiles={setSelectedFiles}
-                itemsInfo={itemsInfo}
-                customArchiveName={customArchiveName}
-                setCustomArchiveName={setCustomArchiveName}
-                selectedFormat={selectedFormat}
-                setSelectedFormat={setSelectedFormat}
-                selectedAlgorithm={selectedAlgorithm}
-                setSelectedAlgorithm={setSelectedAlgorithm}
-                selectedEncryption={selectedEncryption}
-                setSelectedEncryption={setSelectedEncryption}
-                compressPassword={compressPassword}
-                setCompressPassword={setCompressPassword}
-                showCompressPassword={showCompressPassword}
-                setShowCompressPassword={setShowCompressPassword}
-                archiveToOriginalPath={archiveToOriginalPath}
-                setArchiveToOriginalPath={setArchiveToOriginalPath}
-                compressDestDir={compressDestDir}
-                setCompressDestDir={setCompressDestDir}
-                separateArchives={separateArchives}
-                setSeparateArchives={setSeparateArchives}
-                smartMediaBypass={smartMediaBypass}
-                setSmartMediaBypass={handleUpdateSmartMediaBypass}
-                isAdvanced={isAdvanced}
-                setIsAdvanced={setIsAdvanced}
-                sliderValue={sliderValue}
-                setSliderValue={setSliderValue}
-                specs={specs}
-                isCompressing={isCompressing}
-                isCancellingCompress={isCancellingCompress}
-                progress={progress}
-                compressError={compressError}
-                activeCompressConfig={activeCompressConfig}
-                handleSelectFiles={handleSelectFiles}
-                handleSelectFolder={handleSelectFolder}
-                handleSelectCompressDestination={handleSelectCompressDestination}
-                handleCompress={handleCompress}
-                handleCancelCompress={handleCancelCompress}
-                compressViewMode={compressViewMode}
-                setCompressViewMode={setCompressViewMode}
-                stagedEntries={stagedEntries}
-                isInspectingStaged={isInspectingStaged}
-                excludedCompressPaths={excludedCompressPaths}
-                onToggleCompressExclude={handleToggleCompressExclude}
-                onCompressIncludeAll={handleCompressIncludeAll}
-                onPreviewStagedEntry={handlePreviewStagedEntry}
-                onSwitchMode={(m) => setActiveMode(m)}
-                onSelectArchive={handleSelectArchive}
-                onLoadArchiveFromFile={selectArchive}
-                isDraggingOver={isDraggingOver}
-              />
-            ) : (
-              <UnifiedDropHub
-                onSelectArchive={handleSelectArchive}
-                onSelectFiles={handleSelectFiles}
-                onSelectFolder={handleSelectFolder}
-                isDraggingOver={isDraggingOver}
-                activeMode="compress"
-                onSwitchMode={setActiveMode}
-              />
-            )
-          )}
-        </div>
+          }
+        />
+
+        {/* 4. Keka-Style Compact Compress Modal (max-w-[440px]) - Scoped strictly to File Viewer */}
+        <CompressModal
+          isOpen={isCompressModalOpen || (isCompressing && !isProgressMinimized)}
+          onClose={() => setIsCompressModalOpen(false)}
+          customArchiveName={customArchiveName}
+          setCustomArchiveName={setCustomArchiveName}
+          selectedFormat={selectedFormat}
+          setSelectedFormat={setSelectedFormat}
+          selectedAlgorithm={selectedAlgorithm}
+          setSelectedAlgorithm={setSelectedAlgorithm}
+          selectedEncryption={selectedEncryption}
+          setSelectedEncryption={setSelectedEncryption}
+          compressPassword={compressPassword}
+          setCompressPassword={setCompressPassword}
+          showCompressPassword={showCompressPassword}
+          setShowCompressPassword={setShowCompressPassword}
+          archiveToOriginalPath={archiveToOriginalPath}
+          setArchiveToOriginalPath={setArchiveToOriginalPath}
+          separateArchives={separateArchives}
+          setSeparateArchives={setSeparateArchives}
+          smartMediaBypass={smartMediaBypass}
+          setSmartMediaBypass={setSmartMediaBypass}
+          sliderValue={sliderValue}
+          setSliderValue={setSliderValue}
+          specs={specs}
+          formatAlgorithms={FORMAT_ALGORITHMS}
+          onStartCompress={handleCompress}
+          isCompressing={isCompressing}
+          progress={compressProgress}
+          onCancelCompress={handleCancelCompress}
+          onMinimizeToFooter={() => setIsProgressMinimized(true)}
+        />
+
+        {/* 5. Matching Compact Extract Modal (max-w-[420px]) - Scoped strictly to File Viewer */}
+        <ExtractModal
+          isOpen={isExtractModalOpen || (isExtracting && !isProgressMinimized)}
+          onClose={() => setIsExtractModalOpen(false)}
+          extractDest={extractDest}
+          setExtractDest={setExtractDest}
+          handleSelectDestFolder={handleSelectDestFolder}
+          extractToSubfolder={extractToSubfolder}
+          setExtractToSubfolder={setExtractToSubfolder}
+          openFolderOnExtract={openFolderOnExtract}
+          setOpenFolderOnExtract={setOpenFolderOnExtract}
+          onStartExtract={handleExtract}
+          isExtracting={isExtracting}
+          archiveName={archiveInfo?.filename || (selectedArchive ? selectedArchive.split(/[/\\]/).pop() : undefined)}
+          extractProgress={extractProgress}
+          totalUncompressedSize={archiveInfo?.total_uncompressed_size || archiveInfo?.size || 0}
+          onCancelExtract={handleCancelExtract}
+          onMinimizeToFooter={() => setIsProgressMinimized(true)}
+        />
       </div>
 
-      {/* Result Modals (Compression & Extraction) */}
+      {/* Result Modals */}
       <ResultModals
         compressResult={compressResult}
         onCloseCompressResult={() => {
           setCompressResult(null);
-          setSelectedFiles([]);
-          setCustomArchiveName("");
-          setStagedEntries([]);
-          setExcludedCompressPaths(new Set());
+          handleClearSelection();
         }}
         extractResult={extractResult}
         archiveInfo={archiveInfo}
         onCloseExtractResult={() => {
           setExtractResult(null);
-          setSelectedArchive(null);
-          setArchiveInfo(null);
+          handleClearSelection();
         }}
         formatBytes={formatBytes}
       />
@@ -1391,7 +1197,7 @@ function App() {
         onClose={() => setIsAboutOpen(false)}
       />
 
-      {/* Settings Modal (Draggable Floating Window) */}
+      {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -1400,7 +1206,7 @@ function App() {
         onRegisterContextMenu={handleRegisterContextMenu}
       />
 
-      {/* Password Prompt Modal for Encrypted Archives */}
+      {/* Password Prompt Modal */}
       <PasswordModal
         isOpen={isPasswordPromptOpen}
         onClose={() => setIsPasswordPromptOpen(false)}
@@ -1428,25 +1234,19 @@ function App() {
         archivePath={previewTargetDisplayPath || selectedArchive || ""}
       />
 
-      {/* Drag & Drop Visual Indicator Overlay with Blinking Watermark */}
+      {/* Drag & Drop Visual Indicator Overlay */}
       {isDraggingOver && (
-        <div className="fixed inset-0 z-[100] pointer-events-none bg-[#059669]/10 backdrop-blur-[3px] border-2 border-dashed border-[#10B981] m-2 rounded-2xl flex flex-col items-center justify-center space-y-4">
-          {/* Semi-transparent blinking DROP watermark */}
-          <div className="text-7xl sm:text-9xl font-black tracking-widest text-[#10B981]/40 uppercase animate-pulse select-none drop-shadow-[0_0_35px_rgba(16,185,129,0.6)]">
-            DROP
-          </div>
-          <div className="w-16 h-16 rounded-2xl bg-[#1A2530]/95 border border-[#10B981]/60 flex items-center justify-center shadow-2xl text-[#10B981]">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-8 h-8 animate-bounce">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+        <div className="fixed inset-0 z-[100] pointer-events-none bg-[#141416]/80 backdrop-blur-[2px] border-2 border-dashed border-[#38BDF8] m-2 rounded-xl flex flex-col items-center justify-center space-y-3">
+          <div className="w-14 h-14 rounded-xl bg-[#252529] border border-[#38BDF8] flex items-center justify-center text-[#38BDF8] shadow-2xl">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-7 h-7 animate-bounce">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
             </svg>
           </div>
-          <p className="text-white font-semibold text-xs tracking-wide bg-[#202020]/95 px-5 py-2 rounded-full border border-[#3E3E3E] shadow-2xl">
-            Drop files or folders here to {activeMode === "extract" ? "extract" : "compress"}
+          <p className="text-[#F4F4F6] font-semibold text-xs tracking-wide bg-[#1C1C1F] px-4 py-1.5 rounded-full border border-[#2E2E34] shadow-xl">
+            Drop archive to inspect or files/folders to compress
           </p>
         </div>
       )}
     </div>
   );
 }
-
-export default App;

@@ -7,6 +7,15 @@ import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 
 export { normalizeArchiveEntryPath };
 
+export interface StreamProgressTelemetry {
+  type: "compress" | "extract" | "test" | "indexing";
+  fileName: string;
+  percent: number;
+  throughputText?: string;
+  onCancel?: () => void;
+  onRestoreModal?: () => void;
+}
+
 export interface ArchiveTreeInspectorProps {
   archiveInfo: ArchiveInfo;
   selectedArchive: string;
@@ -45,6 +54,10 @@ export interface ArchiveTreeInspectorProps {
     openFolderOnExtract: boolean;
     password?: string;
   }) => Promise<void> | void;
+  emptyState?: React.ReactNode;
+  testStatus?: "idle" | "testing" | "verified" | "error";
+  testMessage?: string | null;
+  streamProgress?: StreamProgressTelemetry | null;
 }
 
 export interface TreeNode {
@@ -74,6 +87,10 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
   inspectorTitle,
   mode = "extract",
   stagedItems,
+  emptyState,
+  testStatus = "idle",
+  testMessage,
+  streamProgress = null,
 }) => {
   const [currentFolderPath, setCurrentFolderPath] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -432,16 +449,16 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
   return (
     <div
       ref={containerRef}
-      className="bg-[#202020] rounded-lg border border-[#3E3E3E] overflow-hidden flex flex-col shadow-sm flex-1 min-h-0"
+      className="bg-[#1C1C1F] rounded-lg border border-[#2E2E34] overflow-hidden flex flex-col shadow-sm flex-1 min-h-0 select-none"
     >
       {/* Header Bar */}
-      <div className="px-3.5 py-2.5 bg-[#242424] border-b border-[#333333] flex items-center justify-between gap-2 select-none">
+      <div className="px-3.5 py-2 bg-[#1C1C1F] border-b border-[#2E2E34] flex items-center justify-between gap-2 select-none shrink-0">
         <div className="flex items-center space-x-2.5 min-w-0">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#60CDFF] shadow-[0_0_8px_rgba(96,205,255,0.7)]" />
-          <span className="font-semibold text-xs text-white truncate">
+          <span className="w-2 h-2 rounded-full bg-[#38BDF8] shadow-[0_0_8px_rgba(56,189,248,0.7)]" />
+          <span className="font-semibold text-xs text-[#F4F4F6] truncate">
             {inspectorTitle || (archiveInfo.filename ? archiveInfo.filename : "Archive Contents")}
           </span>
-          <span className="px-2 py-0.5 text-[10px] font-mono bg-[#181818] text-[#888888] border border-[#333333] rounded-full">
+          <span className="px-2 py-0.5 text-[10px] font-mono bg-[#252529] text-[#9CA3AF] border border-[#323238] rounded-full">
             {archiveInfo.file_count || localEntries.length || 0} items
           </span>
         </div>
@@ -452,7 +469,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
             <button
               type="button"
               onClick={onIncludeAll}
-              className="px-2 py-1 text-[11px] font-semibold bg-[#10B981]/20 hover:bg-[#10B981]/30 text-[#10B981] border border-[#10B981]/40 rounded transition-colors cursor-pointer"
+              className="px-2 py-1 text-[11px] font-semibold bg-[#10B981]/15 hover:bg-[#10B981]/25 text-[#10B981] border border-[#10B981]/30 rounded transition-colors cursor-pointer"
               title="Include all excluded items"
             >
               Include All ({excludedCount})
@@ -467,10 +484,10 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Filter files..."
-              className="w-36 sm:w-48 bg-[#181818] text-xs text-white pl-7 pr-6 py-1 rounded border border-[#3A3A3A] focus:border-[#60CDFF] outline-none font-sans placeholder-[#666]"
+              className="w-36 sm:w-48 bg-[#252529] text-xs text-[#F4F4F6] pl-7 pr-6 py-1 rounded-[4px] border border-[#323238] focus:border-[#38BDF8] outline-none font-sans placeholder-[#6B7280]"
             />
             <svg
-              className="w-3.5 h-3.5 text-[#777] absolute left-2 top-2 pointer-events-none"
+              className="w-3.5 h-3.5 text-[#6B7280] absolute left-2 top-2 pointer-events-none"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -481,7 +498,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
               <button
                 type="button"
                 onClick={() => setSearchQuery("")}
-                className="absolute right-2 top-1.5 text-[#888] hover:text-white text-xs cursor-pointer"
+                className="absolute right-2 top-1.5 text-[#9CA3AF] hover:text-white text-xs cursor-pointer"
               >
                 ✕
               </button>
@@ -490,12 +507,16 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
         </div>
       </div>
 
-      {isEncryptedWithoutEntries ? (
+      {emptyState && localEntries.length === 0 && !isLoading ? (
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          {emptyState}
+        </div>
+      ) : isEncryptedWithoutEntries ? (
         renderEncryptedBanner()
       ) : (
         <>
           {/* Breadcrumbs Navigation */}
-          <div className="px-3 py-1.5 bg-[#1C1C1C] border-b border-[#2C2C2C] flex items-center justify-between text-xs font-mono select-none">
+          <div className="px-3 py-1.5 bg-[#141416] border-b border-[#2E2E34] flex items-center justify-between text-xs font-mono select-none shrink-0">
             <div className="flex items-center space-x-1.5 overflow-x-auto custom-scrollbar py-0.5">
               {/* Back / Forward History */}
               <button
@@ -503,7 +524,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                 onClick={handleBack}
                 disabled={historyIndex <= 0}
                 className={`p-1 rounded transition-colors ${
-                  historyIndex > 0 ? "text-[#CCCCCC] hover:bg-[#333333] cursor-pointer" : "text-[#555555] cursor-not-allowed"
+                  historyIndex > 0 ? "text-[#CCCCCC] hover:bg-[#252529] cursor-pointer" : "text-[#555555] cursor-not-allowed"
                 }`}
                 title="Back (Alt+Left)"
               >
@@ -514,7 +535,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                 onClick={handleForward}
                 disabled={historyIndex >= history.length - 1}
                 className={`p-1 rounded transition-colors ${
-                  historyIndex < history.length - 1 ? "text-[#CCCCCC] hover:bg-[#333333] cursor-pointer" : "text-[#555555] cursor-not-allowed"
+                  historyIndex < history.length - 1 ? "text-[#CCCCCC] hover:bg-[#252529] cursor-pointer" : "text-[#555555] cursor-not-allowed"
                 }`}
                 title="Forward (Alt+Right)"
               >
@@ -527,7 +548,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                 onClick={navigateUp}
                 disabled={!currentFolderPath}
                 className={`p-1 rounded transition-colors ${
-                  currentFolderPath ? "text-[#60CDFF] hover:bg-[#333333] cursor-pointer" : "text-[#555555] cursor-not-allowed"
+                  currentFolderPath ? "text-[#38BDF8] hover:bg-[#252529] cursor-pointer" : "text-[#555555] cursor-not-allowed"
                 }`}
                 title="Up one folder level"
               >
@@ -542,8 +563,8 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                 onClick={() => navigateToFolder("")}
                 className={`px-1.5 py-0.5 rounded transition-colors cursor-pointer flex items-center space-x-1 ${
                   currentFolderPath === ""
-                    ? "bg-[#25394A] text-[#60CDFF] font-semibold"
-                    : "text-[#A8A8A8] hover:text-white hover:bg-[#2A2A2A]"
+                    ? "bg-[#252529] text-[#38BDF8] border border-[#323238] font-semibold"
+                    : "text-[#9CA3AF] hover:text-[#F4F4F6] hover:bg-[#252529]"
                 }`}
               >
                 <span>📦</span>
@@ -559,8 +580,8 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                     onClick={() => navigateToFolder(seg.path)}
                     className={`px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
                       idx === breadcrumbSegments.length - 1
-                        ? "bg-[#25394A] text-[#60CDFF] font-semibold"
-                        : "text-[#A8A8A8] hover:text-white hover:bg-[#2A2A2A]"
+                        ? "bg-[#252529] text-[#38BDF8] border border-[#323238] font-semibold"
+                        : "text-[#9CA3AF] hover:text-[#F4F4F6] hover:bg-[#252529]"
                     }`}
                   >
                     {seg.name}
@@ -570,7 +591,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
             </div>
 
             {/* Sort Controls */}
-            <div className="flex items-center space-x-1 text-[11px] text-[#888888]">
+            <div className="flex items-center space-x-1 text-[11px] text-[#9CA3AF]">
               <span className="hidden sm:inline">Sort:</span>
               <button
                 type="button"
@@ -582,7 +603,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                   }
                 }}
                 className={`px-1.5 py-0.5 rounded cursor-pointer ${
-                  sortKey === "name" ? "bg-[#2D2D2D] text-white" : "hover:text-white"
+                  sortKey === "name" ? "bg-[#252529] text-white border border-[#323238]" : "hover:text-white"
                 }`}
               >
                 Name {sortKey === "name" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
@@ -597,7 +618,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                   }
                 }}
                 className={`px-1.5 py-0.5 rounded cursor-pointer ${
-                  sortKey === "size" ? "bg-[#2D2D2D] text-white" : "hover:text-white"
+                  sortKey === "size" ? "bg-[#252529] text-white border border-[#323238]" : "hover:text-white"
                 }`}
               >
                 Size {sortKey === "size" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
@@ -606,14 +627,14 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
           </div>
 
           {/* Virtual File / Folder List Container */}
-          <div className="flex-1 min-h-[320px] flex flex-col overflow-hidden relative">
+          <div className="flex-1 min-h-[280px] flex flex-col overflow-hidden relative">
             {isLoading ? (
               <div className="p-8 text-center space-y-3 m-auto">
-                <div className="w-6 h-6 border-2 border-[#60CDFF] border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="text-xs text-[#A8A8A8]">Indexing archive directory tree...</p>
+                <div className="w-6 h-6 border-2 border-[#38BDF8] border-t-transparent rounded-full animate-spin mx-auto" />
+                <p className="text-xs text-[#9CA3AF]">Indexing archive directory tree...</p>
               </div>
             ) : displayItems.length === 0 ? (
-              <div className="p-8 text-center text-xs text-[#888888] flex flex-col items-center justify-center space-y-2 flex-1 h-full">
+              <div className="p-8 text-center text-xs text-[#9CA3AF] flex flex-col items-center justify-center space-y-2 flex-1 h-full">
                 <span>{searchQuery ? "No matching files in this folder" : "This folder is empty"}</span>
               </div>
             ) : (
@@ -623,18 +644,18 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                   <div
                     onDoubleClick={navigateUp}
                     style={{ height: "34px" }}
-                    className="flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#282828] select-none text-[#A8A8A8] hover:text-[#60CDFF] hover:bg-[#252525] shrink-0"
+                    className="flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border border-b border-[#232327] select-none text-[#9CA3AF] hover:text-[#38BDF8] hover:bg-[#252529] shrink-0"
                     title="Navigate to parent folder"
                   >
                     <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3 pointer-events-none">
-                      <span className="text-base font-bold text-[#F9D648] shrink-0 leading-none">📁</span>
-                      <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#60CDFF]">
+                      <span className="text-base font-bold text-[#FBBF24] shrink-0 leading-none">📁</span>
+                      <span className="font-mono text-[12px] font-bold text-white group-hover:text-[#38BDF8]">
                         ..
                       </span>
                       <span className="text-[10px] text-[#777777] italic font-sans">[Parent Directory]</span>
                     </div>
                     <div className="flex items-center space-x-2 shrink-0">
-                      <span className="text-[10px] text-[#888888] font-mono">Up ⮥</span>
+                      <span className="text-[10px] text-[#9CA3AF] font-mono">Up ⮥</span>
                     </div>
                   </div>
                 )}
@@ -656,17 +677,17 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                           onDoubleClick={() => navigateToFolder(folder.path)}
                           onClick={() => setSelectedEntryName(folder.path)}
                           style={{ height: "34px" }}
-                          className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border select-none ${
+                          className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border select-none border-b border-[#232327] ${
                             selectedEntryName === folder.path
-                              ? "bg-[#25394A]/80 border-l-2 border-[#60CDFF]"
+                              ? "bg-[#1B2836] border-l-2 border-[#38BDF8]"
                               : isFolderSkipped
                                 ? "opacity-50 hover:opacity-85 bg-rose-950/15 border-l-2 border-rose-500/80"
-                                : "hover:bg-[#252525]"
+                                : "hover:bg-[#252529]"
                           }`}
                         >
                           <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
-                            <span className="text-base text-[#F9D648] shrink-0">📁</span>
-                            <span className="font-sans font-medium text-white truncate group-hover:text-[#60CDFF]">
+                            <span className="text-base text-[#FBBF24] shrink-0">📁</span>
+                            <span className="font-sans font-medium text-[#F4F4F6] truncate group-hover:text-[#38BDF8]">
                               {folder.name}
                             </span>
                             <span className="text-[10px] text-[#777777] font-mono shrink-0">
@@ -675,7 +696,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                           </div>
 
                           <div className="flex items-center space-x-3 shrink-0">
-                            <span className="text-[11px] font-mono text-[#A8A8A8]">
+                            <span className="text-[11px] font-mono text-[#9CA3AF]">
                               {formatBytes(folder.size)}
                             </span>
 
@@ -689,7 +710,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                                 className={`w-4 h-4 rounded border flex items-center justify-center transition-colors cursor-pointer ${
                                   isFolderSkipped
                                     ? "bg-rose-950/60 border-rose-500/80 text-rose-300"
-                                    : "bg-[#2A2A2A] border-[#444444] text-[#60CDFF] hover:border-[#60CDFF]"
+                                    : "bg-[#252529] border-[#323238] text-[#38BDF8] hover:border-[#38BDF8]"
                                 }`}
                                 title={isFolderSkipped ? "Include folder" : "Exclude folder"}
                               >
@@ -713,23 +734,23 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                         onClick={() => setSelectedEntryName(file.name)}
                         onDoubleClick={() => onPreviewEntry(file.name)}
                         style={{ height: "34px" }}
-                        className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border select-none ${
+                        className={`flex items-center justify-between px-3 text-xs transition-colors cursor-pointer group box-border select-none border-b border-[#232327] ${
                           selectedEntryName === file.name
-                            ? "bg-[#25394A]/80 border-l-2 border-[#60CDFF]"
+                            ? "bg-[#1B2836] border-l-2 border-[#38BDF8]"
                             : isSkipped
                               ? "opacity-50 hover:opacity-85 bg-rose-950/15 border-l-2 border-rose-500/80"
-                              : "hover:bg-[#252525]"
+                              : "hover:bg-[#252529]"
                         }`}
                       >
                         <div className="flex items-center space-x-2.5 min-w-0 flex-1 mr-3">
                           <FileFormatIcon fileName={file.name} className="w-4 h-4 shrink-0" />
-                          <span className={`font-sans truncate ${isSkipped ? "line-through text-rose-400/80" : "text-[#E0E0E0] group-hover:text-white"}`}>
+                          <span className={`font-sans truncate ${isSkipped ? "line-through text-rose-400/80" : "text-[#F4F4F6] group-hover:text-white"}`}>
                             {leafName}
                           </span>
                         </div>
 
                         <div className="flex items-center space-x-3 shrink-0">
-                          <span className="text-[11px] font-mono text-[#A8A8A8] min-w-[60px] text-right">
+                          <span className="text-[11px] font-mono text-[#9CA3AF] min-w-[60px] text-right">
                             {formatBytes(file.size || 0)}
                           </span>
 
@@ -740,7 +761,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                               e.stopPropagation();
                               onPreviewEntry(file.name);
                             }}
-                            className="p-1 rounded text-[#777777] hover:text-[#60CDFF] hover:bg-[#333333] transition-colors cursor-pointer"
+                            className="p-1 rounded text-[#9CA3AF] hover:text-[#38BDF8] hover:bg-[#252529] transition-colors cursor-pointer"
                             title="Preview file contents (Space)"
                           >
                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -760,7 +781,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                               className={`w-4 h-4 rounded border flex items-center justify-center transition-colors cursor-pointer ${
                                 isSkipped
                                   ? "bg-rose-950/60 border-rose-500/80 text-rose-300"
-                                  : "bg-[#2A2A2A] border-[#444444] text-[#60CDFF] hover:border-[#60CDFF]"
+                                  : "bg-[#252529] border-[#323238] text-[#38BDF8] hover:border-[#38BDF8]"
                               }`}
                               title={isSkipped ? "Include file" : "Exclude file"}
                             >
@@ -780,27 +801,96 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
 
       {/* Loading Progress Line */}
       {isLoading && (
-        <div className="w-full h-1 bg-[#1A1A1A] overflow-hidden">
-          <div className="h-full bg-gradient-to-r from-[#059669] via-[#10B981] to-[#34D399] shadow-[0_0_12px_rgba(16,185,129,0.8)] animate-pulse w-full" />
+        <div className="w-full h-1 bg-[#141416] overflow-hidden shrink-0">
+          <div className="h-full bg-gradient-to-r from-[#0284C7] via-[#38BDF8] to-[#7DD3FC] shadow-[0_0_12px_rgba(56,189,248,0.8)] animate-pulse w-full" />
         </div>
       )}
 
-      {/* Compact Status Footer */}
-      <div className="px-3.5 py-1.5 bg-[#1C1C1C] border-t border-[#333333] flex items-center justify-between text-[11px] font-mono text-[#888888] select-none">
-        <span className="truncate max-w-[240px]">
-          {selectedArchive ? selectedArchive.split(/[/\\]/).pop() : "Ready"}
-        </span>
-        <div className="flex items-center space-x-2">
-          {excludedCount > 0 && (
-            <span className="text-rose-400 font-semibold">
-              {excludedCount} excluded ({formatBytes(excludedBytes)} skipped)
+      {/* Compact Status Footer with live 2px stream line & telemetry */}
+      <div className="relative bg-[#141416] border-t border-[#2E2E34] text-[11px] font-mono select-none shrink-0">
+        {/* 2px #38BDF8 stream progress line along the top edge */}
+        {streamProgress && streamProgress.percent >= 0 && (
+          <div className="absolute top-0 left-0 right-0 h-[2px] bg-[#252529] overflow-hidden">
+            <div
+              className="h-full bg-[#38BDF8] transition-all duration-300"
+              style={{ width: `${Math.min(100, Math.max(0, streamProgress.percent))}%` }}
+            />
+          </div>
+        )}
+
+        <div className="px-3.5 py-1.5 flex items-center justify-between text-[#9CA3AF]">
+          {/* Left Side: Stream Telemetry / Test Status / Ready */}
+          <div className="flex items-center space-x-2 truncate max-w-[540px]">
+            {streamProgress ? (
+              <div className="flex items-center space-x-2 truncate">
+                <span className="text-[#38BDF8] flex items-center space-x-1.5 truncate">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#38BDF8] animate-pulse shrink-0"></span>
+                  <span className="font-semibold shrink-0">
+                    ⚡ {streamProgress.type === "compress" ? "Streaming to" : streamProgress.type === "extract" ? "Extracting" : streamProgress.type === "indexing" ? "Indexing" : "Verifying stream"}:
+                  </span>
+                  <span className="text-white truncate max-w-[180px]">{streamProgress.fileName}</span>
+                  <span className="text-[#38BDF8] font-bold shrink-0">({Math.round(streamProgress.percent)}%</span>
+                  {streamProgress.throughputText && (
+                    <span className="text-[#9CA3AF] shrink-0">• {streamProgress.throughputText}</span>
+                  )}
+                  <span className="text-[#38BDF8] font-bold shrink-0">)</span>
+                </span>
+                {streamProgress.onRestoreModal && (
+                  <button
+                    type="button"
+                    onClick={streamProgress.onRestoreModal}
+                    className="px-1.5 py-0.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#38BDF8] border border-[#323238] text-[10px] cursor-pointer shrink-0"
+                    title="Restore full progress card"
+                  >
+                    ▴ Expand
+                  </button>
+                )}
+                {streamProgress.onCancel && (
+                  <button
+                    type="button"
+                    onClick={streamProgress.onCancel}
+                    className="px-1.5 py-0.5 rounded-[4px] bg-[#252529] hover:bg-rose-950/40 text-[#9CA3AF] hover:text-rose-400 border border-[#323238] hover:border-rose-800 text-[10px] cursor-pointer shrink-0"
+                    title="Cancel active stream"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            ) : testStatus === "verified" ? (
+              <span className="text-[#10B981] font-semibold flex items-center space-x-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]"></span>
+                <span>✓ Stream Verified 100% OK (0 CRC errors)</span>
+              </span>
+            ) : testStatus === "testing" ? (
+              <span className="text-[#38BDF8] flex items-center space-x-1.5 animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#38BDF8]"></span>
+                <span>{testMessage || "Verifying stream checksums..."}</span>
+              </span>
+            ) : testStatus === "error" ? (
+              <span className="text-rose-400 font-semibold flex items-center space-x-1.5">
+                <span>✕</span>
+                <span>{testMessage || "Verification failed"}</span>
+              </span>
+            ) : (
+              <span className="truncate">
+                {selectedArchive ? selectedArchive.split(/[/\\]/).pop() : "Ready"}
+              </span>
+            )}
+          </div>
+
+          {/* Right Side: Exclusions & Total Uncompressed Size */}
+          <div className="flex items-center space-x-2 shrink-0">
+            {excludedCount > 0 && (
+              <span className="text-rose-400 font-semibold">
+                {excludedCount} excluded ({formatBytes(excludedBytes)} skipped)
+              </span>
+            )}
+            <span className="text-[#F4F4F6]">
+              {isLoading
+                ? "Indexing tree..."
+                : `Uncompressed: ${formatBytes(archiveInfo.total_uncompressed_size || treeRoot.size || 0)}`}
             </span>
-          )}
-          <span className="text-white">
-            {isLoading
-              ? "Indexing tree..."
-              : `Uncompressed: ${formatBytes(archiveInfo.total_uncompressed_size || treeRoot.size || 0)}`}
-          </span>
+          </div>
         </div>
       </div>
     </div>
