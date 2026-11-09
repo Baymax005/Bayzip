@@ -30,6 +30,8 @@ import {
   ArchiveEntryItem,
   ArchiveEntryPreview,
   StartupCommand,
+  TestArchiveProgress,
+  TestArchiveResponse,
 } from "./types";
 
 export const FORMAT_ALGORITHMS: Record<string, string[]> = {
@@ -105,6 +107,7 @@ export default function App() {
   // In-Place Archive Testing State
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "verified" | "error">("idle");
   const [testMessage, setTestMessage] = useState<string | null>(null);
+  const [testProgress, setTestProgress] = useState<TestArchiveProgress | null>(null);
   const isTestingRef = useRef(false);
 
   // Safe In-Memory File Preview State
@@ -201,8 +204,34 @@ export default function App() {
     }
   };
 
+  const handleCancelTest = async () => {
+    try {
+      await invoke("cancel_test_archive");
+      setTestStatus("idle");
+      setTestMessage(null);
+      setTestProgress(null);
+    } catch (e) {
+      console.error("Failed to cancel archive test:", e);
+    }
+  };
+
   // Active Stream Telemetry for Bottom Status Bar
   const activeStreamTelemetry = useMemo<StreamProgressTelemetry | null>(() => {
+    if (testStatus === "testing") {
+      const fileName = testProgress?.current_file
+        ? testProgress.current_file.split(/[/\\]/).pop() || "Verifying..."
+        : "Verifying container...";
+      const throughputText = testProgress?.total_bytes
+        ? `${formatBytes(testProgress.bytes_tested)} / ${formatBytes(testProgress.total_bytes)} (CRC32)`
+        : `${formatBytes(testProgress?.bytes_tested || 0)} (CRC32)`;
+      return {
+        type: "test",
+        fileName,
+        percent: testProgress?.percent ?? 0,
+        throughputText,
+        onCancel: handleCancelTest,
+      };
+    }
     if (isCompressing && isProgressMinimized) {
       const fileName = compressProgress?.current_file
         ? compressProgress.current_file.split(/[/\\]/).pop() || "Streaming..."
@@ -232,6 +261,8 @@ export default function App() {
     }
     return null;
   }, [
+    testStatus,
+    testProgress,
     isCompressing,
     isExtracting,
     isProgressMinimized,
@@ -532,6 +563,7 @@ export default function App() {
     let unlistenDrop: (() => void) | undefined;
     let unlistenCompress: (() => void) | undefined;
     let unlistenExtract: (() => void) | undefined;
+    let unlistenTest: (() => void) | undefined;
 
     invoke<SystemSpecs>("get_system_specs")
       .then((res) => {
@@ -597,11 +629,21 @@ export default function App() {
       })
       .catch(() => {});
 
+    listen<TestArchiveProgress>("test_progress", (event) => {
+      if (isMounted) setTestProgress(event.payload);
+    })
+      .then((fn) => {
+        if (isMounted) unlistenTest = fn;
+        else fn();
+      })
+      .catch(() => {});
+
     return () => {
       isMounted = false;
       if (unlistenDrop) unlistenDrop();
       if (unlistenCompress) unlistenCompress();
       if (unlistenExtract) unlistenExtract();
+      if (unlistenTest) unlistenTest();
     };
   }, []);
 
@@ -717,26 +759,48 @@ export default function App() {
     isTestingRef.current = true;
     setTestStatus("testing");
     setTestMessage("Verifying container integrity & stream checksums...");
+    setTestProgress({
+      percent: 0,
+      current_file: "Initializing stream verifier...",
+      bytes_tested: 0,
+      total_bytes: archiveInfo?.total_uncompressed_size || 0,
+    });
 
     try {
-      const info = await invoke<ArchiveInfo>("get_archive_info", {
-        path: targetArchive,
+      const res = await invoke<TestArchiveResponse>("test_archive", {
+        archivePath: targetArchive,
         password: extractPassword.trim() ? extractPassword.trim() : undefined,
       });
 
-      if (info.is_encrypted && (!extractPassword || !extractPassword.trim())) {
+      if (!res.success && res.error && (res.error.toLowerCase().includes("password") || res.error.toLowerCase().includes("encrypt"))) {
+        setTestStatus("error");
+        setTestMessage("Password required for encrypted archive");
+        setIsPasswordPromptOpen(true);
+      } else if (res.is_ok) {
+        setTestStatus("verified");
+        setTestMessage(`✓ Stream Verified 100% OK (${res.tested_files} items, 0 CRC errors)`);
+      } else {
+        setTestStatus("error");
+        if (res.errors && res.errors.length > 0) {
+          const firstErr = res.errors[0];
+          setTestMessage(`Verification failed: ${firstErr.file_name} (${firstErr.error})`);
+        } else {
+          setTestMessage(`Verification failed: ${res.error || "Archive corruption detected"}`);
+        }
+      }
+    } catch (err) {
+      const errStr = String(err);
+      if (errStr.toLowerCase().includes("password") || errStr.toLowerCase().includes("encrypt")) {
         setTestStatus("error");
         setTestMessage("Password required for encrypted archive");
         setIsPasswordPromptOpen(true);
       } else {
-        setTestStatus("verified");
-        setTestMessage("✓ Archive Verified (0 errors)");
+        setTestStatus("error");
+        setTestMessage(`Verification failed: ${errStr}`);
       }
-    } catch (err) {
-      setTestStatus("error");
-      setTestMessage(`Verification failed: ${String(err)}`);
     } finally {
       isTestingRef.current = false;
+      setTestProgress(null);
       setTimeout(() => {
         setTestStatus("idle");
         setTestMessage(null);

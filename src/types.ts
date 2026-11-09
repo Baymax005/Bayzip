@@ -83,3 +83,26 @@ export interface OperationProgressInfo {
   onCancel?: () => void;
   isCancelling?: boolean;
 }
+
+export interface TestArchiveProgress {
+  percent: number;
+  current_file: string;
+  bytes_tested: number;
+  total_bytes: number;
+}
+
+export interface TestArchiveErrorItem {
+  file_name: string;
+  error: string;
+}
+
+export interface TestArchiveResponse {
+  success: boolean;
+  is_ok: boolean;
+  total_files: number;
+  tested_files: number;
+  total_bytes: number;
+  errors: TestArchiveErrorItem[];
+  elapsed_ms: number;
+  error?: string | null;
+}

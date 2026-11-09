@@ -115,3 +115,29 @@ pub struct ExtractResponse {
     pub elapsed_ms: u64,
     pub error: Option<String>,
 }
+
+#[derive(Serialize, Clone, Debug)]
+pub struct TestArchiveProgress {
+    pub percent: f64,
+    pub current_file: String,
+    pub bytes_tested: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct TestArchiveErrorItem {
+    pub file_name: String,
+    pub error: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct TestArchiveResponse {
+    pub success: bool,
+    pub is_ok: bool,
+    pub total_files: usize,
+    pub tested_files: usize,
+    pub total_bytes: u64,
+    pub errors: Vec<TestArchiveErrorItem>,
+    pub elapsed_ms: u64,
+    pub error: Option<String>,
+}

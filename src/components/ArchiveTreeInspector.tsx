@@ -750,6 +750,12 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                         </div>
 
                         <div className="flex items-center space-x-3 shrink-0">
+                          {testStatus === "verified" && (
+                            <span className="text-[10px] font-mono text-[#10B981] flex items-center space-x-1 bg-[#10B981]/10 px-1.5 py-0.5 rounded border border-[#10B981]/20">
+                              <span>✓</span>
+                              <span>OK</span>
+                            </span>
+                          )}
                           <span className="text-[11px] font-mono text-[#9CA3AF] min-w-[60px] text-right">
                             {formatBytes(file.size || 0)}
                           </span>
@@ -859,7 +865,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
             ) : testStatus === "verified" ? (
               <span className="text-[#10B981] font-semibold flex items-center space-x-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]"></span>
-                <span>✓ Stream Verified 100% OK (0 CRC errors)</span>
+                <span>{testMessage || "✓ Stream Verified 100% OK (0 CRC errors)"}</span>
               </span>
             ) : testStatus === "testing" ? (
               <span className="text-[#38BDF8] flex items-center space-x-1.5 animate-pulse">

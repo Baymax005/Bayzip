@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.3.7-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.3.7" /></a>
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.4.0-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.4.0" /></a>
   <a href="#windows-shell-integration"><img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows 10 | 11" /></a>
   <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2.0" /></a>
   <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021 Edition" /></a>
@@ -43,6 +43,7 @@
 
 | Feature | Description | Architecture Component |
 |---|---|---|
+| **🛡️ In-Place Archive Integrity & CRC-32 Tester** | High-throughput zero-disk-write stream verification engine validating container parity, CRC-32 checksums, and encrypted blocks with live UI telemetry. | `tester.rs` |
 | **🏎️ Ultra-Fast Gamer Preset (`.bayg`)** | Locked at Zstandard Level 3 with multi-core parallelism for maximum game installation and transfer throughput. | `compressor/bay.rs` |
 | **🛡️ Zip-Slip & Path Traversal Proof** | Multi-layer sanitization rejecting directory escapes (`..`), DOS device aliases (`CLOCK$`, `CONFIG$`, `CON`), NTFS ADS colons, and illegal characters. | `inspector/mod.rs` |
 | **⚡ 100k-File Virtualized UI** | Silky 60 FPS scrolling and $O(1)$ folder lookups using custom debounced virtual scrolling and memoized tree hierarchies. | `VirtualScrollList.tsx` |
@@ -53,6 +54,28 @@
 ---
 
 ## ⚡ Key Features
+
+### 🛡️ In-Place Archive Integrity Tester & CRC-32 Verification (v2.4.0)
+- **High-Throughput Zero-Disk-Write Verification (`src-tauri/src/tester.rs`)**:
+  - Validates container parity and entry checksums by streaming decompressed payloads directly into an in-memory discard sink (`std::io::sink()`) with zero disk writes.
+  - Multi-container integrity checking for `.bay`, `.bayg`, `.zip` (rolling CRC-32 vs central directory headers), `.7z` (folder block decoding and CRC validation), `.tar.*` (block header checksums), and system tar fallback for `.rar`, `.iso`, and `.cab`.
+  - Runs inside `tauri::async_runtime::spawn_blocking` protected by `ScopedPriorityGuard` (`THREAD_PRIORITY_BELOW_NORMAL`) ensuring smooth system and gaming performance.
+  - Real-time cancellation (`cancel_test_archive` / `CANCEL_TEST`) and ~40ms throttled progress event emitter (`test_progress`).
+- **In-Place UI Telemetry & Verification Indicators (`ArchiveTreeInspector.tsx`)**:
+  - `2px` Sky Blue (`#38BDF8`) live stream line along the top edge of the footer status bar with active file, percentage, throughput telemetry, and inline `[ Cancel ]` button.
+  - Flashes emerald green `✓ Stream Verified 100% OK (X items, 0 CRC errors)` on completion.
+  - Displays persistent `✓ OK` badges on verified archive rows.
+
+### 🖥️ Fluent Zinc & Sky Single-Screen Desktop Utility (v2.4.0)
+- **Zero-Scroll Main Window Architecture (`App.tsx`)**:
+  - Desktop-native layout locked to `h-screen overflow-hidden flex flex-col bg-[#141416]` — the main chrome never scrolls; only the inner file viewer scrolls.
+  - Neutral dark zinc/graphite palette (`#141416` / `#1C1C1F`) with crisp `1px solid #2E2E34` borders and `#38BDF8` sky blue interactive accents.
+- **Bandizip-Style Unified Top Ribbon Toolbar**:
+  - Single streamlined action bar with contextual sky-blue primary button states (`[ 📦 Compress... ]` when staging files; `[ 📤 Extract... ]` when opening archives).
+- **Keka-Style Compact Popup Dialogs with Live Streaming Morph**:
+  - Completely eliminated `backdrop-blur` and heavy window overlays; dialogs stay neatly contained within the File Viewer bounds.
+  - Compact `CompressModal` with notched hardware slider (`Store`, `Fast`, `Balanced`, `High`, `Ultra`) and archive format dropdowns.
+  - Smoothly morphs upon action into a **Live Streaming Progress View** showing throughput, ETA, streamed bytes, current item, and minimize-to-footer option.
 
 ### 🗃️ Unified Desktop Drop Hub & Fast Directory Tree Inspector (v2.3.7)
 - **High-Performance Archive Directory Inspector (`ArchiveTreeInspector.tsx`)**:

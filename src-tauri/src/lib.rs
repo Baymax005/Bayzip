@@ -5,6 +5,7 @@ pub mod registry;
 pub mod inspector;
 pub mod compressor;
 pub mod extractor;
+pub mod tester;
 
 use std::path::Path;
 use sysinfo::System;
@@ -16,6 +17,7 @@ pub use registry::{register_context_menu_sync, unregister_context_menu_sync};
 pub use inspector::{detect_archive_type, inspect_archive, sanitize_archive_path, archive_stem_name, has_instant_bay_toc, safe_atomic_rename, get_single_root_dir, clear_readonly};
 pub use compressor::{headless_quick_compress, headless_quick_compress_targets, compress_files_sync, compute_path_size};
 pub use extractor::{headless_extract_here, headless_extract_to_subfolder, universal_extract, extract_archive_sync};
+pub use tester::{test_archive_sync, cancel_test_flag};
 
 #[tauri::command]
 async fn get_file_size(path: String) -> u64 {
@@ -217,6 +219,24 @@ fn cancel_extraction() {
 }
 
 #[tauri::command]
+async fn test_archive(
+    app: AppHandle,
+    archive_path: String,
+    password: Option<String>,
+) -> Result<TestArchiveResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        tester::test_archive_sync(app, archive_path, password)
+    })
+    .await
+    .map_err(|e| format!("Archive testing task panicked: {}", e))?
+}
+
+#[tauri::command]
+fn cancel_test_archive() {
+    crate::tester::cancel_test_flag();
+}
+
+#[tauri::command]
 async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     if let Some(window) = app.get_webview_window("settings") {
@@ -301,6 +321,8 @@ pub fn run() {
             compress_files,
             cancel_compression,
             cancel_extraction,
+            test_archive,
+            cancel_test_archive,
             get_selected_items_info,
             extract_archive,
             get_archive_info,

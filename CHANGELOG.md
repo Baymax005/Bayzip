@@ -2,6 +2,46 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.0] - 2026-11-10
+
+### 🛡️ In-Place Archive Integrity Tester & CRC-32 Verification Engine
+- **Zero-Disk-Write Archive Testing Engine (`src-tauri/src/tester.rs`)**:
+  - Implemented high-performance, non-allocating archive stream testing engine piping all decompressed bytes to `std::io::sink()` with 0 disk writes.
+  - Multi-container integrity validation:
+    - **`.bay` / `.bayg`**: Validates Zstandard xxHash-64 frame parity, Brotli, and LZ4 decoders, with chunked AES-256 CTR decryption validation.
+    - **`.zip`**: Computes rolling CRC-32 checksums on streaming payload and validates against archive central directory headers on EOF.
+    - **`.7z`**: Decodes solid blocks and checks block/entry CRC-32 via `sevenz-rust2`.
+    - **`.tar.*`**: Validates tar header checksums and decompressor stream integrity.
+    - **System Tar Fallback**: Silent fallback using Windows `tar.exe` (`CREATE_NO_WINDOW`) for `.rar`, `.iso`, and `.cab`.
+  - Runs inside `tauri::async_runtime::spawn_blocking` under `ScopedPriorityGuard` (`THREAD_PRIORITY_BELOW_NORMAL`) ensuring 0% foreground game or OS micro-stuttering.
+  - Real-time cancellation (`cancel_test_archive` / `CANCEL_TEST`) and throttled progress event emitter (`test_progress` ~40ms intervals).
+- **In-Place UI Testing Telemetry & Status Line (`ArchiveTreeInspector.tsx`, `App.tsx`)**:
+  - Replaced redundant dialogs with an in-place verification experience:
+    - `2px` Sky Blue (`#38BDF8`) live stream progress line along the top edge of the footer status bar.
+    - Real-time telemetry: `⚡ Verifying stream: filename (XX% • XX MB / XX MB (CRC32))` with inline `[ Cancel ]` button.
+    - Emerald green completion flash: `✓ Stream Verified 100% OK (X items, 0 CRC errors)`.
+    - Per-file `✓ OK` badges on verified archive rows.
+    - Automatic detection and password prompt for encrypted archives.
+
+### 🎨 Fluent Zinc & Sky Single-Screen Desktop Redesign
+- **Single-Screen Desktop Utility (Non-Scrolling Main Container)**:
+  - Enforced `h-screen overflow-hidden flex flex-col bg-[#141416]` — the main window chrome never scrolls vertically.
+  - Neutral dark zinc/graphite palette (`#141416` main window, `#1C1C1F` surfaces, `#252529` inputs/buttons with `#2E2E34` / `#323238` crisp borders).
+  - Sky Blue (`#38BDF8`) primary interactive accents and emerald signature (`#10B981`) for format badges and verification indicators.
+- **Bandizip-Style Unified Top Ribbon Toolbar**:
+  - Replaced separate mode tabs with a unified single-line action toolbar:
+    - Left group: `[ 📂 Open Archive ]`, `[ ➕ Add Files ]`, `[ 📁 Add Folder ]`.
+    - Right group: `[ 📦 Compress... ]`, `[ 📤 Extract... ]`, `[ 🛡️ Test ]`, `[ ✕ Clear ]`, `[ About ]`, `[ ⚙️ ]`.
+    - Contextual button states: `[ 📦 Compress... ]` highlights sky-blue when files are staged; `[ 📤 Extract... ]` highlights sky-blue when an archive is loaded.
+- **Keka-Style Compact Popup Dialogs with Live Streaming Morph**:
+  - Completely eliminated `backdrop-blur` and heavy overlays, rendering dialogs cleanly within the File Viewer without obscuring titlebar or toolbar.
+  - Compact `CompressModal` with archive format selector (`.bay`, `.bayg`, `.zip`), algorithm, AES-256 encryption, and notched hardware & speed slider (`Store` • `Fast` • `Balanced` • `High` • `Ultra`).
+  - Action smoothly morphs the dialog into a **Live Streaming Progress View** showing live percentage, throughput, ETA, streamed bytes, current item, and minimize to footer.
+  - Matching compact `ExtractModal` with destination directory selector, subfolder extraction, and folder reveal toggles.
+- **Permanent Dead Code Removal & Bundle Optimization**:
+  - Permanently deleted legacy multi-step pages `CompressPage.tsx` and `ExtractPage.tsx`.
+  - Reduced CSS bundle from 62.25 kB to 54.64 kB.
+
 ## [v2.3.7] - 2026-11-10
 
 ### ⚡ Unified Single-Window Archiver & Smart Drop Hub
