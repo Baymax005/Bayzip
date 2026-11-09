@@ -1,4 +1,31 @@
 /**
+ * Supported archive extensions recognized by Bayzip
+ */
+export const ARCHIVE_EXTS = [
+  ".bay",
+  ".bayg",
+  ".zip",
+  ".7z",
+  ".tar",
+  ".gz",
+  ".tgz",
+  ".rar",
+  ".zst",
+  ".bz2",
+  ".xz",
+  ".iso",
+  ".cab",
+];
+
+/**
+ * Determines whether a file path corresponds to a supported archive format
+ */
+export function isArchiveFile(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return ARCHIVE_EXTS.some((ext) => lower.endsWith(ext));
+}
+
+/**
  * Utility helper for archive filename stem extraction
  */
 export function getArchiveStemName(filename: string): string {

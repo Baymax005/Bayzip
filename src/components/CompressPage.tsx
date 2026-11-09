@@ -3,6 +3,7 @@ import { useMemo, useEffect } from "react";
 import { SystemSpecs, CompressProgress, ArchiveInfo, ArchiveEntryItem } from "../types";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
+import { UnifiedDropHub } from "./UnifiedDropHub";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
 
@@ -73,6 +74,7 @@ export interface CompressPageProps {
   onSwitchMode?: (newMode: "compress" | "extract") => void;
   onSelectArchive?: () => void;
   onLoadArchiveFromFile?: (path: string) => void;
+  isDraggingOver?: boolean;
 }
 
 export function CompressPage({
@@ -124,6 +126,7 @@ export function CompressPage({
   onSwitchMode,
   onSelectArchive: _onSelectArchive,
   onLoadArchiveFromFile: _onLoadArchiveFromFile,
+  isDraggingOver,
 }: CompressPageProps) {
   const totalSelectedSize = useMemo(() => {
     return selectedFiles.reduce((acc, f) => acc + (itemsInfo[f]?.size || 0), 0);
@@ -252,88 +255,104 @@ export function CompressPage({
     return "Maximum Power";
   };
 
+  if (selectedFiles.length === 0) {
+    return (
+      <UnifiedDropHub
+        onSelectArchive={_onSelectArchive || (() => {})}
+        onSelectFiles={handleSelectFiles}
+        onSelectFolder={handleSelectFolder}
+        isDraggingOver={isDraggingOver}
+        activeMode="compress"
+        onSwitchMode={onSwitchMode}
+      />
+    );
+  }
+
   return (
     <>
       {/* Windows 11 File Drop Zone & Staging Inspector */}
-      {selectedFiles.length > 0 ? (
-        <div className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-4 flex flex-col space-y-3">
-          <div className="flex justify-between items-center text-xs border-b border-[#3E3E3E] pb-2">
-            <div className="flex items-center space-x-2 text-[#A8A8A8] flex-wrap">
-              <span className="text-white font-medium">
-                {selectedFiles.length} item{selectedFiles.length > 1 ? "s" : ""} selected
-              </span>
-              {effectiveTotalSize > 0 && (
-                <>
-                  <span>•</span>
-                  <span className="text-[#60CDFF] font-mono font-medium">
-                    Total: {formatBytes(effectiveTotalSize)}
-                  </span>
-                </>
-              )}
-              {excludedFilesCount > 0 && (
-                <>
-                  <span>•</span>
-                  <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-[11px] font-medium">
-                    {includedFilesCount} of {totalFilesCount} files included ({excludedFilesCount} excluded)
-                  </span>
-                </>
-              )}
-              {isCompressing && (
-                <span className="text-[10px] text-[#60CDFF] bg-[#60CDFF]/10 border border-[#60CDFF]/30 px-2 py-0.5 rounded font-medium">
-                  Staging for Next Archive
+      <div className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-4 flex flex-col space-y-3">
+        <div className="flex justify-between items-center text-xs border-b border-[#3E3E3E] pb-2">
+          <div className="flex items-center space-x-2 text-[#A8A8A8] flex-wrap">
+            <span className="text-white font-medium">
+              {selectedFiles.length} item{selectedFiles.length > 1 ? "s" : ""} selected
+            </span>
+            {effectiveTotalSize > 0 && (
+              <>
+                <span>•</span>
+                <span className="text-[#60CDFF] font-mono font-medium">
+                  Total: {formatBytes(effectiveTotalSize)}
                 </span>
-              )}
-            </div>
+              </>
+            )}
+            {excludedFilesCount > 0 && (
+              <>
+                <span>•</span>
+                <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-[11px] font-medium">
+                  {includedFilesCount} of {totalFilesCount} files included ({excludedFilesCount} excluded)
+                </span>
+              </>
+            )}
+            {isCompressing && (
+              <span className="text-[10px] text-[#60CDFF] bg-[#60CDFF]/10 border border-[#60CDFF]/30 px-2 py-0.5 rounded font-medium">
+                Staging for Next Archive
+              </span>
+            )}
+          </div>
 
-            <div className="flex items-center space-x-2.5">
-              {/* View Switcher: Tree vs List */}
-              <div className="flex items-center bg-[#202020] p-0.5 rounded-md border border-[#3E3E3E]">
-                <button
-                  type="button"
-                  onClick={() => setCompressViewMode("tree")}
-                  className={`px-2.5 py-1 text-xs font-medium rounded transition-colors flex items-center space-x-1.5 cursor-pointer ${
-                    compressViewMode === "tree"
-                      ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/30 font-semibold shadow-sm"
-                      : "text-[#A8A8A8] hover:text-white"
-                  }`}
-                  title="Hierarchical Tree & Folder Inspector"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                  <span>Tree</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCompressViewMode("list")}
-                  className={`px-2.5 py-1 text-xs font-medium rounded transition-colors flex items-center space-x-1.5 cursor-pointer ${
-                    compressViewMode === "list"
-                      ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/30 font-semibold shadow-sm"
-                      : "text-[#A8A8A8] hover:text-white"
-                  }`}
-                  title="Compact List View"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                  </svg>
-                  <span>List</span>
-                </button>
-              </div>
-
+          <div className="flex items-center space-x-2.5">
+            {/* View Switcher: Tree vs List */}
+            <div className="flex items-center bg-[#202020] p-0.5 rounded-md border border-[#3E3E3E]">
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedFiles([]);
-                  if (!isCompressing) {
-                    setCustomArchiveName("");
-                  }
-                }}
-                className="text-red-400 hover:text-red-300 transition-colors cursor-pointer text-xs"
+                onClick={() => setCompressViewMode("tree")}
+                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors flex items-center space-x-1.5 cursor-pointer ${
+                  compressViewMode === "tree"
+                    ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/30 font-semibold shadow-sm"
+                    : "text-[#A8A8A8] hover:text-white"
+                }`}
+                title="Hierarchical Tree & Folder Inspector"
               >
-                Clear all
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <span>Tree</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCompressViewMode("list")}
+                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors flex items-center space-x-1.5 cursor-pointer ${
+                  compressViewMode === "list"
+                    ? "bg-[#60CDFF]/20 text-[#60CDFF] border border-[#60CDFF]/30 font-semibold shadow-sm"
+                    : "text-[#A8A8A8] hover:text-white"
+                }`}
+                title="Compact List View"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+                <span>List</span>
               </button>
             </div>
+
+            <button
+              type="button"
+              disabled={isCompressing}
+              onClick={() => {
+                if (isCompressing) return;
+                setSelectedFiles([]);
+                if (!isCompressing) {
+                  setCustomArchiveName("");
+                }
+              }}
+              className="px-2.5 py-1 text-xs font-medium text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-900/70 border border-rose-800/60 hover:border-rose-500 rounded-md transition-all cursor-pointer flex items-center space-x-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              title={isCompressing ? "Compression in progress" : "Clear all staged files and return to Hub"}
+            >
+              <span>✕</span>
+              <span>Clear Selection</span>
+            </button>
           </div>
+        </div>
 
           {compressViewMode === "tree" ? (
             <div className="rounded-md overflow-hidden border border-[#3E3E3E]">
@@ -462,49 +481,6 @@ export function CompressPage({
             </span>
           </div>
         </div>
-      ) : (
-        <div
-          onClick={handleSelectFiles}
-          className="bg-[#2D2D2D] border border-dashed border-[#3E3E3E] hover:border-[#60CDFF] rounded-lg p-8 text-center transition-colors flex flex-col items-center justify-center space-y-4 cursor-pointer group"
-        >
-          <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#3E3E3E] group-hover:border-[#60CDFF] group-hover:shadow-[0_0_15px_rgba(96,205,255,0.25)] flex items-center justify-center text-[#60CDFF] transition-all duration-200">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.8}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-              />
-            </svg>
-          </div>
-          <div>
-            <p className="text-sm font-medium text-white mb-1">Drag & drop files or folders here</p>
-            <p className="text-xs text-[#A8A8A8]">Native hardware-accelerated multithreaded engine</p>
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSelectFiles();
-              }}
-              className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer"
-            >
-              Select Files
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSelectFolder();
-              }}
-              className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer"
-            >
-              Select Folder
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Target Archive Name Card - Always visible with glowing Bayzip logo tile */}
       <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-4 flex flex-col space-y-2">

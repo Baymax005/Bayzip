@@ -1,5 +1,5 @@
 import { formatBytes } from "./utils/format";
-import { getArchiveStemName } from "./utils/archive";
+import { getArchiveStemName, isArchiveFile } from "./utils/archive";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -15,6 +15,7 @@ import { PasswordModal } from "./components/PasswordModal";
 import { ResultModals } from "./components/ResultModals";
 import { ExtractPage } from "./components/ExtractPage";
 import { CompressPage } from "./components/CompressPage";
+import { UnifiedDropHub } from "./components/UnifiedDropHub";
 import { normalizeArchiveEntryPath } from "./components/ArchiveTreeInspector";
 import { FilePreviewModal } from "./components/FilePreviewModal";
 
@@ -39,28 +40,7 @@ const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".tar": ["None (Store)"],
 };
 
-const ARCHIVE_EXTS = [
-  ".bay",
-  ".bayg",
-  ".zip",
-  ".7z",
-  ".tar",
-  ".gz",
-  ".tgz",
-  ".rar",
-  ".zst",
-  ".bz2",
-  ".xz",
-  ".iso",
-  ".cab",
-];
 
-// getArchiveStemName imported from src/utils/archive (V-CODE-01)
-
-function isArchiveFile(filePath: string): boolean {
-  const lower = filePath.toLowerCase();
-  return ARCHIVE_EXTS.some((ext) => lower.endsWith(ext));
-}
 
 function App() {
   // Navigation Mode: "compress" or "extract"
@@ -539,6 +519,7 @@ function App() {
       return;
     }
 
+    setActiveMode("extract");
     setSelectedArchive(filePath);
     setExcludedPaths(new Set());
     setExtractResult(null);
@@ -702,15 +683,14 @@ function App() {
           setIsDraggingOver(false);
           const paths = event.payload.paths;
           if (paths && paths.length > 0) {
-            if (activeModeRef.current === "compress") {
-              setSelectedFiles((prev) => [...new Set([...prev, ...paths])]);
+            const archiveFile = paths.find(isArchiveFile);
+            if (archiveFile) {
+              setActiveMode("extract");
+              setSelectedArchive(archiveFile);
+              selectArchive(archiveFile);
             } else {
-              if (paths.length === 1 && isArchiveFile(paths[0])) {
-                selectArchive(paths[0]);
-              } else {
-                setActiveMode("compress");
-                setSelectedFiles((prev) => [...new Set([...prev, ...paths])]);
-              }
+              setActiveMode("compress");
+              setSelectedFiles((prev) => [...new Set([...prev, ...paths])]);
             }
           }
         }
@@ -780,7 +760,13 @@ function App() {
       });
       if (selected) {
         const newFiles = Array.isArray(selected) ? selected : [selected];
-        setSelectedFiles((prev) => [...new Set([...prev, ...newFiles])]);
+        const archiveFile = newFiles.find(isArchiveFile);
+        if (newFiles.length === 1 && archiveFile) {
+          selectArchive(archiveFile);
+        } else {
+          setActiveMode("compress");
+          setSelectedFiles((prev) => [...new Set([...prev, ...newFiles])]);
+        }
       }
     } catch (err) {
       console.error("File selection error:", err);
@@ -796,6 +782,7 @@ function App() {
       });
       if (selected) {
         const newFolders = Array.isArray(selected) ? selected : [selected];
+        setActiveMode("compress");
         setSelectedFiles((prev) => [...new Set([...prev, ...newFolders])]);
       }
     } catch (err) {
@@ -1249,101 +1236,131 @@ function App() {
           </div>
 
           {/* ======================================================== */}
-          {/* COMPRESS MODE CONTENT                                     */}
+          {/* UNIFIED WORKFLOW: HUB vs EXTRACT vs COMPRESS             */}
           {/* ======================================================== */}
-          {activeMode === "compress" && (
-            <CompressPage
-              selectedFiles={selectedFiles}
-              setSelectedFiles={setSelectedFiles}
-              itemsInfo={itemsInfo}
-              customArchiveName={customArchiveName}
-              setCustomArchiveName={setCustomArchiveName}
-              selectedFormat={selectedFormat}
-              setSelectedFormat={setSelectedFormat}
-              selectedAlgorithm={selectedAlgorithm}
-              setSelectedAlgorithm={setSelectedAlgorithm}
-              selectedEncryption={selectedEncryption}
-              setSelectedEncryption={setSelectedEncryption}
-              compressPassword={compressPassword}
-              setCompressPassword={setCompressPassword}
-              showCompressPassword={showCompressPassword}
-              setShowCompressPassword={setShowCompressPassword}
-              archiveToOriginalPath={archiveToOriginalPath}
-              setArchiveToOriginalPath={setArchiveToOriginalPath}
-              compressDestDir={compressDestDir}
-              setCompressDestDir={setCompressDestDir}
-              separateArchives={separateArchives}
-              setSeparateArchives={setSeparateArchives}
-              smartMediaBypass={smartMediaBypass}
-              setSmartMediaBypass={handleUpdateSmartMediaBypass}
-              isAdvanced={isAdvanced}
-              setIsAdvanced={setIsAdvanced}
-              sliderValue={sliderValue}
-              setSliderValue={setSliderValue}
-              specs={specs}
-              isCompressing={isCompressing}
-              isCancellingCompress={isCancellingCompress}
-              progress={progress}
-              compressError={compressError}
-              activeCompressConfig={activeCompressConfig}
-              handleSelectFiles={handleSelectFiles}
-              handleSelectFolder={handleSelectFolder}
-              handleSelectCompressDestination={handleSelectCompressDestination}
-              handleCompress={handleCompress}
-              handleCancelCompress={handleCancelCompress}
-              compressViewMode={compressViewMode}
-              setCompressViewMode={setCompressViewMode}
-              stagedEntries={stagedEntries}
-              isInspectingStaged={isInspectingStaged}
-              excludedCompressPaths={excludedCompressPaths}
-              onToggleCompressExclude={handleToggleCompressExclude}
-              onCompressIncludeAll={handleCompressIncludeAll}
-              onPreviewStagedEntry={handlePreviewStagedEntry}
-              onSwitchMode={(m) => setActiveMode(m)}
+          {!selectedArchive && selectedFiles.length === 0 ? (
+            <UnifiedDropHub
               onSelectArchive={handleSelectArchive}
-              onLoadArchiveFromFile={selectArchive}
+              onSelectFiles={handleSelectFiles}
+              onSelectFolder={handleSelectFolder}
+              isDraggingOver={isDraggingOver}
+              activeMode={activeMode}
+              onSwitchMode={setActiveMode}
             />
-          )}
-
-          {/* ======================================================== */}
-          {/* EXTRACT MODE CONTENT                                      */}
-          {/* ======================================================== */}
-          {activeMode === "extract" && (
-            <ExtractPage
-              selectedArchive={selectedArchive}
-              archiveInfo={archiveInfo}
-              isInspectingArchive={isInspectingArchive}
-              extractDest={extractDest}
-              setExtractDest={setExtractDest}
-              extractToSubfolder={extractToSubfolder}
-              setExtractToSubfolder={setExtractToSubfolder}
-              openFolderOnExtract={openFolderOnExtract}
-              setOpenFolderOnExtract={setOpenFolderOnExtract}
-              extractPassword={extractPassword}
-              setExtractPassword={setExtractPassword}
-              showExtractPassword={showExtractPassword}
-              setShowExtractPassword={setShowExtractPassword}
-              isExtracting={isExtracting}
-              isCancellingExtract={isCancellingExtract}
-              extractProgress={extractProgress}
-              extractError={extractError}
-              excludedPaths={excludedPaths}
-              includedFilesCount={includedFilesCount}
-              handleToggleExclude={handleToggleExclude}
-              handleIncludeAll={handleIncludeAll}
-              handleSelectArchive={handleSelectArchive}
-              handleSelectDestFolder={handleSelectDestFolder}
-              handleExtract={handleExtract}
-              handleCancelExtract={handleCancelExtract}
-              onClearArchive={() => {
-                setSelectedArchive(null);
-                setArchiveInfo(null);
-                setExtractResult(null);
-              }}
-              selectArchive={selectArchive}
-              handlePreviewEntry={handlePreviewEntry}
-              onSwitchMode={(m) => setActiveMode(m)}
-            />
+          ) : activeMode === "extract" ? (
+            selectedArchive && archiveInfo ? (
+              <ExtractPage
+                selectedArchive={selectedArchive}
+                archiveInfo={archiveInfo}
+                isInspectingArchive={isInspectingArchive}
+                extractDest={extractDest}
+                setExtractDest={setExtractDest}
+                extractToSubfolder={extractToSubfolder}
+                setExtractToSubfolder={setExtractToSubfolder}
+                openFolderOnExtract={openFolderOnExtract}
+                setOpenFolderOnExtract={setOpenFolderOnExtract}
+                extractPassword={extractPassword}
+                setExtractPassword={setExtractPassword}
+                showExtractPassword={showExtractPassword}
+                setShowExtractPassword={setShowExtractPassword}
+                isExtracting={isExtracting}
+                isCancellingExtract={isCancellingExtract}
+                extractProgress={extractProgress}
+                extractError={extractError}
+                excludedPaths={excludedPaths}
+                includedFilesCount={includedFilesCount}
+                handleToggleExclude={handleToggleExclude}
+                handleIncludeAll={handleIncludeAll}
+                handleSelectArchive={handleSelectArchive}
+                handleSelectDestFolder={handleSelectDestFolder}
+                handleExtract={handleExtract}
+                handleCancelExtract={handleCancelExtract}
+                onClearArchive={() => {
+                  setSelectedArchive(null);
+                  setArchiveInfo(null);
+                  setExtractResult(null);
+                }}
+                selectArchive={selectArchive}
+                handlePreviewEntry={handlePreviewEntry}
+                onSwitchMode={(m) => setActiveMode(m)}
+                handleSelectFiles={handleSelectFiles}
+                handleSelectFolder={handleSelectFolder}
+                isDraggingOver={isDraggingOver}
+              />
+            ) : (
+              <UnifiedDropHub
+                onSelectArchive={handleSelectArchive}
+                onSelectFiles={handleSelectFiles}
+                onSelectFolder={handleSelectFolder}
+                isDraggingOver={isDraggingOver}
+                activeMode="extract"
+                onSwitchMode={setActiveMode}
+              />
+            )
+          ) : (
+            selectedFiles.length > 0 ? (
+              <CompressPage
+                selectedFiles={selectedFiles}
+                setSelectedFiles={setSelectedFiles}
+                itemsInfo={itemsInfo}
+                customArchiveName={customArchiveName}
+                setCustomArchiveName={setCustomArchiveName}
+                selectedFormat={selectedFormat}
+                setSelectedFormat={setSelectedFormat}
+                selectedAlgorithm={selectedAlgorithm}
+                setSelectedAlgorithm={setSelectedAlgorithm}
+                selectedEncryption={selectedEncryption}
+                setSelectedEncryption={setSelectedEncryption}
+                compressPassword={compressPassword}
+                setCompressPassword={setCompressPassword}
+                showCompressPassword={showCompressPassword}
+                setShowCompressPassword={setShowCompressPassword}
+                archiveToOriginalPath={archiveToOriginalPath}
+                setArchiveToOriginalPath={setArchiveToOriginalPath}
+                compressDestDir={compressDestDir}
+                setCompressDestDir={setCompressDestDir}
+                separateArchives={separateArchives}
+                setSeparateArchives={setSeparateArchives}
+                smartMediaBypass={smartMediaBypass}
+                setSmartMediaBypass={handleUpdateSmartMediaBypass}
+                isAdvanced={isAdvanced}
+                setIsAdvanced={setIsAdvanced}
+                sliderValue={sliderValue}
+                setSliderValue={setSliderValue}
+                specs={specs}
+                isCompressing={isCompressing}
+                isCancellingCompress={isCancellingCompress}
+                progress={progress}
+                compressError={compressError}
+                activeCompressConfig={activeCompressConfig}
+                handleSelectFiles={handleSelectFiles}
+                handleSelectFolder={handleSelectFolder}
+                handleSelectCompressDestination={handleSelectCompressDestination}
+                handleCompress={handleCompress}
+                handleCancelCompress={handleCancelCompress}
+                compressViewMode={compressViewMode}
+                setCompressViewMode={setCompressViewMode}
+                stagedEntries={stagedEntries}
+                isInspectingStaged={isInspectingStaged}
+                excludedCompressPaths={excludedCompressPaths}
+                onToggleCompressExclude={handleToggleCompressExclude}
+                onCompressIncludeAll={handleCompressIncludeAll}
+                onPreviewStagedEntry={handlePreviewStagedEntry}
+                onSwitchMode={(m) => setActiveMode(m)}
+                onSelectArchive={handleSelectArchive}
+                onLoadArchiveFromFile={selectArchive}
+                isDraggingOver={isDraggingOver}
+              />
+            ) : (
+              <UnifiedDropHub
+                onSelectArchive={handleSelectArchive}
+                onSelectFiles={handleSelectFiles}
+                onSelectFolder={handleSelectFolder}
+                isDraggingOver={isDraggingOver}
+                activeMode="compress"
+                onSwitchMode={setActiveMode}
+              />
+            )
           )}
         </div>
       </div>

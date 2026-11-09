@@ -3,6 +3,7 @@ import { getArchiveStemName } from "../utils/archive";
 import { ArchiveInfo, ExtractProgress } from "../types";
 import { ArchiveTreeInspector } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
+import { UnifiedDropHub } from "./UnifiedDropHub";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
 
 export interface ExtractPageProps {
@@ -40,6 +41,9 @@ export interface ExtractPageProps {
   selectArchive: (filePath: string, pwd?: string) => void;
   handlePreviewEntry: (entryName: string) => void;
   onSwitchMode?: (newMode: "compress" | "extract") => void;
+  handleSelectFiles?: () => void;
+  handleSelectFolder?: () => void;
+  isDraggingOver?: boolean;
 }
 
 // formatBytes and getArchiveStemName imported from src/utils/ (V-CODE-01)
@@ -74,6 +78,9 @@ export function ExtractPage({
   selectArchive,
   handlePreviewEntry,
   onSwitchMode,
+  handleSelectFiles,
+  handleSelectFolder,
+  isDraggingOver,
 }: ExtractPageProps) {
   const { speedText, etaText } = useDynamicThroughput({
     isActive: isExtracting,
@@ -81,134 +88,129 @@ export function ExtractPage({
     totalBytes: archiveInfo?.total_uncompressed_size ?? 0,
   });
 
+  if (!selectedArchive || !archiveInfo) {
+    return (
+      <UnifiedDropHub
+        onSelectArchive={handleSelectArchive}
+        onSelectFiles={handleSelectFiles || (() => {})}
+        onSelectFolder={handleSelectFolder || (() => {})}
+        isDraggingOver={isDraggingOver}
+        activeMode="extract"
+        onSwitchMode={onSwitchMode}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Archive Selection Area */}
-      {selectedArchive && archiveInfo ? (
-        <div className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-5 flex flex-col space-y-4">
-          <div className="flex justify-between items-center text-xs border-b border-[#3E3E3E] pb-3">
+      <div className="bg-[#2D2D2D] border border-[#3E3E3E] rounded-lg p-5 flex flex-col space-y-4 shadow-sm">
+        <div className="flex justify-between items-center text-xs border-b border-[#3E3E3E] pb-3">
+          <div className="flex items-center space-x-2">
             <span className="text-xs uppercase tracking-wider font-semibold text-[#60CDFF]">
               Archive Selected
             </span>
-            <div className="flex items-center space-x-2.5">
-              <button
-                type="button"
-                disabled={isExtracting}
-                onClick={() => {
-                  if (isExtracting) return;
-                  onClearArchive();
-                }}
-                className="text-red-400 hover:text-red-300 transition-colors cursor-pointer text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                title={isExtracting ? "Extraction in progress" : undefined}
-              >
-                Clear
-              </button>
-            </div>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#60CDFF]/15 text-[#60CDFF] border border-[#60CDFF]/30">
+              Ready to Extract
+            </span>
           </div>
-
-          <div className="flex items-center space-x-4 bg-[#202020] p-4 rounded-md border border-[#3E3E3E]">
-            <div className="relative w-12 h-12 rounded-xl bg-[#142330] border border-[#20495f] flex items-center justify-center shrink-0 shadow">
-              <BayzipLogo className="w-7 h-7" />
-              <span className="absolute -bottom-1 -right-1 bg-[#60CDFF] text-black text-[8px] font-black font-mono px-1 rounded uppercase">
-                {archiveInfo.format.replace(".", "").toUpperCase() || "ZIP"}
-              </span>
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-white truncate" title={selectedArchive}>
-                {archiveInfo.filename}
-              </p>
-              <div className="flex items-center space-x-2 text-xs text-[#A8A8A8] mt-0.5">
-                <span className="font-mono text-[#60CDFF]">{formatBytes(archiveInfo.size)}</span>
-                <span>•</span>
-                <span className="bg-[#2D2D2D] px-2 py-0.5 rounded text-[11px] text-[#C8C8C8] border border-[#3E3E3E]">
-                  {archiveInfo.format}
-                </span>
-                {archiveInfo.is_encrypted && (
-                  <span className="bg-amber-950/60 text-amber-300 text-[10px] px-2 py-0.5 rounded border border-amber-800/80 font-medium flex items-center space-x-1">
-                    <svg className="w-3 h-3 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                    <span>Encrypted</span>
-                  </span>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center space-x-2 shrink-0">
-              <button
-                type="button"
-                disabled={isExtracting}
-                onClick={handleSelectArchive}
-                className="text-xs px-3 py-1.5 bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                title={isExtracting ? "Extraction in progress" : undefined}
-              >
-                Change
-              </button>
-              <button
-                type="button"
-                disabled={isExtracting}
-                onClick={onClearArchive}
-                className="text-xs px-3 py-1.5 bg-rose-950/30 hover:bg-rose-900/60 border border-rose-800/50 hover:border-rose-600 text-rose-300 hover:text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
-                title="Remove / Close this archive"
-              >
-                <span>✕</span>
-                <span>Remove</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Hierarchical Tree-Type Archive Directory Inspector */}
-          <ArchiveTreeInspector
-            archiveInfo={archiveInfo}
-            selectedArchive={selectedArchive}
-            extractPassword={extractPassword}
-            isLoading={isInspectingArchive}
-            onUnlockPreview={() => selectArchive(selectedArchive, extractPassword.trim())}
-            onPreviewEntry={handlePreviewEntry}
-            excludedPaths={excludedPaths}
-            onToggleExclude={handleToggleExclude}
-            onIncludeAll={handleIncludeAll}
-            inspectorTitle="Archive Explorer & Folders"
-            mode="extract"
-            onSwitchMode={onSwitchMode}
-            onSelectArchive={handleSelectArchive}
-            onLoadArchiveFromFile={selectArchive}
-          />
-        </div>
-      ) : (
-        <div
-          onClick={handleSelectArchive}
-          className="bg-[#2D2D2D] border border-dashed border-[#3E3E3E] hover:border-[#60CDFF] rounded-lg p-8 text-center transition-colors flex flex-col items-center justify-center space-y-4 cursor-pointer group"
-        >
-          <div className="w-12 h-12 rounded-full bg-[#202020] border border-[#3E3E3E] group-hover:border-[#60CDFF] group-hover:shadow-[0_0_15px_rgba(96,205,255,0.25)] flex items-center justify-center text-[#60CDFF] transition-all duration-200">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.8}
-                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-              />
-            </svg>
-          </div>
-          <div>
-            <p className="text-sm font-medium text-white mb-1">Drag & drop archive to uncompress</p>
-            <p className="text-xs text-[#A8A8A8]">
-              Supports <span className="text-[#60CDFF]">.bay</span>, <span className="text-[#60CDFF]">.bayg</span>, <span className="text-[#60CDFF]">.zip</span>, <span className="text-[#60CDFF]">.7z</span>, <span className="text-[#60CDFF]">.rar</span>, and <span className="text-[#60CDFF]">.tar</span>
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
+          <div className="flex items-center space-x-2">
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSelectArchive();
-              }}
-              className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer"
+              disabled={isExtracting}
+              onClick={handleSelectArchive}
+              className="px-3 py-1.5 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-all cursor-pointer text-xs font-medium flex items-center space-x-1.5 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+              title={isExtracting ? "Extraction in progress" : "Open a different archive file"}
             >
-              Browse Archive
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5 text-[#60CDFF]">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              <span>Change Archive</span>
+            </button>
+            <button
+              type="button"
+              disabled={isExtracting}
+              onClick={onClearArchive}
+              className="px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/70 border border-rose-800/60 hover:border-rose-500 text-rose-200 hover:text-white rounded-md transition-all cursor-pointer text-xs font-medium flex items-center space-x-1.5 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+              title={isExtracting ? "Extraction in progress" : "Close this archive and return to Hub"}
+            >
+              <span>✕</span>
+              <span>Close Archive</span>
             </button>
           </div>
         </div>
-      )}
+
+        <div className="flex items-center space-x-4 bg-[#202020] p-4 rounded-md border border-[#3E3E3E]">
+          <div className="relative w-12 h-12 rounded-xl bg-[#142330] border border-[#20495f] flex items-center justify-center shrink-0 shadow">
+            <BayzipLogo className="w-7 h-7" />
+            <span className="absolute -bottom-1 -right-1 bg-[#60CDFF] text-black text-[8px] font-black font-mono px-1 rounded uppercase">
+              {archiveInfo.format.replace(".", "").toUpperCase() || "ZIP"}
+            </span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-white truncate" title={selectedArchive}>
+              {archiveInfo.filename}
+            </p>
+            <div className="flex items-center space-x-2 text-xs text-[#A8A8A8] mt-0.5">
+              <span className="font-mono text-[#60CDFF]">{formatBytes(archiveInfo.size)}</span>
+              <span>•</span>
+              <span className="bg-[#2D2D2D] px-2 py-0.5 rounded text-[11px] text-[#C8C8C8] border border-[#3E3E3E]">
+                {archiveInfo.format}
+              </span>
+              {archiveInfo.is_encrypted && (
+                <span className="bg-amber-950/60 text-amber-300 text-[10px] px-2 py-0.5 rounded border border-amber-800/80 font-medium flex items-center space-x-1">
+                  <svg className="w-3 h-3 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  <span>Encrypted</span>
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center space-x-2 shrink-0">
+            <button
+              type="button"
+              disabled={isExtracting}
+              onClick={handleSelectArchive}
+              className="text-xs px-3 py-1.5 bg-[#2D2D2D] hover:bg-[#383838] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
+              title={isExtracting ? "Extraction in progress" : "Open a different archive file"}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3 h-3 text-[#60CDFF]">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span>Change</span>
+            </button>
+            <button
+              type="button"
+              disabled={isExtracting}
+              onClick={onClearArchive}
+              className="text-xs px-3 py-1.5 bg-rose-950/30 hover:bg-rose-900/60 border border-rose-800/50 hover:border-rose-600 text-rose-300 hover:text-white rounded-md transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
+              title="Close and unload this archive"
+            >
+              <span>✕</span>
+              <span>Close</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Hierarchical Tree-Type Archive Directory Inspector */}
+        <ArchiveTreeInspector
+          archiveInfo={archiveInfo}
+          selectedArchive={selectedArchive}
+          extractPassword={extractPassword}
+          isLoading={isInspectingArchive}
+          onUnlockPreview={() => selectArchive(selectedArchive, extractPassword.trim())}
+          onPreviewEntry={handlePreviewEntry}
+          excludedPaths={excludedPaths}
+          onToggleExclude={handleToggleExclude}
+          onIncludeAll={handleIncludeAll}
+          inspectorTitle="Archive Explorer & Folders"
+          mode="extract"
+          onSwitchMode={onSwitchMode}
+          onSelectArchive={handleSelectArchive}
+          onLoadArchiveFromFile={selectArchive}
+        />
+      </div>
 
       {/* Extraction Destination & Options */}
       <div className="bg-[#2D2D2D] rounded-lg border border-[#3E3E3E] p-6 space-y-4">

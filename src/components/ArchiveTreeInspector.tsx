@@ -81,6 +81,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const containerRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   // Folder history navigation (Back / Forward)
   const [history, setHistory] = useState<string[]>([""]);
@@ -294,12 +295,47 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
     }
   };
 
-  // Keyboard shortcut: Space to preview selected entry
+  // Keyboard shortcuts & ergonomics:
+  // - Ctrl+F: Focuses search input (searchRef)
+  // - Backspace / Alt+ArrowUp: Navigates to parent directory if currentFolderPath is not root
+  // - Enter: If selectedEntryName is a folder in currentFolderNode.subfolders, navigates into it
+  // - Space: Preview selected entry
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+F / Cmd+F: Global shortcut to jump to search filter
+      if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+
       const target = e.target as HTMLElement | null;
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
 
+      // Backspace or Alt+ArrowUp: navigate to parent directory if not root
+      if (e.key === "Backspace" || (e.altKey && e.key === "ArrowUp")) {
+        if (currentFolderPath !== "") {
+          e.preventDefault();
+          navigateUp();
+          return;
+        }
+      }
+
+      // Enter: if selectedEntryName is a folder in currentFolderNode.subfolders, navigate into it
+      if (e.key === "Enter" && selectedEntryName) {
+        const targetFolder = currentFolderNode.subfolders.find(
+          (f) => f.path === selectedEntryName || f.name === selectedEntryName
+        );
+        if (targetFolder) {
+          e.preventDefault();
+          setSelectedEntryName(null);
+          navigateToFolder(targetFolder.path);
+          return;
+        }
+      }
+
+      // Space: preview selected entry
       if (e.key === " " && selectedEntryName) {
         e.preventDefault();
         onPreviewEntry(selectedEntryName);
@@ -307,7 +343,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedEntryName, onPreviewEntry]);
+  }, [selectedEntryName, onPreviewEntry, currentFolderPath, currentFolderNode, historyIndex]);
 
   // Breadcrumbs representation
   const breadcrumbSegments = useMemo(() => {
@@ -396,7 +432,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
   return (
     <div
       ref={containerRef}
-      className="bg-[#202020] rounded-lg border border-[#3E3E3E] overflow-hidden flex flex-col shadow-sm"
+      className="bg-[#202020] rounded-lg border border-[#3E3E3E] overflow-hidden flex flex-col shadow-sm flex-1 min-h-0"
     >
       {/* Header Bar */}
       <div className="px-3.5 py-2.5 bg-[#242424] border-b border-[#333333] flex items-center justify-between gap-2 select-none">
@@ -426,6 +462,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
           {/* Quick Search Input */}
           <div className="relative">
             <input
+              ref={searchRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -569,7 +606,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
           </div>
 
           {/* Virtual File / Folder List Container */}
-          <div className="h-72 flex flex-col overflow-hidden relative">
+          <div className="flex-1 min-h-[320px] flex flex-col overflow-hidden relative">
             {isLoading ? (
               <div className="p-8 text-center space-y-3 m-auto">
                 <div className="w-6 h-6 border-2 border-[#60CDFF] border-t-transparent rounded-full animate-spin mx-auto" />
