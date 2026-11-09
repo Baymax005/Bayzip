@@ -20,3 +20,11 @@ export function getArchiveStemName(filename: string): string {
   const dotIdx = clean.lastIndexOf(".");
   return dotIdx > 0 ? clean.slice(0, dotIdx) : clean;
 }
+
+/**
+ * Normalizes archive entry paths for consistent hierarchy and matching
+ */
+export function normalizeArchiveEntryPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\.?\/+/, "").toLowerCase();
+}
+

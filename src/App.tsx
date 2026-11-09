@@ -97,7 +97,6 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [contextMenuStatus, setContextMenuStatus] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
 
   // Extraction State & Password
   const [extractPassword, setExtractPassword] = useState<string>("");
@@ -1211,21 +1210,6 @@ function App() {
             </div>
 
             <div className="flex items-center space-x-2">
-              <button
-                type="button"
-                onClick={() => setIsWorkspaceOpen(true)}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-xs font-semibold 
-                  bg-gradient-to-r from-[#0E4D6F] to-[#1A3A50] hover:from-[#155B82] hover:to-[#224A62]
-                  text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/40 hover:border-[#60CDFF]/70
-                  shadow-[0_0_12px_rgba(96,205,255,0.15)] hover:shadow-[0_0_20px_rgba(96,205,255,0.3)]
-                  transition-all cursor-pointer"
-                title="Open full workspace file manager"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                </svg>
-                <span>Workspace</span>
-              </button>
 
               {activeMode === "compress" && (
                 <button
@@ -1315,8 +1299,6 @@ function App() {
               onToggleCompressExclude={handleToggleCompressExclude}
               onCompressIncludeAll={handleCompressIncludeAll}
               onPreviewStagedEntry={handlePreviewStagedEntry}
-              isWorkspaceOpen={isWorkspaceOpen}
-              setIsWorkspaceOpen={setIsWorkspaceOpen}
               onSwitchMode={(m) => setActiveMode(m)}
               onSelectArchive={handleSelectArchive}
               onLoadArchiveFromFile={selectArchive}
@@ -1360,8 +1342,6 @@ function App() {
               }}
               selectArchive={selectArchive}
               handlePreviewEntry={handlePreviewEntry}
-              isWorkspaceOpen={isWorkspaceOpen}
-              setIsWorkspaceOpen={setIsWorkspaceOpen}
               onSwitchMode={(m) => setActiveMode(m)}
             />
           )}

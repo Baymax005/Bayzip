@@ -1,11 +1,10 @@
 import { formatBytes } from "../utils/format";
-import { useState, useMemo, useEffect } from "react";
+import { useMemo, useEffect } from "react";
 import { SystemSpecs, CompressProgress, ArchiveInfo, ArchiveEntryItem } from "../types";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
-import { WorkspaceAdvanceSidebar } from "./workspace/WorkspaceAdvanceSidebar";
 
 export const FORMAT_ALGORITHMS: Record<string, string[]> = {
   ".bay": ["Zstandard (Recommended)", "Brotli", "LZ4 (Fastest)"],
@@ -71,8 +70,6 @@ export interface CompressPageProps {
   onToggleCompressExclude: (path: string, isDir?: boolean) => void;
   onCompressIncludeAll: () => void;
   onPreviewStagedEntry: (entryName: string) => void;
-  isWorkspaceOpen?: boolean;
-  setIsWorkspaceOpen?: (open: boolean) => void;
   onSwitchMode?: (newMode: "compress" | "extract") => void;
   onSelectArchive?: () => void;
   onLoadArchiveFromFile?: (path: string) => void;
@@ -124,15 +121,10 @@ export function CompressPage({
   onToggleCompressExclude,
   onCompressIncludeAll,
   onPreviewStagedEntry,
-  isWorkspaceOpen: isWorkspaceOpenProp,
-  setIsWorkspaceOpen: setIsWorkspaceOpenProp,
   onSwitchMode,
-  onSelectArchive,
-  onLoadArchiveFromFile,
+  onSelectArchive: _onSelectArchive,
+  onLoadArchiveFromFile: _onLoadArchiveFromFile,
 }: CompressPageProps) {
-  const [internalWorkspaceOpen, setInternalWorkspaceOpen] = useState(false);
-  const isWorkspaceOpen = isWorkspaceOpenProp !== undefined ? isWorkspaceOpenProp : internalWorkspaceOpen;
-  const setIsWorkspaceOpen = setIsWorkspaceOpenProp || setInternalWorkspaceOpen;
   const totalSelectedSize = useMemo(() => {
     return selectedFiles.reduce((acc, f) => acc + (itemsInfo[f]?.size || 0), 0);
   }, [selectedFiles, itemsInfo]);
@@ -260,53 +252,6 @@ export function CompressPage({
     return "Maximum Power";
   };
 
-  const renderWorkspaceSidebar = () => (
-    <WorkspaceAdvanceSidebar
-      archiveName={isCompressing && activeCompressConfig ? activeCompressConfig.archiveName : customArchiveName}
-      onArchiveNameChange={setCustomArchiveName}
-      selectedFormat={selectedFormat}
-      onFormatChange={(fmt) => {
-        setSelectedFormat(fmt);
-        setSelectedAlgorithm(FORMAT_ALGORITHMS[fmt]?.[0] || "None (Store)");
-      }}
-      selectedAlgorithm={selectedAlgorithm}
-      onAlgorithmChange={setSelectedAlgorithm}
-      archiveToOriginalPath={archiveToOriginalPath}
-      onToggleArchiveToOriginalPath={setArchiveToOriginalPath}
-      compressDestDir={compressDestDir}
-      onCompressDestDirChange={setCompressDestDir}
-      onSelectDestination={handleSelectCompressDestination}
-      sliderValue={sliderValue}
-      onSliderValueChange={setSliderValue}
-      sliderLabel={getSliderLabel()}
-      specs={specs}
-      getEstimatedCores={getEstimatedCores}
-      smartMediaBypass={smartMediaBypass}
-      onSmartMediaBypassChange={setSmartMediaBypass}
-      separateArchives={separateArchives}
-      onSeparateArchivesChange={setSeparateArchives}
-      selectedEncryption={selectedEncryption}
-      onEncryptionChange={setSelectedEncryption}
-      compressPassword={compressPassword}
-      onCompressPasswordChange={(pwd) => {
-        setCompressPassword(pwd);
-        if (pwd.trim().length > 0 && selectedEncryption === "none") {
-          setSelectedEncryption("aes256");
-        }
-      }}
-      showCompressPassword={showCompressPassword}
-      onToggleShowPassword={() => setShowCompressPassword(!showCompressPassword)}
-      includedFilesCount={includedFilesCount}
-      totalFilesCount={totalFilesCount}
-      excludedFilesCount={excludedFilesCount}
-      effectivePayloadSize={effectiveTotalSize}
-      isCompressing={isCompressing}
-      isCancellingCompress={isCancellingCompress}
-      onCompress={handleCompress}
-      onCancelCompress={handleCancelCompress}
-    />
-  );
-
   return (
     <>
       {/* Windows 11 File Drop Zone & Staging Inspector */}
@@ -341,19 +286,6 @@ export function CompressPage({
             </div>
 
             <div className="flex items-center space-x-2.5">
-              {/* Workspace Mode Button */}
-              <button
-                type="button"
-                onClick={() => setIsWorkspaceOpen(true)}
-                className="px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center space-x-1.5 cursor-pointer bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/40 hover:border-[#60CDFF]/70 shadow-[0_0_10px_rgba(96,205,255,0.15)]"
-                title="Open full workspace with folder hierarchy, drive browsing, and options sidebar"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                </svg>
-                <span>Workspace</span>
-              </button>
-
               {/* View Switcher: Tree vs List */}
               <div className="flex items-center bg-[#202020] p-0.5 rounded-md border border-[#3E3E3E]">
                 <button
@@ -413,10 +345,6 @@ export function CompressPage({
                 excludedPaths={excludedCompressPaths}
                 onToggleExclude={onToggleCompressExclude}
                 onIncludeAll={onCompressIncludeAll}
-                isExpandedModal={false}
-                onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
-                sidebar={renderWorkspaceSidebar()}
-                sidebarTitle="Compression Options"
                 inspectorTitle="Staged Items & Folders"
                 mode="compress"
                 stagedItems={selectedFiles}
@@ -573,20 +501,6 @@ export function CompressPage({
               className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer"
             >
               Select Folder
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsWorkspaceOpen(true);
-              }}
-              className="text-xs font-semibold px-4 py-2 bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/40 hover:border-[#60CDFF]/70 rounded-md transition-all cursor-pointer flex items-center space-x-1.5 shadow-[0_0_12px_rgba(96,205,255,0.15)]"
-              title="Open full workspace with folder hierarchy, drive browsing, and options sidebar"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-              </svg>
-              <span>Workspace</span>
             </button>
           </div>
         </div>
@@ -1150,61 +1064,6 @@ export function CompressPage({
           </span>
         </button>
       </div>
-
-      {/* Full Workspace Modal with Right-Hand Options Sidebar */}
-      {isWorkspaceOpen && (
-        <ArchiveTreeInspector
-          archiveInfo={stagedArchiveInfo}
-          selectedArchive={selectedFiles[0] || "staged"}
-          isLoading={isInspectingStaged}
-          onPreviewEntry={onPreviewStagedEntry}
-          excludedPaths={excludedCompressPaths}
-          onToggleExclude={onToggleCompressExclude}
-          onIncludeAll={onCompressIncludeAll}
-          isExpandedModal={true}
-          onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
-          sidebar={renderWorkspaceSidebar()}
-          sidebarTitle="Compression Options"
-          inspectorTitle="Staged Items & Folders"
-          operationProgress={
-            isCompressing && progress
-              ? {
-                  percent: progress.percent,
-                  label: "Compressing Files...",
-                  current_file: progress.current_file,
-                  bytes_processed: progress.bytes_processed,
-                  total_bytes: progress.total_bytes,
-                  onCancel: handleCancelCompress,
-                  isCancelling: isCancellingCompress,
-                }
-              : null
-          }
-          onStageItem={(path) => {
-            setSelectedFiles((prev) => (prev.includes(path) ? prev : [...prev, path]));
-          }}
-          stagedItems={selectedFiles}
-          itemsInfo={itemsInfo}
-          onUnstageItem={(path) => {
-            setSelectedFiles((prev) => {
-              const next = prev.filter((p) => p !== path);
-              if (next.length === 0 && !isCompressing) {
-                setCustomArchiveName("");
-              }
-              return next;
-            });
-          }}
-          onClearStagedItems={() => {
-            setSelectedFiles([]);
-            if (!isCompressing) {
-              setCustomArchiveName("");
-            }
-          }}
-          mode="compress"
-          onSwitchMode={onSwitchMode}
-          onSelectArchive={onSelectArchive}
-          onLoadArchiveFromFile={onLoadArchiveFromFile}
-        />
-      )}
     </>
   );
 }

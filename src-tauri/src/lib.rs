@@ -280,69 +280,6 @@ async fn get_file_icons(extensions: Vec<String>) -> Result<std::collections::Has
     .map_err(|e| format!("Batch icon extraction failed: {}", e))?
 }
 
-#[tauri::command]
-async fn get_system_drives() -> Result<Vec<DriveInfo>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        Ok(inspector::get_system_drives_sync())
-    })
-    .await
-    .map_err(|e| format!("Drives query failed: {}", e))?
-}
-
-#[tauri::command]
-async fn get_quick_access() -> Result<Vec<crate::types::QuickAccessItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        Ok(inspector::get_quick_access_sync())
-    })
-    .await
-    .map_err(|e| format!("Quick access query failed: {}", e))?
-}
-
-#[tauri::command]
-async fn browse_directory(path: String) -> Result<Vec<DirectoryItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        inspector::browse_directory_sync(&path)
-    })
-    .await
-    .map_err(|e| format!("Browse directory failed: {}", e))?
-}
-
-#[tauri::command]
-async fn delete_to_recycle_bin(path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        inspector::delete_to_recycle_bin_sync(&path)
-    })
-    .await
-    .map_err(|e| format!("Recycle Bin delete failed: {}", e))?
-}
-
-#[tauri::command]
-async fn create_directory(path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        inspector::create_directory_sync(&path)
-    })
-    .await
-    .map_err(|e| format!("Create directory failed: {}", e))?
-}
-
-#[tauri::command]
-async fn rename_path(old_path: String, new_path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        inspector::rename_path_sync(&old_path, &new_path)
-    })
-    .await
-    .map_err(|e| format!("Rename path failed: {}", e))?
-}
-
-#[tauri::command]
-async fn copy_path(src: String, dest_dir: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        inspector::copy_path_sync(&src, &dest_dir)
-    })
-    .await
-    .map_err(|e| format!("Copy path failed: {}", e))?
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -373,13 +310,6 @@ pub fn run() {
             preview_staged_file,
             get_file_icon,
             get_file_icons,
-            get_system_drives,
-            get_quick_access,
-            browse_directory,
-            delete_to_recycle_bin,
-            create_directory,
-            rename_path,
-            copy_path,
             get_background_priority_shield,
             set_background_priority_shield,
             get_smart_media_bypass,

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.3.5-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.3.5" /></a>
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.3.6-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.3.6" /></a>
   <a href="#windows-shell-integration"><img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows 10 | 11" /></a>
   <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2.0" /></a>
   <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021 Edition" /></a>
@@ -54,41 +54,18 @@
 
 ## ⚡ Key Features
 
-### 🖥️ Desktop Archiver Workspace & Modal Extraction Dialog (v2.3.4)
-- **Primary Desktop Archiver Action Toolbar (`WorkspaceHeader.tsx`)**:
-  - Primary desktop archiver action toolbar:
-    - `📂 Open` (`Ctrl+O`): Browse and inspect any supported archive format directly.
-    - `⚡ Extract` (`Ctrl+E`): Triggers the desktop extraction options modal dialog.
-    - `📦 Add`: Toggles the advanced multi-threaded compression options panel.
-    - `🧪 Test`: Runs immediate cryptographic and format integrity checks on archive headers.
-- **Dedicated Desktop Extraction Popup Modal (`WorkspaceExtractModal.tsx`)**:
-  - Native modal dialog with folder browsing, subfolder extraction switches, and "Open destination folder on complete" automation.
-  - Decryption password field with show/hide toggle and auto-focus for encrypted archives.
-  - Keyboard-hardened: `Enter` confirms extraction, `Esc` dismisses, with cyclic focus trapping.
+### 🗃️ Streamlined Desktop Archiver & Fast Directory Tree Inspector (v2.3.6)
+- **High-Performance Archive Directory Inspector (`ArchiveTreeInspector.tsx`)**:
+  - Direct, fast tree & list view of loaded archive contents with instant folder hierarchy navigation.
+  - Interactive parent navigation (`..`) and clickable breadcrumb navigation (`📦 root / folder / subfolder`).
+  - Real-time search and filter input with instantaneous filename matching.
+  - In-memory file content preview modal (`FilePreviewModal.tsx`) for images, text, and code files.
+  - Selective extraction: include/exclude specific files and subfolders with 1-click checkboxes.
+  - Password-protected archive unlock banner for encrypted archives.
 - **Standalone VirtualScrollList (`VirtualScrollList.tsx`)**:
   - Reusable, generic virtual scroll list component handling 100,000+ files at smooth 60 FPS with `requestAnimationFrame` scroll debouncing.
-
-### ⫴ Instant Dual-Pane Split View, Drag-to-Move & Staging
-- **Instant Dual-Pane Split View (`⫴` / `Ctrl+\`)**:
-  - Side-by-side exploration of local disk directories and archive contents with synchronized/independent directory navigation.
-  - Interactive resizable split divider with minimum bounds clamping (200px) and drag handle.
-  - Interactive drag-over drop zones for dropping folders into dual-pane staging targets.
-- **Interactive Drag-to-Move & Cross-Pane Staging**:
-  - Unified drag-and-drop orchestration (`useWorkspaceDragDrop.ts`) across tree folders, table rows, and dual panes.
-  - Allows picking items and moving them between folders, staging queues, or onto breadcrumb pills with zero highlight ghosting on cancel.
-- **Workspace Panel Layout Controls (`WorkspaceHeader.tsx`)**:
-  - Dedicated top-bar 5-icon layout toggle cluster:
-    - `◧` **Left Explorer / Folder Tree** (`Ctrl+B`): Toggles tree visibility, allowing full-width file view expansion.
-    - `⫴` **Dual-Pane Split** (`Ctrl+\`): Toggles instant split view.
-    - `⬒` **Bottom Queue Drawer** (`Ctrl+J`): Toggles the staging/extract queue drawer with active item badge counter.
-    - `◨` **Right Options Sidebar**: Toggles the compression/extraction options panel.
-    - `🗗` **Compact View** (`Esc`): Restores the compact card view.
-
-### 🏝️ Dynamic Island Header Progress HUD
-- **Top Header Dynamic Island HUD (`WorkspaceHeaderProgressHUD.tsx`)**:
-  - Centered titlebar progress pill featuring an energetic pulsing status dot, mini progress bar, bold %, and dropdown chevron.
-  - Dropdown card reveals real-time **Estimated Time (ETA)**, live **Throughput Speed (`MB/s`)**, monospace file path, byte counts, and 1-click cancellation.
-  - Isolated from Win32 DWM window dragging via `stopPropagation()`.
+- **Focused Compression & Extraction Workflows**:
+  - Clean separation: fast archive creation (drop files, format presets, multi-core slider, encryption) and fast extraction (open, inspect, extract).
 
 ### 🚀 Smart Pre-Compressed Media Bypass (High-Throughput Store Mode)
 - **Zero-CPU Dynamic Store Mode (`zip::CompressionMethod::Stored`) [ZIP & TAR]**:

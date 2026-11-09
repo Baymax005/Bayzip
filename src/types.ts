@@ -74,27 +74,6 @@ export interface StartupCommand {
   paths: string[];
 }
 
-export interface DriveInfo {
-  mount_point: string;
-  name: string;
-  total_bytes: number;
-  available_bytes: number;
-  is_removable: boolean;
-}
-
-export interface DirectoryItem {
-  name: string;
-  path: string;
-  is_dir: boolean;
-  size: number;
-}
-
-export interface QuickAccessItem {
-  name: string;
-  path: string;
-  icon: string;
-}
-
 export interface OperationProgressInfo {
   percent: number;
   label: string;

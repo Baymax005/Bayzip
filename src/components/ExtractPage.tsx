@@ -1,6 +1,5 @@
 import { formatBytes } from "../utils/format";
 import { getArchiveStemName } from "../utils/archive";
-import { useState } from "react";
 import { ArchiveInfo, ExtractProgress } from "../types";
 import { ArchiveTreeInspector } from "./ArchiveTreeInspector";
 import { BayzipLogo } from "./BayzipLogo";
@@ -40,8 +39,6 @@ export interface ExtractPageProps {
   onClearArchive: () => void;
   selectArchive: (filePath: string, pwd?: string) => void;
   handlePreviewEntry: (entryName: string) => void;
-  isWorkspaceOpen?: boolean;
-  setIsWorkspaceOpen?: (open: boolean) => void;
   onSwitchMode?: (newMode: "compress" | "extract") => void;
 }
 
@@ -76,14 +73,8 @@ export function ExtractPage({
   onClearArchive,
   selectArchive,
   handlePreviewEntry,
-  isWorkspaceOpen: isWorkspaceOpenProp,
-  setIsWorkspaceOpen: setIsWorkspaceOpenProp,
   onSwitchMode,
 }: ExtractPageProps) {
-  const [internalWorkspaceOpen, setInternalWorkspaceOpen] = useState(false);
-  const isWorkspaceOpen = isWorkspaceOpenProp !== undefined ? isWorkspaceOpenProp : internalWorkspaceOpen;
-  const setIsWorkspaceOpen = setIsWorkspaceOpenProp || setInternalWorkspaceOpen;
-
   const { speedText, etaText } = useDynamicThroughput({
     isActive: isExtracting,
     bytesProcessed: extractProgress?.bytes_extracted ?? 0,
@@ -100,17 +91,6 @@ export function ExtractPage({
               Archive Selected
             </span>
             <div className="flex items-center space-x-2.5">
-              <button
-                type="button"
-                onClick={() => setIsWorkspaceOpen(true)}
-                className="px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center space-x-1.5 cursor-pointer bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/40 hover:border-[#60CDFF]/70 shadow-[0_0_10px_rgba(96,205,255,0.15)]"
-                title="Open full workspace with folder hierarchy, archive inspection, and extraction options"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                </svg>
-                <span>Workspace</span>
-              </button>
               <button
                 type="button"
                 disabled={isExtracting}
@@ -187,8 +167,6 @@ export function ExtractPage({
             excludedPaths={excludedPaths}
             onToggleExclude={handleToggleExclude}
             onIncludeAll={handleIncludeAll}
-            isExpandedModal={false}
-            onOpenExpandedModal={() => setIsWorkspaceOpen(true)}
             inspectorTitle="Archive Explorer & Folders"
             mode="extract"
             onSwitchMode={onSwitchMode}
@@ -227,20 +205,6 @@ export function ExtractPage({
               className="text-xs font-medium px-4 py-2 bg-[#202020] hover:bg-[#333333] border border-[#3E3E3E] hover:border-[#60CDFF] text-white rounded-md transition-colors cursor-pointer"
             >
               Browse Archive
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsWorkspaceOpen(true);
-              }}
-              className="text-xs font-semibold px-4 py-2 bg-gradient-to-r from-[#173042] to-[#12222E] hover:from-[#1F415A] hover:to-[#172D3D] text-[#60CDFF] hover:text-[#90DCFF] border border-[#60CDFF]/40 hover:border-[#60CDFF]/70 rounded-md transition-all cursor-pointer flex items-center space-x-1.5 shadow-[0_0_12px_rgba(96,205,255,0.15)]"
-              title="Open full workspace to browse drives and inspect archives"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-3.5 h-3.5">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-              </svg>
-              <span>Workspace</span>
             </button>
           </div>
         </div>
@@ -530,61 +494,6 @@ export function ExtractPage({
           </span>
         </button>
       </div>
-
-      {/* Full Workspace Modal with Right-Hand Options Sidebar */}
-      {isWorkspaceOpen && (
-        <ArchiveTreeInspector
-          archiveInfo={
-            archiveInfo || {
-              path: "",
-              filename: "No Archive Loaded",
-              size: 0,
-              format: "ZIP",
-              is_archive: false,
-              is_encrypted: false,
-              file_count: 0,
-              total_uncompressed_size: 0,
-              entries: [],
-            }
-          }
-          selectedArchive={selectedArchive || ""}
-          extractPassword={extractPassword}
-          isLoading={isInspectingArchive}
-          onUnlockPreview={() => {
-            if (selectedArchive) selectArchive(selectedArchive, extractPassword.trim());
-          }}
-          onPreviewEntry={handlePreviewEntry}
-          excludedPaths={excludedPaths}
-          onToggleExclude={handleToggleExclude}
-          onIncludeAll={handleIncludeAll}
-          isExpandedModal={true}
-          onCloseExpandedModal={() => setIsWorkspaceOpen(false)}
-          inspectorTitle="Archive Explorer & Drives"
-          operationProgress={
-            isExtracting && extractProgress
-              ? {
-                  percent: extractProgress.percent,
-                  label: "Extracting Archive...",
-                  current_file: extractProgress.current_file,
-                  bytes_processed: extractProgress.bytes_extracted,
-                  onCancel: handleCancelExtract,
-                  isCancelling: isCancellingExtract,
-                }
-              : null
-          }
-          mode="extract"
-          onSwitchMode={onSwitchMode}
-          onSelectArchive={handleSelectArchive}
-          onLoadArchiveFromFile={selectArchive}
-          extractDest={extractDest}
-          onExtractDestChange={setExtractDest}
-          extractToSubfolder={extractToSubfolder}
-          onToggleExtractToSubfolder={setExtractToSubfolder}
-          openFolderOnExtract={openFolderOnExtract}
-          onToggleOpenFolderOnExtract={setOpenFolderOnExtract}
-          onExtractArchive={handleExtract}
-        />
-      )}
     </div>
   );
 }

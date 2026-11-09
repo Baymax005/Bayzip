@@ -2,6 +2,23 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.3.6] - 2026-11-09
+
+### 🧹 Streamlined Architecture & Workspace Retirement
+- **Retired Experimental Workspace Mode**:
+  - Removed full-screen workspace takeover modal, dual-pane explorer, local drive browser (`C:\`, `D:\`), staged queue drawer, and cross-pane drag-to-move hooks.
+  - Eliminated over 6,400+ lines of technical debt and maintenance burden.
+  - Reduced production client JS bundle by ~148 kB (from 558 kB to 410 kB) and CSS bundle from 86 kB to 58 kB.
+  - Permanently fixed WebView2 HTML5 drag-and-drop platform limitations and ghost highlight glitches.
+- **Pure Archive Tree Inspector (`ArchiveTreeInspector.tsx`)**:
+  - Refactored into a focused, modular archive viewer (604 lines).
+  - Retained fast virtualized 100k-file rendering (`VirtualScrollList.tsx`), directory hierarchy navigation (`..` parent directory, breadcrumbs `📦 root / folder / subfolder`), real-time search filtering, and instant file previews (`FilePreviewModal.tsx`).
+- **Laser Focus on Core Fast Archiving**:
+  - Re-anchored Bayzip as a lightning-fast, dedicated Windows 11 archiver with instantaneous Compress and Extract workflows.
+- **Backend Cleanliness (`src-tauri`)**:
+  - Removed unused logical drive enumeration and filesystem manipulation commands (`get_system_drives`, `browse_directory`, `create_directory`, `delete_to_recycle_bin`, `rename_path`, `copy_path`).
+  - Retained all core compression, extraction, cryptographic streaming, and hardware bus-calibrated I/O engines with 31/31 unit tests passing.
+
 ## [v2.3.5] - 2026-11-08
 
 ### 🔍 Archive Inspection & Format Preview Hardening

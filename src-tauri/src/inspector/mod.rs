@@ -10,7 +10,6 @@ pub mod rar;
 pub mod preview;
 pub mod staged;
 pub mod icon;
-pub mod drives;
 
 pub use hardware::*;
 pub use format::*;
@@ -22,7 +21,6 @@ pub use rar::*;
 pub use preview::*;
 pub use staged::*;
 pub use icon::*;
-pub use drives::*;
 
 use crate::types::{ArchiveEntryItem, ArchiveInfo, ArchiveFormat};
 
