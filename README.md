@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.3.6-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.3.6" /></a>
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.3.7-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.3.7" /></a>
   <a href="#windows-shell-integration"><img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows 10 | 11" /></a>
   <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2.0" /></a>
   <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021 Edition" /></a>
@@ -54,7 +54,7 @@
 
 ## ⚡ Key Features
 
-### 🗃️ Streamlined Desktop Archiver & Fast Directory Tree Inspector (v2.3.6)
+### 🗃️ Unified Desktop Drop Hub & Fast Directory Tree Inspector (v2.3.7)
 - **High-Performance Archive Directory Inspector (`ArchiveTreeInspector.tsx`)**:
   - Direct, fast tree & list view of loaded archive contents with instant folder hierarchy navigation.
   - Interactive parent navigation (`..`) and clickable breadcrumb navigation (`📦 root / folder / subfolder`).

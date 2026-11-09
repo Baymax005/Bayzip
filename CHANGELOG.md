@@ -2,6 +2,25 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.3.7] - 2026-11-10
+
+### ⚡ Unified Single-Window Archiver & Smart Drop Hub
+- **Unified Smart Drop Hub (`src/components/UnifiedDropHub.tsx`)**:
+  - Replaced disjointed empty states with a single, intelligent Windows 11 Fluent dark-mode Drop Hub.
+  - Active drag-over reactive halo with ambient Fluent Cyan glow and format support badges (`.bayg`, `.bay`, `.zip`, `.7z`, `.tar`, `.rar`, `.gz`, `.xz`, `.iso`, `.cab`).
+  - Action cards for 1-click archive opening and file/folder compression selection.
+- **Intelligent Context-Aware Auto-Routing (`src/App.tsx`)**:
+  - Automatically identifies dropped filesystem items via `isArchiveFile`:
+    - **Archives dropped**: Auto-activates Extract mode and begins background directory tree inspection.
+    - **Files/Folders dropped**: Auto-activates Compress mode and stages items for multithreaded compression.
+  - Seamless view return: closing an archive or clearing staged files returns directly to the Drop Hub.
+  - Top segmented control (`[ 📦 Compress ]` and `[ ⚡ Extract ]`) preserved for manual mode toggling at all times.
+- **Adaptive Inspector Layout & Keyboard Ergonomics (`ArchiveTreeInspector.tsx`)**:
+  - Upgraded table container to responsive `flex-1 min-h-[320px]`, dynamically expanding file listings on window resize or maximization.
+  - Added global `Ctrl+F` / `Cmd+F` shortcut to focus and highlight search filter.
+  - Added `Backspace` and `Alt+ArrowUp` for instant parent directory navigation.
+  - Added `Enter` to navigate into highlighted folders and `Space` for quick in-memory file preview.
+
 ## [v2.3.6] - 2026-11-09
 
 ### 🧹 Streamlined Architecture & Workspace Retirement
