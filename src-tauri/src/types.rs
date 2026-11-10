@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ArchiveFormat {
@@ -140,4 +142,49 @@ pub struct TestArchiveResponse {
     pub errors: Vec<TestArchiveErrorItem>,
     pub elapsed_ms: u64,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskCancelToken(pub Arc<AtomicBool>);
+
+impl TaskCancelToken {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for TaskCancelToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_cancel_token_lifecycle() {
+        let token = TaskCancelToken::new();
+        assert!(!token.is_cancelled());
+        token.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn test_task_cancel_tokens_are_isolated() {
+        let token1 = TaskCancelToken::new();
+        let token2 = TaskCancelToken::new();
+        token1.cancel();
+        assert!(token1.is_cancelled());
+        assert!(!token2.is_cancelled());
+    }
 }

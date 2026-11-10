@@ -2,6 +2,29 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.4] - 2026-11-11
+
+### ⚡ Phase 2 Concurrency, Cancellation Hardening & Engine Reliability
+- **Isolated Task Cancellation Token Architecture (`src-tauri/src/types.rs`, `compressor/mod.rs`, `extractor.rs`, `tester.rs`) (AUDIT-01)**:
+  - Replaced global raw static boolean flags (`CANCEL_COMPRESSION`, `CANCEL_EXTRACTION`, `CANCEL_TEST`) with `TaskCancelToken` (`Arc<AtomicBool>`).
+  - Added thread-local and active task guards (`CompressionTaskGuard`, `ExtractionTaskGuard`, `TestTaskGuard`) managing isolated cancellation lifetimes via RAII.
+  - Eliminated the race condition where starting a new task reset the global cancel flag and accidentally un-cancelled previous cancelling worker threads into zombie processes.
+- **Inner-Loop Responsive Cancellation in Archive Tester (`src-tauri/src/tester.rs`) (AUDIT-02)**:
+  - Embedded `is_test_cancelled()` polling directly within tight decompression stream loops across `.bay`, `.zip`, `.7z`, and `.tar` testing engines.
+  - User cancellation requests during archive integrity testing now terminate decompression instantaneously without waiting for gigabyte-scale streams to finish reading.
+- **Headless Atomic Staging & Crash Safety (`src-tauri/src/compressor/`) (HIGH-05)**:
+  - Implemented `.baytmp` intermediate staging and atomic renaming (`safe_atomic_rename`) across all headless quick-compression functions (`headless_quick_compress_bay_items`, `headless_quick_compress_zip_items`, `headless_quick_compress_7z_items`, `headless_quick_compress_tar_items`).
+  - Headless compression from the Windows Explorer context menu or CLI no longer leaves corrupted or truncated archives on disk if interrupted or cancelled; partial temporary files are automatically cleaned up on failure.
+- **Extracted File Journaling & Cancellation Cleanup (`src-tauri/src/extractor.rs`) (HIGH-04)**:
+  - Added `cleanup_extracted_files` routine to remove newly created files and lingering `.baypart` buffers if extraction is aborted or encounters an error midway.
+  - Prevents leaving partial or corrupt files in preexisting destination directories while safely preserving existing user files and directories.
+- **Process Handle & Zombie Prevention in System Tar (`src-tauri/src/extractor.rs`) (LOW-09)**:
+  - Added explicit `child.kill()`, `child.wait()`, and `reader_handle.join()` inside the `Err(e)` monitoring branch of `extract_with_system_tar`, eliminating orphaned background `tar.exe` process leaks.
+- **Progress Telemetry IPC Throttling (`src-tauri/src/compressor/bay.rs`) (PERF-02)**:
+  - Throttled per-file progress events in `write_file_to_bay_archive` with a 50ms interval guard, preventing webview event flooding and UI freezing when archiving directories with tens of thousands of small files.
+- **Test Suite Expansion**:
+  - Added unit test coverage for `TaskCancelToken`, task guard thread isolation, and safe extracted file cleanup routines (37 tests passing).
+
 ## [v2.4.3] - 2026-11-11
 
 ### 🛡️ Phase 1 Security & Explorer COM Hardening, Zeroization & Binary Anchoring

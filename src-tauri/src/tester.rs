@@ -2,7 +2,8 @@ use std::fs::File;
 use std::io::{Read, Seek, BufReader};
 use std::path::Path;
 use std::time::Instant;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use sevenz_rust2::Password;
 
@@ -12,24 +13,85 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use crate::types::{
-    ArchiveFormat, TestArchiveProgress, TestArchiveResponse, TestArchiveErrorItem,
+    ArchiveFormat, TestArchiveProgress, TestArchiveResponse, TestArchiveErrorItem, TaskCancelToken,
 };
 use crate::priority::ScopedPriorityGuard;
 use crate::crypto::ChunkedAesReader;
 use crate::inspector::detect_archive_type;
 
-pub static CANCEL_TEST: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static CURRENT_TEST_TOKEN: RefCell<Option<TaskCancelToken>> = const { RefCell::new(None) };
+}
+
+static ACTIVE_TEST_TOKEN: Mutex<Option<TaskCancelToken>> = Mutex::new(None);
+
+pub struct TestTaskGuard {
+    token: TaskCancelToken,
+}
+
+impl TestTaskGuard {
+    pub fn new() -> Self {
+        let token = TaskCancelToken::new();
+        CURRENT_TEST_TOKEN.with(|cell| {
+            *cell.borrow_mut() = Some(token.clone());
+        });
+        if let Ok(mut lock) = ACTIVE_TEST_TOKEN.lock() {
+            *lock = Some(token.clone());
+        }
+        Self { token }
+    }
+
+    pub fn token(&self) -> TaskCancelToken {
+        self.token.clone()
+    }
+}
+
+impl Default for TestTaskGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TestTaskGuard {
+    fn drop(&mut self) {
+        CURRENT_TEST_TOKEN.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+        if let Ok(mut lock) = ACTIVE_TEST_TOKEN.lock() {
+            if let Some(ref current) = *lock {
+                if Arc::ptr_eq(&current.0, &self.token.0) {
+                    *lock = None;
+                }
+            }
+        }
+    }
+}
 
 pub fn cancel_test_flag() {
-    CANCEL_TEST.store(true, Ordering::SeqCst);
+    if let Ok(lock) = ACTIVE_TEST_TOKEN.lock() {
+        if let Some(ref token) = *lock {
+            token.cancel();
+        }
+    }
 }
 
 pub fn is_test_cancelled() -> bool {
-    CANCEL_TEST.load(Ordering::Relaxed)
+    let thread_cancelled = CURRENT_TEST_TOKEN.with(|cell| {
+        cell.borrow().as_ref().map(|t| t.is_cancelled())
+    });
+    if let Some(cancelled) = thread_cancelled {
+        return cancelled;
+    }
+    if let Ok(lock) = ACTIVE_TEST_TOKEN.lock() {
+        if let Some(ref token) = *lock {
+            return token.is_cancelled();
+        }
+    }
+    false
 }
 
 pub fn reset_test_cancel_flag() {
-    CANCEL_TEST.store(false, Ordering::SeqCst);
+    // Retained for backwards compatibility; TestTaskGuard provides isolated tokens per task
 }
 
 fn emit_progress(
@@ -156,6 +218,9 @@ pub fn test_bay_stream<R: Read>(
         let mut remaining = file_size;
         let mut read_failed = false;
         while remaining > 0 {
+            if is_test_cancelled() {
+                return Err("Testing cancelled by user".to_string());
+            }
             let to_read = (remaining as usize).min(io_buf.len());
             match decoder.read(&mut io_buf[..to_read]) {
                 Ok(0) => {
@@ -348,6 +413,9 @@ pub fn test_zip_archive(
         // Decompress the entire stream to sink.
         // In zip-rs, reading to EOF automatically validates CRC32 against the local file header!
         loop {
+            if is_test_cancelled() {
+                return Err("Testing cancelled by user".to_string());
+            }
             match file.read(&mut io_buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -411,6 +479,9 @@ pub fn test_7z_archive(
         emit_progress(app, &mut last_emit, &name, total_tested, total_expected_bytes);
 
         loop {
+            if is_test_cancelled() {
+                return Ok(false);
+            }
             match reader.read(&mut io_buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -431,12 +502,17 @@ pub fn test_7z_archive(
     });
 
     if let Err(e) = res {
-        if !is_test_cancelled() {
-            errors.push(TestArchiveErrorItem {
-                file_name: "7z Container".to_string(),
-                error: format!("Archive decoding error: {}", e),
-            });
+        if is_test_cancelled() {
+            return Err("Testing cancelled by user".to_string());
         }
+        errors.push(TestArchiveErrorItem {
+            file_name: "7z Container".to_string(),
+            error: format!("Archive decoding error: {}", e),
+        });
+    }
+
+    if is_test_cancelled() {
+        return Err("Testing cancelled by user".to_string());
     }
 
     Ok((tested_count, total_tested, errors))
@@ -470,6 +546,9 @@ pub fn test_tar_archive(
                     emit_progress(app, &mut last_emit, &name, total_tested, 0);
 
                     loop {
+                        if is_test_cancelled() {
+                            return Err("Testing cancelled by user".to_string());
+                        }
                         match entry.read(&mut io_buf) {
                             Ok(0) => break,
                             Ok(n) => {
@@ -570,6 +649,7 @@ pub fn test_archive_sync(
     archive_path: String,
     password: Option<String>,
 ) -> Result<TestArchiveResponse, String> {
+    let _task_guard = TestTaskGuard::new();
     reset_test_cancel_flag();
     let _priority_guard = ScopedPriorityGuard::new();
 
@@ -656,6 +736,27 @@ pub fn test_archive_sync(
                 elapsed_ms,
                 error: Some(e),
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tester_task_guard_isolation() {
+        {
+            let guard1 = TestTaskGuard::new();
+            assert!(!is_test_cancelled());
+            cancel_test_flag();
+            assert!(is_test_cancelled());
+            assert!(guard1.token().is_cancelled());
+        }
+        {
+            let guard2 = TestTaskGuard::new();
+            assert!(!is_test_cancelled());
+            assert!(!guard2.token().is_cancelled());
         }
     }
 }

@@ -13,20 +13,104 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
+use crate::types::TaskCancelToken;
 
-pub static CANCEL_EXTRACTION: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static CURRENT_EXTRACTION_TOKEN: RefCell<Option<TaskCancelToken>> = const { RefCell::new(None) };
+}
+
+static ACTIVE_EXTRACTION_TOKEN: Mutex<Option<TaskCancelToken>> = Mutex::new(None);
+
+pub struct ExtractionTaskGuard {
+    token: TaskCancelToken,
+}
+
+impl ExtractionTaskGuard {
+    pub fn new() -> Self {
+        let token = TaskCancelToken::new();
+        CURRENT_EXTRACTION_TOKEN.with(|cell| {
+            *cell.borrow_mut() = Some(token.clone());
+        });
+        if let Ok(mut lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
+            *lock = Some(token.clone());
+        }
+        Self { token }
+    }
+
+    pub fn token(&self) -> TaskCancelToken {
+        self.token.clone()
+    }
+}
+
+impl Default for ExtractionTaskGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ExtractionTaskGuard {
+    fn drop(&mut self) {
+        CURRENT_EXTRACTION_TOKEN.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+        if let Ok(mut lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
+            if let Some(ref current) = *lock {
+                if Arc::ptr_eq(&current.0, &self.token.0) {
+                    *lock = None;
+                }
+            }
+        }
+    }
+}
 
 pub fn cancel_extraction_flag() {
-    CANCEL_EXTRACTION.store(true, Ordering::SeqCst);
+    if let Ok(lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
+        if let Some(ref token) = *lock {
+            token.cancel();
+        }
+    }
 }
 
 pub fn is_extraction_cancelled() -> bool {
-    CANCEL_EXTRACTION.load(Ordering::Relaxed)
+    let thread_cancelled = CURRENT_EXTRACTION_TOKEN.with(|cell| {
+        cell.borrow().as_ref().map(|t| t.is_cancelled())
+    });
+    if let Some(cancelled) = thread_cancelled {
+        return cancelled;
+    }
+    if let Ok(lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
+        if let Some(ref token) = *lock {
+            return token.is_cancelled();
+        }
+    }
+    false
 }
 
 pub fn reset_extraction_cancel_flag() {
-    CANCEL_EXTRACTION.store(false, Ordering::SeqCst);
+    // Retained for backwards compatibility; ExtractionTaskGuard provides isolated tokens per task
+}
+
+pub fn cleanup_extracted_files(files: &[String]) {
+    for file_str in files.iter().rev() {
+        let p = Path::new(file_str);
+        if p.is_file() {
+            clear_readonly(p);
+            let _ = std::fs::remove_file(p);
+        } else if p.is_dir() {
+            let _ = std::fs::remove_dir(p);
+        }
+        let part_path = {
+            let mut s = p.as_os_str().to_os_string();
+            s.push(".baypart");
+            PathBuf::from(s)
+        };
+        if part_path.exists() {
+            clear_readonly(&part_path);
+            let _ = std::fs::remove_file(&part_path);
+        }
+    }
 }
 
 use crate::types::{ArchiveFormat, ExtractResponse, ExtractProgress};
@@ -179,7 +263,8 @@ pub fn extract_bay_stream<R: Read>(
     // Allocate single 256 KB reusable I/O buffer outside the entry loop (optimal for L2/L3 cache)
     let mut io_buf = vec![0u8; 256 * 1024];
 
-    loop {
+    let res = (|| -> Result<(), String> {
+        loop {
         if is_extraction_cancelled() {
             return Err("Extraction cancelled by user".to_string());
         }
@@ -368,6 +453,14 @@ pub fn extract_bay_stream<R: Read>(
         extracted_files.push(out_path.to_string_lossy().to_string());
     }
 
+    Ok(())
+    })();
+
+    if let Err(e) = res {
+        cleanup_extracted_files(&extracted_files);
+        return Err(e);
+    }
+
     Ok(extracted_files)
 }
 
@@ -537,7 +630,8 @@ pub fn extract_zip_archive(
     // Single 2 MB reusable buffer outside the zip loop
     let mut io_buf = vec![0u8; 256 * 1024];
 
-    for i in 0..total_entries {
+    let res = (|| -> Result<(), String> {
+        for i in 0..total_entries {
         if is_extraction_cancelled() {
             return Err("Extraction cancelled by user".to_string());
         }
@@ -688,6 +782,15 @@ pub fn extract_zip_archive(
             }
         }
     }
+
+    Ok(())
+    })();
+
+    if let Err(e) = res {
+        cleanup_extracted_files(&extracted);
+        return Err(e);
+    }
+
     Ok(extracted)
 }
 
@@ -707,8 +810,9 @@ fn extract_tar_entries<R: Read>(
     let mut last_emit = Instant::now();
     let mut io_buf = vec![0u8; 256 * 1024];
 
-    let entries = archive.entries().map_err(|e| format!("Tar read entries error: {}", e))?;
-    for entry_res in entries {
+    let res = (|| -> Result<(), String> {
+        let entries = archive.entries().map_err(|e| format!("Tar read entries error: {}", e))?;
+        for entry_res in entries {
         if is_extraction_cancelled() {
             return Err("Extraction cancelled by user".to_string());
         }
@@ -827,6 +931,13 @@ fn extract_tar_entries<R: Read>(
 
             extracted_files.push(out_path.to_string_lossy().to_string());
         }
+    }
+    Ok(())
+    })();
+
+    if let Err(e) = res {
+        cleanup_extracted_files(&extracted_files);
+        return Err(e);
     }
 
     Ok(extracted_files)
@@ -1090,9 +1201,11 @@ pub fn extract_7z_archive(
     match res {
         Ok(_) => Ok(extracted),
         Err(sevenz_rust2::Error::PasswordRequired) => {
+            cleanup_extracted_files(&extracted);
             Err("Password required: This 7z archive is encrypted with AES-256.".into())
         }
         Err(e) => {
+            cleanup_extracted_files(&extracted);
             if e.to_string().to_lowercase().contains("password") {
                 Err("Incorrect password: Could not decrypt 7z archive.".into())
             } else {
@@ -1202,6 +1315,7 @@ pub fn extract_with_system_tar(
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader_handle.join();
+            cleanup_extracted_files(&extracted_files);
             return Err("Extraction cancelled by user".into());
         }
 
@@ -1273,6 +1387,7 @@ pub fn extract_with_system_tar(
                     } else {
                         format!("tar.exe exited with error code: {:?}", status.code())
                     };
+                    cleanup_extracted_files(&extracted_files);
                     return Err(format!("Extraction error: {}", err_msg));
                 }
                 break;
@@ -1305,6 +1420,10 @@ pub fn extract_with_system_tar(
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader_handle.join();
+                cleanup_extracted_files(&extracted_files);
                 return Err(format!("Error monitoring tar.exe process: {}", e));
             }
         }
@@ -1382,6 +1501,7 @@ pub fn extract_archive_sync(
     extract_to_subfolder: Option<bool>,
     excluded_paths: Option<Vec<String>>,
 ) -> Result<ExtractResponse, String> {
+    let _task_guard = ExtractionTaskGuard::new();
     reset_extraction_cancel_flag();
     let _priority_guard = ScopedPriorityGuard::new();
 
@@ -1536,6 +1656,7 @@ pub fn extract_archive_sync(
 }
 
 pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
+    let _task_guard = ExtractionTaskGuard::new();
     let _priority_guard = ScopedPriorityGuard::new();
 
     let p = Path::new(archive_path);
@@ -1556,6 +1677,7 @@ pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
 }
 
 pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
+    let _task_guard = ExtractionTaskGuard::new();
     let _priority_guard = ScopedPriorityGuard::new();
 
     let p = Path::new(archive_path);
@@ -1666,5 +1788,42 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.contains("I/O error while draining entry payload from decompressor"));
         assert!(err.contains("simulated broken pipe"));
+    }
+
+    #[test]
+    fn test_extraction_task_guard_isolation() {
+        {
+            let guard1 = ExtractionTaskGuard::new();
+            assert!(!is_extraction_cancelled());
+            cancel_extraction_flag();
+            assert!(is_extraction_cancelled());
+            assert!(guard1.token().is_cancelled());
+        }
+        {
+            let guard2 = ExtractionTaskGuard::new();
+            assert!(!is_extraction_cancelled());
+            assert!(!guard2.token().is_cancelled());
+        }
+    }
+
+    #[test]
+    fn test_cleanup_extracted_files_safely_removes_created_files() {
+        let test_dir = std::env::current_dir().unwrap().join("target").join("test_extract_cleanup");
+        let _ = std::fs::create_dir_all(&test_dir);
+        let file1 = test_dir.join("test_file.txt");
+        let file2 = test_dir.join("test_part.txt.baypart");
+        std::fs::write(&file1, b"hello").unwrap();
+        std::fs::write(&file2, b"partial").unwrap();
+
+        let files = vec![
+            file1.to_string_lossy().to_string(),
+            test_dir.join("test_part.txt").to_string_lossy().to_string(),
+        ];
+
+        cleanup_extracted_files(&files);
+
+        assert!(!file1.exists());
+        assert!(!file2.exists());
+        let _ = std::fs::remove_dir_all(&test_dir);
     }
 }

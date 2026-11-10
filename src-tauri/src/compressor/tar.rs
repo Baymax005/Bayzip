@@ -138,51 +138,80 @@ pub fn headless_quick_compress_tar(p: &Path, output_path: &Path) -> Result<(), S
 }
 
 pub fn headless_quick_compress_tar_items(paths: &[&Path], output_path: &Path) -> Result<(), String> {
-    let write_buf_size = get_optimal_write_buffer(output_path, 1024 * 1024);
-    let out_file = File::create(output_path)
-        .map_err(|e| format!("Failed to create tar file: {}", e))?;
-    let mut builder = ::tar::Builder::new(BufWriter::with_capacity(write_buf_size, out_file));
+    let temp_output = output_path.with_file_name(format!(
+        "{}.baytmp",
+        output_path.file_name().map(|n| n.to_string_lossy()).unwrap_or_else(|| "archive.tar".into())
+    ));
 
-    fn add_dir_headless<W: Write>(dir: &Path, base: &Path, builder: &mut ::tar::Builder<W>, depth: usize) -> Result<(), String> {
-        if depth > 32 { return Ok(()); }
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Ok(m) = std::fs::symlink_metadata(&path) {
-                    let rel = path.strip_prefix(base).unwrap_or(&path);
-                    let clean = rel.to_string_lossy().replace('\\', "/");
-                    let trimmed = clean.trim_start_matches('/');
-                    if trimmed.is_empty() { continue; }
+    let res = (|| -> Result<(), String> {
+        let write_buf_size = get_optimal_write_buffer(&temp_output, 1024 * 1024);
+        let out_file = File::create(&temp_output)
+            .map_err(|e| format!("Failed to create temporary tar file: {}", e))?;
+        let mut builder = ::tar::Builder::new(BufWriter::with_capacity(write_buf_size, out_file));
 
-                    if m.is_dir() && !m.file_type().is_symlink() {
-                        let _ = builder.append_dir(trimmed, &path);
-                        add_dir_headless(&path, base, builder, depth + 1)?;
-                    } else if m.is_file() {
-                        builder.append_path_with_name(&path, trimmed)
-                            .map_err(|e| format!("Tar append file error: {}", e))?;
+        fn add_dir_headless<W: Write>(dir: &Path, base: &Path, builder: &mut ::tar::Builder<W>, depth: usize) -> Result<(), String> {
+            if depth > 32 || is_compression_cancelled() { return Ok(()); }
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    if is_compression_cancelled() {
+                        return Err("Compression cancelled by user".to_string());
+                    }
+                    let path = entry.path();
+                    if let Ok(m) = std::fs::symlink_metadata(&path) {
+                        let rel = path.strip_prefix(base).unwrap_or(&path);
+                        let clean = rel.to_string_lossy().replace('\\', "/");
+                        let trimmed = clean.trim_start_matches('/');
+                        if trimmed.is_empty() { continue; }
+
+                        if m.is_dir() && !m.file_type().is_symlink() {
+                            let _ = builder.append_dir(trimmed, &path);
+                            add_dir_headless(&path, base, builder, depth + 1)?;
+                        } else if m.is_file() {
+                            builder.append_path_with_name(&path, trimmed)
+                                .map_err(|e| format!("Tar append file error: {}", e))?;
+                        }
                     }
                 }
             }
+            Ok(())
         }
+
+        for &p in paths {
+            if is_compression_cancelled() {
+                return Err("Compression cancelled by user".to_string());
+            }
+            let parent = p.parent().unwrap_or(p);
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            if p.is_file() {
+                builder.append_path_with_name(p, name)
+                    .map_err(|e| format!("Tar append file error: {}", e))?;
+            } else if p.is_dir() {
+                let rel_name = p.strip_prefix(parent).unwrap_or(p);
+                let clean = rel_name.to_string_lossy().replace('\\', "/");
+                let trimmed = clean.trim_start_matches('/');
+                if !trimmed.is_empty() {
+                    let _ = builder.append_dir(trimmed, p);
+                }
+                add_dir_headless(p, parent, &mut builder, 0)?;
+            }
+        }
+
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
+
+        builder.finish().map_err(|e| format!("Tar finalize error: {}", e))?;
+        drop(builder);
+
+        safe_atomic_rename(&temp_output, output_path)
+            .map_err(|e| format!("Failed to rename temporary tar file to destination: {}", e))?;
+
         Ok(())
+    })();
+
+    if res.is_err() && temp_output.exists() {
+        let _ = std::fs::remove_file(&temp_output);
     }
 
-    for &p in paths {
-        let parent = p.parent().unwrap_or(p);
-        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-        if p.is_file() {
-            builder.append_path_with_name(p, name)
-                .map_err(|e| format!("Tar append file error: {}", e))?;
-        } else if p.is_dir() {
-            let rel_name = p.strip_prefix(parent).unwrap_or(p);
-            let clean = rel_name.to_string_lossy().replace('\\', "/");
-            let trimmed = clean.trim_start_matches('/');
-            if !trimmed.is_empty() {
-                let _ = builder.append_dir(trimmed, p);
-            }
-            add_dir_headless(p, parent, &mut builder, 0)?;
-        }
-    }
-    builder.finish().map_err(|e| format!("Tar finalize error: {}", e))?;
-    Ok(())
+    res
 }

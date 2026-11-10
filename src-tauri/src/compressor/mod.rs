@@ -11,7 +11,8 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 pub mod utils;
 pub mod bay;
@@ -25,22 +26,83 @@ pub use zip::*;
 pub use tar::*;
 pub use sevenz::*;
 
-use crate::types::{CompressPayload, CompressResponse, CompressProgress};
+use crate::types::{CompressPayload, CompressResponse, CompressProgress, TaskCancelToken};
 use crate::priority::ScopedPriorityGuard;
 use crate::inspector::archive_stem_name;
 
-pub static CANCEL_COMPRESSION: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    static CURRENT_COMPRESSION_TOKEN: RefCell<Option<TaskCancelToken>> = const { RefCell::new(None) };
+}
+
+static ACTIVE_COMPRESSION_TOKEN: Mutex<Option<TaskCancelToken>> = Mutex::new(None);
+
+pub struct CompressionTaskGuard {
+    token: TaskCancelToken,
+}
+
+impl CompressionTaskGuard {
+    pub fn new() -> Self {
+        let token = TaskCancelToken::new();
+        CURRENT_COMPRESSION_TOKEN.with(|cell| {
+            *cell.borrow_mut() = Some(token.clone());
+        });
+        if let Ok(mut lock) = ACTIVE_COMPRESSION_TOKEN.lock() {
+            *lock = Some(token.clone());
+        }
+        Self { token }
+    }
+
+    pub fn token(&self) -> TaskCancelToken {
+        self.token.clone()
+    }
+}
+
+impl Default for CompressionTaskGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for CompressionTaskGuard {
+    fn drop(&mut self) {
+        CURRENT_COMPRESSION_TOKEN.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+        if let Ok(mut lock) = ACTIVE_COMPRESSION_TOKEN.lock() {
+            if let Some(ref current) = *lock {
+                if Arc::ptr_eq(&current.0, &self.token.0) {
+                    *lock = None;
+                }
+            }
+        }
+    }
+}
 
 pub fn cancel_compression_flag() {
-    CANCEL_COMPRESSION.store(true, Ordering::SeqCst);
+    if let Ok(lock) = ACTIVE_COMPRESSION_TOKEN.lock() {
+        if let Some(ref token) = *lock {
+            token.cancel();
+        }
+    }
 }
 
 pub fn is_compression_cancelled() -> bool {
-    CANCEL_COMPRESSION.load(Ordering::Relaxed)
+    let thread_cancelled = CURRENT_COMPRESSION_TOKEN.with(|cell| {
+        cell.borrow().as_ref().map(|t| t.is_cancelled())
+    });
+    if let Some(cancelled) = thread_cancelled {
+        return cancelled;
+    }
+    if let Ok(lock) = ACTIVE_COMPRESSION_TOKEN.lock() {
+        if let Some(ref token) = *lock {
+            return token.is_cancelled();
+        }
+    }
+    false
 }
 
 pub fn reset_compression_cancel_flag() {
-    CANCEL_COMPRESSION.store(false, Ordering::SeqCst);
+    // Retained for backwards compatibility; CompressionTaskGuard provides isolated tokens per task
 }
 
 /// Reader adapter that tracks streaming bytes in real-time and detects cancellation
@@ -186,6 +248,7 @@ pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<()
 }
 
 pub fn headless_quick_compress_targets(format: &str, targets: &[&str]) -> Result<(), String> {
+    let _task_guard = CompressionTaskGuard::new();
     let _priority_guard = ScopedPriorityGuard::new();
 
     let valid_paths: Vec<&Path> = targets
@@ -242,6 +305,7 @@ pub fn headless_quick_compress_targets(format: &str, targets: &[&str]) -> Result
 }
 
 pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<CompressResponse, String> {
+    let _task_guard = CompressionTaskGuard::new();
     reset_compression_cancel_flag();
     let _priority_guard = ScopedPriorityGuard::new();
 
@@ -450,5 +514,21 @@ mod tests {
         assert_eq!(calculate_target_threads(50, total_cores), 8);
         assert_eq!(calculate_target_threads(75, total_cores), 12);
         assert_eq!(calculate_target_threads(100, total_cores), 16);
+    }
+
+    #[test]
+    fn test_compression_task_guard_isolation() {
+        {
+            let guard1 = CompressionTaskGuard::new();
+            assert!(!is_compression_cancelled());
+            cancel_compression_flag();
+            assert!(is_compression_cancelled());
+            assert!(guard1.token().is_cancelled());
+        }
+        {
+            let guard2 = CompressionTaskGuard::new();
+            assert!(!is_compression_cancelled());
+            assert!(!guard2.token().is_cancelled());
+        }
     }
 }
