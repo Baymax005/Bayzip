@@ -2,6 +2,26 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.1] - 2026-11-10
+
+### 🪟 Draggable Modals, Standalone Desktop Progress HUD & Smooth Minimization
+- **Standalone Native Desktop Progress HUD (`src/components/ProgressWindow.tsx`)**:
+  - Registered frameless Tauri window (`window=progress`, `index.html?window=progress`) with native Windows `data-tauri-drag-region`.
+  - Stays visible across multiple monitors even when the main Bayzip app window is minimized.
+  - Added Pin Always-On-Top toggle (`set_progress_always_on_top`), minimize, and "Open Bayzip" main app restoration button (`focus_main_window`).
+  - Added auto-popout trigger: when Bayzip is minimized during an active compression or extraction stream (`visibilitychange` listener), the desktop progress window automatically appears so progress is never lost.
+  - Added manual `⧉ Detach` action buttons in modal streaming views and bottom status bar HUD.
+- **Draggable In-App Modals & Windows (`src/hooks/useDraggableModal.ts`)**:
+  - Reusable dragging hook with smooth mouse grabbing, cursor states (`cursor-grab active:cursor-grabbing`), and viewport boundary clamping.
+  - Integrated into both `CompressModal` and `ExtractModal` across both configuration options and live streaming progress views.
+  - Added `Draggable` badge and `Center` reset button when displaced, allowing users to move dialogs anywhere across the screen to inspect underlying files.
+- **Fixed "Minimize to Footer" State Desync (`src/App.tsx`)**:
+  - Fixed modal visibility condition and state desync (`isOpen={isCompressing ? !isProgressMinimized : isCompressModalOpen}`).
+  - Clicking `▾ Minimize to Footer` now immediately and cleanly collapses the streaming view into the bottom status bar HUD.
+  - Clicking `▴ Expand` in the footer restores the full floating card.
+- **Responsive Active Cancellation Feedback**:
+  - Cancel buttons across CompressModal, ExtractModal, footer HUD, and ProgressWindow now immediately show an animated spinner, change text to "Cancelling...", disable the button, and apply rose warning styling while aborting the stream.
+
 ## [v2.4.0] - 2026-11-10
 
 ### 🛡️ In-Place Archive Integrity Tester & CRC-32 Verification Engine

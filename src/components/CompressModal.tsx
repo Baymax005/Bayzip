@@ -3,6 +3,7 @@ import { BayzipLogo } from "./BayzipLogo";
 import { SystemSpecs, CompressProgress } from "../types";
 import { formatBytes } from "../utils/format";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
+import { useDraggableModal } from "../hooks/useDraggableModal";
 
 export interface CompressModalProps {
   isOpen: boolean;
@@ -31,9 +32,11 @@ export interface CompressModalProps {
   formatAlgorithms: Record<string, string[]>;
   onStartCompress: () => void;
   isCompressing?: boolean;
+  isCancelling?: boolean;
   progress?: CompressProgress | null;
   onCancelCompress?: () => void;
   onMinimizeToFooter?: () => void;
+  onDetachToDesktop?: () => void;
 }
 
 export function CompressModal({
@@ -63,10 +66,19 @@ export function CompressModal({
   formatAlgorithms,
   onStartCompress,
   isCompressing = false,
+  isCancelling = false,
   progress = null,
   onCancelCompress,
   onMinimizeToFooter,
+  onDetachToDesktop,
 }: CompressModalProps) {
+  const {
+    position,
+    isDragging,
+    handleMouseDown,
+    resetPosition,
+    isDisplaced,
+  } = useDraggableModal({ isOpen });
   const availableAlgorithms = useMemo(() => {
     return formatAlgorithms[selectedFormat] || ["Standard"];
   }, [selectedFormat, formatAlgorithms]);
@@ -125,35 +137,61 @@ export function CompressModal({
   if (!isOpen) return null;
 
   return (
-    // Scoped strictly inside File Viewer bounds with light bg-black/25 dim and ZERO blur
+    // Scoped strictly inside File Viewer bounds with responsive draggable window positioning
     <div
       onClick={(e) => {
         if (e.target === e.currentTarget && !isCompressing) {
           onClose();
         }
       }}
-      className="absolute inset-0 z-40 bg-black/25 flex items-center justify-center p-4 select-none"
+      className={`absolute inset-0 z-40 flex items-center justify-center p-4 select-none ${
+        isDisplaced ? "bg-black/10 pointer-events-none" : "bg-black/30"
+      }`}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="max-w-[440px] w-full bg-[#1C1C1F] rounded-xl border border-[#383842] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.75)] flex flex-col space-y-4 text-xs text-[#F4F4F6]"
+        style={{
+          transform: `translate(${position.x}px, ${position.y}px)`,
+        }}
+        className={`max-w-[440px] w-full bg-[#1C1C1F] rounded-xl border border-[#383842] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.75)] flex flex-col space-y-4 text-xs text-[#F4F4F6] pointer-events-auto transition-shadow ${
+          isDragging ? "shadow-[0_25px_70px_rgba(56,189,248,0.25)] cursor-grabbing" : ""
+        }`}
       >
         {/* ================================================================= */}
         {/* MODE A: LIVE IN-PLACE STREAMING PROGRESS VIEW (NO PAUSE BUTTON)   */}
         {/* ================================================================= */}
         {isCompressing ? (
           <div className="space-y-4">
-            {/* Header with target name & percentage badge */}
-            <div className="flex items-center justify-between pb-2 border-b border-[#2E2E34]">
+            {/* Header with target name & percentage badge (Draggable) */}
+            <div
+              onMouseDown={handleMouseDown}
+              className="flex items-center justify-between pb-2 border-b border-[#2E2E34] cursor-grab active:cursor-grabbing select-none"
+              title="Click and drag to move stream window"
+            >
               <div className="flex items-center space-x-2 truncate mr-2">
                 <span className="w-2 h-2 rounded-full bg-[#38BDF8] animate-pulse shrink-0"></span>
                 <span className="font-semibold text-white tracking-wide truncate">
                   Streaming to <span className="text-[#38BDF8]">{targetArchiveTitle}</span>
                 </span>
+                <span className="text-[9px] text-[#888888] bg-[#252529] px-1.5 py-0.5 rounded border border-[#323238] shrink-0 pointer-events-none">
+                  Draggable
+                </span>
               </div>
-              <span className="font-mono text-sm font-bold text-[#38BDF8] shrink-0">
-                {Math.round(percent)}%
-              </span>
+              <div className="flex items-center space-x-2 shrink-0">
+                {isDisplaced && (
+                  <button
+                    type="button"
+                    onClick={resetPosition}
+                    className="text-[10px] text-[#888888] hover:text-[#38BDF8] px-1.5 py-0.5 rounded hover:bg-[#252529] transition-colors"
+                    title="Reset to center"
+                  >
+                    Center
+                  </button>
+                )}
+                <span className="font-mono text-sm font-bold text-[#38BDF8]">
+                  {Math.round(percent)}%
+                </span>
+              </div>
             </div>
 
             {/* h-2 smooth progress bar */}
@@ -188,27 +226,56 @@ export function CompressModal({
               </div>
             </div>
 
-            {/* Footer Actions (2 buttons only: Minimize to Footer & Cancel) */}
+            {/* Footer Actions (Minimize to Footer, Detach to Desktop & Cancel) */}
             <div className="flex items-center justify-between pt-2 border-t border-[#2E2E34]">
-              <button
-                type="button"
-                onClick={() => {
-                  if (onMinimizeToFooter) onMinimizeToFooter();
-                }}
-                className="px-3 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-[#38BDF8] border border-[#323238] font-medium text-xs transition-colors cursor-pointer flex items-center space-x-1"
-                title="Minimize streaming progress to bottom status bar"
-              >
-                <span>▾</span>
-                <span>Minimize to Footer</span>
-              </button>
+              <div className="flex items-center space-x-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onMinimizeToFooter) onMinimizeToFooter();
+                  }}
+                  className="px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-[#38BDF8] border border-[#323238] font-medium text-xs transition-colors cursor-pointer flex items-center space-x-1"
+                  title="Minimize streaming progress to bottom status bar"
+                >
+                  <span>▾</span>
+                  <span>Minimize to Footer</span>
+                </button>
+
+                {onDetachToDesktop && (
+                  <button
+                    type="button"
+                    onClick={onDetachToDesktop}
+                    className="px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-[#38BDF8] border border-[#323238] font-medium text-xs transition-colors cursor-pointer flex items-center space-x-1"
+                    title="Detach progress into a standalone floating desktop window"
+                  >
+                    <span>⧉</span>
+                    <span>Detach</span>
+                  </button>
+                )}
+              </div>
 
               <button
                 type="button"
                 onClick={onCancelCompress}
-                className="px-3 py-1.5 rounded-[4px] bg-[#252529] hover:bg-rose-950/40 text-[#9CA3AF] hover:text-rose-400 border border-[#323238] hover:border-rose-800 font-medium text-xs transition-colors cursor-pointer"
+                disabled={isCancelling}
+                className={`px-3 py-1.5 rounded-[4px] font-medium text-xs transition-colors cursor-pointer flex items-center space-x-1.5 ${
+                  isCancelling
+                    ? "bg-rose-950/60 border border-rose-700 text-rose-300 opacity-80 cursor-not-allowed"
+                    : "bg-[#252529] hover:bg-rose-950/40 text-[#9CA3AF] hover:text-rose-400 border border-[#323238] hover:border-rose-800"
+                }`}
                 title="Abort stream and delete partial output"
               >
-                Cancel
+                {isCancelling ? (
+                  <>
+                    <svg className="animate-spin w-3 h-3 text-rose-400" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                    <span>Cancelling...</span>
+                  </>
+                ) : (
+                  <span>Cancel</span>
+                )}
               </button>
             </div>
           </div>
@@ -217,21 +284,42 @@ export function CompressModal({
           /* MODE B: CONFIGURATION DIALOG                                     */
           /* ================================================================= */
           <>
-            {/* 1. Header */}
-            <div className="flex items-center justify-between pb-2 border-b border-[#2E2E34]">
-              <span className="text-sm font-semibold text-white tracking-wide">
-                Compress Archive
-              </span>
-              <button
-                type="button"
-                onClick={onClose}
-                className="p-1 text-[#9CA3AF] hover:text-white rounded-[4px] hover:bg-[#252529] transition-colors cursor-pointer"
-                title="Close"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+            {/* 1. Header (Draggable) */}
+            <div
+              onMouseDown={handleMouseDown}
+              className="flex items-center justify-between pb-2 border-b border-[#2E2E34] cursor-grab active:cursor-grabbing select-none"
+              title="Click and drag to move window"
+            >
+              <div className="flex items-center space-x-2">
+                <span className="text-sm font-semibold text-white tracking-wide">
+                  Compress Archive
+                </span>
+                <span className="text-[10px] text-[#888888] bg-[#252529] px-1.5 py-0.5 rounded border border-[#323238] pointer-events-none">
+                  Draggable
+                </span>
+              </div>
+              <div className="flex items-center space-x-1.5">
+                {isDisplaced && (
+                  <button
+                    type="button"
+                    onClick={resetPosition}
+                    className="text-[10px] text-[#888888] hover:text-[#38BDF8] px-1.5 py-0.5 rounded hover:bg-[#252529] transition-colors"
+                    title="Reset to center"
+                  >
+                    Center
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="p-1 text-[#9CA3AF] hover:text-white rounded-[4px] hover:bg-[#252529] transition-colors cursor-pointer"
+                  title="Close"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
 
             {/* 2. Archive Name & Format Row */}

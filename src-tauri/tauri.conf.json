@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Bayzip",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "identifier": "com.baymax.bayzip",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -26,6 +26,18 @@
         "url": "index.html?window=settings",
         "width": 580,
         "height": 560,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "visible": false
+      },
+      {
+        "label": "progress",
+        "title": "Bayzip Progress",
+        "url": "index.html?window=progress",
+        "width": 480,
+        "height": 260,
         "resizable": false,
         "decorations": false,
         "transparent": false,

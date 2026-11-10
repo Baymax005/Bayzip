@@ -283,6 +283,72 @@ async fn minimize_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn open_progress_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("progress") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        Ok(())
+    } else {
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "progress",
+            tauri::WebviewUrl::App("index.html?window=progress".into()),
+        )
+        .title("Bayzip Progress")
+        .inner_size(480.0, 260.0)
+        .resizable(false)
+        .decorations(false)
+        .shadow(true)
+        .center()
+        .build()
+        .map_err(|e| format!("Failed to create progress window: {}", e))?;
+
+        let _ = window.set_focus();
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn close_progress_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("progress") {
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn minimize_progress_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("progress") {
+        let _ = window.minimize();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_progress_always_on_top(app: tauri::AppHandle, always_on_top: bool) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("progress") {
+        let _ = window.set_always_on_top(always_on_top);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn focus_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_file_icon(extension: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         Ok(inspector::get_cached_icon(&extension))
@@ -338,7 +404,12 @@ pub fn run() {
             set_smart_media_bypass,
             open_settings_window,
             close_settings_window,
-            minimize_settings_window
+            minimize_settings_window,
+            open_progress_window,
+            close_progress_window,
+            minimize_progress_window,
+            set_progress_always_on_top,
+            focus_main_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -12,8 +12,10 @@ export interface StreamProgressTelemetry {
   fileName: string;
   percent: number;
   throughputText?: string;
+  isCancelling?: boolean;
   onCancel?: () => void;
   onRestoreModal?: () => void;
+  onDetachToDesktop?: () => void;
 }
 
 export interface ArchiveTreeInspectorProps {
@@ -845,20 +847,47 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                   <button
                     type="button"
                     onClick={streamProgress.onRestoreModal}
-                    className="px-1.5 py-0.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#38BDF8] border border-[#323238] text-[10px] cursor-pointer shrink-0"
+                    className="px-1.5 py-0.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#38BDF8] border border-[#323238] text-[10px] cursor-pointer shrink-0 flex items-center space-x-1"
                     title="Restore full progress card"
                   >
-                    ▴ Expand
+                    <span>▴</span>
+                    <span>Expand</span>
+                  </button>
+                )}
+                {streamProgress.onDetachToDesktop && (
+                  <button
+                    type="button"
+                    onClick={streamProgress.onDetachToDesktop}
+                    className="px-1.5 py-0.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-[#38BDF8] border border-[#323238] text-[10px] cursor-pointer shrink-0 flex items-center space-x-1"
+                    title="Detach progress into a standalone desktop window"
+                  >
+                    <span>⧉</span>
+                    <span>Detach</span>
                   </button>
                 )}
                 {streamProgress.onCancel && (
                   <button
                     type="button"
                     onClick={streamProgress.onCancel}
-                    className="px-1.5 py-0.5 rounded-[4px] bg-[#252529] hover:bg-rose-950/40 text-[#9CA3AF] hover:text-rose-400 border border-[#323238] hover:border-rose-800 text-[10px] cursor-pointer shrink-0"
+                    disabled={streamProgress.isCancelling}
+                    className={`px-1.5 py-0.5 rounded-[4px] border text-[10px] cursor-pointer shrink-0 flex items-center space-x-1 ${
+                      streamProgress.isCancelling
+                        ? "bg-rose-950/60 border-rose-700 text-rose-300 opacity-80 cursor-not-allowed"
+                        : "bg-[#252529] hover:bg-rose-950/40 text-[#9CA3AF] hover:text-rose-400 border-[#323238] hover:border-rose-800"
+                    }`}
                     title="Cancel active stream"
                   >
-                    Cancel
+                    {streamProgress.isCancelling ? (
+                      <>
+                        <svg className="animate-spin w-2.5 h-2.5 text-rose-400" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                        </svg>
+                        <span>Cancelling...</span>
+                      </>
+                    ) : (
+                      <span>Cancel</span>
+                    )}
                   </button>
                 )}
               </div>

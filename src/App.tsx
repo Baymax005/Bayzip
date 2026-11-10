@@ -75,7 +75,7 @@ export default function App() {
 
   // Compression Execution State
   const [isCompressing, setIsCompressing] = useState(false);
-  const [, setIsCancellingCompress] = useState(false);
+  const [isCancellingCompress, setIsCancellingCompress] = useState(false);
   const [compressProgress, setCompressProgress] = useState<CompressProgress | null>(null);
   const [isProgressMinimized, setIsProgressMinimized] = useState(false);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
@@ -98,7 +98,7 @@ export default function App() {
   const [showExtractPassword, setShowExtractPassword] = useState<boolean>(false);
   const [isPasswordPromptOpen, setIsPasswordPromptOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
-  const [, setIsCancellingExtract] = useState<boolean>(false);
+  const [isCancellingExtract, setIsCancellingExtract] = useState<boolean>(false);
   const [extractProgress, setExtractProgress] = useState<ExtractProgress | null>(null);
   const [extractResult, setExtractResult] = useState<ExtractResult | null>(null);
   const [extractError, setExtractError] = useState<string | null>(null);
@@ -215,6 +215,27 @@ export default function App() {
     }
   };
 
+  const handleDetachProgress = async () => {
+    try {
+      await invoke("open_progress_window");
+      setIsProgressMinimized(true);
+    } catch (e) {
+      console.error("Failed to open desktop progress window:", e);
+    }
+  };
+
+  // Auto-pop out detached progress window if Bayzip is minimized while stream is running
+  useEffect(() => {
+    if (!isCompressing && !isExtracting) return;
+    const handleVisibilityChange = () => {
+      if (document.hidden && (isCompressing || isExtracting)) {
+        invoke("open_progress_window").catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [isCompressing, isExtracting]);
+
   // Active Stream Telemetry for Bottom Status Bar
   const activeStreamTelemetry = useMemo<StreamProgressTelemetry | null>(() => {
     if (testStatus === "testing") {
@@ -241,8 +262,10 @@ export default function App() {
         fileName,
         percent: compressProgress?.percent ?? 0,
         throughputText: `${formatBytes(compressProgress?.bytes_processed || 0)} / ${formatBytes(compressProgress?.total_bytes || 0)}`,
+        isCancelling: isCancellingCompress,
         onCancel: handleCancelCompress,
         onRestoreModal: () => setIsProgressMinimized(false),
+        onDetachToDesktop: handleDetachProgress,
       };
     }
     if (isExtracting && isProgressMinimized) {
@@ -255,8 +278,10 @@ export default function App() {
         fileName,
         percent: extractProgress?.percent ?? 0,
         throughputText: `${formatBytes(extractProgress?.bytes_extracted || 0)} / ${formatBytes(totalUncompressed)}`,
+        isCancelling: isCancellingExtract,
         onCancel: handleCancelExtract,
         onRestoreModal: () => setIsProgressMinimized(false),
+        onDetachToDesktop: handleDetachProgress,
       };
     }
     return null;
@@ -266,6 +291,8 @@ export default function App() {
     isCompressing,
     isExtracting,
     isProgressMinimized,
+    isCancellingCompress,
+    isCancellingExtract,
     compressProgress,
     extractProgress,
     customArchiveName,
@@ -828,6 +855,8 @@ export default function App() {
       archiveName: targetArchiveName,
     });
     setIsCompressing(true);
+    setIsCompressModalOpen(false);
+    setIsProgressMinimized(false);
     setIsCancellingCompress(false);
     setCompressError(null);
     setCompressProgress({
@@ -895,10 +924,12 @@ export default function App() {
       console.error("Compression execution error:", err);
     } finally {
       setIsCompressing(false);
+      setIsCompressModalOpen(false);
       setIsCancellingCompress(false);
       setActiveCompressConfig(null);
       setCompressProgress(null);
       setIsProgressMinimized(false);
+      invoke("close_progress_window").catch(() => {});
     }
   };
 
@@ -923,6 +954,8 @@ export default function App() {
     }
 
     setIsExtracting(true);
+    setIsExtractModalOpen(false);
+    setIsProgressMinimized(false);
     setIsCancellingExtract(false);
     setExtractError(null);
     setExtractProgress({
@@ -963,9 +996,11 @@ export default function App() {
       }
     } finally {
       setIsExtracting(false);
+      setIsExtractModalOpen(false);
       setIsCancellingExtract(false);
       setExtractProgress(null);
       setIsProgressMinimized(false);
+      invoke("close_progress_window").catch(() => {});
     }
   };
 
@@ -1185,10 +1220,13 @@ export default function App() {
           }
         />
 
-        {/* 4. Keka-Style Compact Compress Modal (max-w-[440px]) - Scoped strictly to File Viewer */}
+        {/* 4. Keka-Style Compact Compress Modal (max-w-[440px]) - Draggable Floating Window */}
         <CompressModal
-          isOpen={isCompressModalOpen || (isCompressing && !isProgressMinimized)}
-          onClose={() => setIsCompressModalOpen(false)}
+          isOpen={isCompressing ? !isProgressMinimized : isCompressModalOpen}
+          onClose={() => {
+            setIsCompressModalOpen(false);
+            setIsProgressMinimized(false);
+          }}
           customArchiveName={customArchiveName}
           setCustomArchiveName={setCustomArchiveName}
           selectedFormat={selectedFormat}
@@ -1213,15 +1251,20 @@ export default function App() {
           formatAlgorithms={FORMAT_ALGORITHMS}
           onStartCompress={handleCompress}
           isCompressing={isCompressing}
+          isCancelling={isCancellingCompress}
           progress={compressProgress}
           onCancelCompress={handleCancelCompress}
           onMinimizeToFooter={() => setIsProgressMinimized(true)}
+          onDetachToDesktop={handleDetachProgress}
         />
 
-        {/* 5. Matching Compact Extract Modal (max-w-[420px]) - Scoped strictly to File Viewer */}
+        {/* 5. Matching Compact Extract Modal (max-w-[420px]) - Draggable Floating Window */}
         <ExtractModal
-          isOpen={isExtractModalOpen || (isExtracting && !isProgressMinimized)}
-          onClose={() => setIsExtractModalOpen(false)}
+          isOpen={isExtracting ? !isProgressMinimized : isExtractModalOpen}
+          onClose={() => {
+            setIsExtractModalOpen(false);
+            setIsProgressMinimized(false);
+          }}
           extractDest={extractDest}
           setExtractDest={setExtractDest}
           handleSelectDestFolder={handleSelectDestFolder}
@@ -1231,11 +1274,13 @@ export default function App() {
           setOpenFolderOnExtract={setOpenFolderOnExtract}
           onStartExtract={handleExtract}
           isExtracting={isExtracting}
+          isCancelling={isCancellingExtract}
           archiveName={archiveInfo?.filename || (selectedArchive ? selectedArchive.split(/[/\\]/).pop() : undefined)}
           extractProgress={extractProgress}
           totalUncompressedSize={archiveInfo?.total_uncompressed_size || archiveInfo?.size || 0}
           onCancelExtract={handleCancelExtract}
           onMinimizeToFooter={() => setIsProgressMinimized(true)}
+          onDetachToDesktop={handleDetachProgress}
         />
       </div>
 
