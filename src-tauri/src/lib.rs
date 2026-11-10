@@ -349,6 +349,22 @@ async fn focus_main_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("progress") {
+        let _ = window.close();
+    }
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.close();
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.close();
+    }
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_file_icon(extension: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         Ok(inspector::get_cached_icon(&extension))
@@ -409,7 +425,8 @@ pub fn run() {
             close_progress_window,
             minimize_progress_window,
             set_progress_always_on_top,
-            focus_main_window
+            focus_main_window,
+            exit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -3,6 +3,7 @@ import { getArchiveStemName, isArchiveFile } from "./utils/archive";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
@@ -18,6 +19,7 @@ import { ExtractModal } from "./components/ExtractModal";
 import { UnifiedDropHub } from "./components/UnifiedDropHub";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath, StreamProgressTelemetry } from "./components/ArchiveTreeInspector";
 import { FilePreviewModal } from "./components/FilePreviewModal";
+import { AbortConfirmationModal } from "./components/AbortConfirmationModal";
 
 import {
   SystemSpecs,
@@ -109,6 +111,16 @@ export default function App() {
   const [testMessage, setTestMessage] = useState<string | null>(null);
   const [testProgress, setTestProgress] = useState<TestArchiveProgress | null>(null);
   const isTestingRef = useRef(false);
+
+  // Close Confirmation & Detached HUD State
+  const [isConfirmCloseOpen, setIsConfirmCloseOpen] = useState(false);
+  const [isHudDetached, setIsHudDetached] = useState(false);
+  const isCompressingRef = useRef(false);
+  isCompressingRef.current = isCompressing;
+  const isExtractingRef = useRef(false);
+  isExtractingRef.current = isExtracting;
+  const testStatusRef = useRef(testStatus);
+  testStatusRef.current = testStatus;
 
   // Safe In-Memory File Preview State
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -219,9 +231,68 @@ export default function App() {
     try {
       await invoke("open_progress_window");
       setIsProgressMinimized(true);
+      setIsHudDetached(true);
     } catch (e) {
       console.error("Failed to open desktop progress window:", e);
     }
+  };
+
+  // Close Guard: intercept window close when an operation is actively running
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onCloseRequested(async (event) => {
+        if (isCompressingRef.current || isExtractingRef.current || testStatusRef.current === "testing") {
+          event.preventDefault();
+          setIsConfirmCloseOpen(true);
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => console.error("Error setting onCloseRequested listener:", err));
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const handleRequestClose = () => {
+    if (isCompressing || isExtracting || testStatus === "testing") {
+      setIsConfirmCloseOpen(true);
+    } else {
+      getCurrentWindow().close().catch(() => {});
+    }
+  };
+
+  const handleConfirmAbortAndExit = async () => {
+    try {
+      if (isCompressing) {
+        await invoke("cancel_compression").catch(() => {});
+      }
+      if (isExtracting) {
+        await invoke("cancel_extraction").catch(() => {});
+      }
+      if (testStatus === "testing") {
+        await invoke("cancel_test_archive").catch(() => {});
+      }
+      await invoke("close_progress_window").catch(() => {});
+      // Short delay ensuring OS unlinks partial files before termination
+      await new Promise((r) => setTimeout(r, 200));
+      await invoke("exit_app").catch(() => {
+        getCurrentWindow().destroy().catch(() => {});
+      });
+    } catch (e) {
+      console.error("Failed to cleanly abort and exit:", e);
+      await invoke("exit_app").catch(() => {
+        getCurrentWindow().destroy().catch(() => {});
+      });
+    }
+  };
+
+  const handleMinimizeToBackground = () => {
+    setIsConfirmCloseOpen(false);
+    getCurrentWindow().minimize().catch(() => {});
   };
 
   // Auto-pop out detached progress window if Bayzip is minimized while stream is running
@@ -1050,9 +1121,9 @@ export default function App() {
   return (
     <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#141416] text-[#F4F4F6] select-none font-sans">
       {/* 1. Titlebar */}
-      <Titlebar activeDocument={activeDocumentName} />
+      <Titlebar activeDocument={activeDocumentName} onClose={handleRequestClose} />
 
-      {/* 2. Unified Top Toolbar (Bandizip Style) */}
+      {/* 2. Unified Top Toolbar */}
       <div className="h-11 bg-[#1C1C1F] border-b border-[#2E2E34] px-3 flex items-center justify-between text-xs select-none shrink-0">
         {/* Left Group (Load / Stage) */}
         <div className="flex items-center space-x-1.5">
@@ -1356,6 +1427,32 @@ export default function App() {
           </p>
         </div>
       )}
+
+      {/* Accidental Close Guard on Window Close */}
+      <AbortConfirmationModal
+        isOpen={isConfirmCloseOpen}
+        onClose={() => setIsConfirmCloseOpen(false)}
+        onConfirmAbortAndExit={handleConfirmAbortAndExit}
+        onMinimizeToBackground={handleMinimizeToBackground}
+        operationType={isCompressing ? "compress" : isExtracting ? "extract" : "test"}
+        targetName={
+          isCompressing
+            ? `${customArchiveName.trim() || "Archive"}${selectedFormat}`
+            : isExtracting
+            ? archiveInfo?.filename || (selectedArchive ? selectedArchive.split(/[/\\]/).pop() : "Archive")
+            : testProgress?.current_file
+            ? testProgress.current_file.split(/[/\\]/).pop() || "Archive"
+            : "Archive"
+        }
+        percent={
+          isCompressing
+            ? compressProgress?.percent ?? 0
+            : isExtracting
+            ? extractProgress?.percent ?? 0
+            : testProgress?.percent ?? 0
+        }
+        isHudDetached={isHudDetached}
+      />
     </div>
   );
 }

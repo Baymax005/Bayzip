@@ -70,7 +70,7 @@
 - **Zero-Scroll Main Window Architecture (`App.tsx`)**:
   - Desktop-native layout locked to `h-screen overflow-hidden flex flex-col bg-[#141416]` — the main chrome never scrolls; only the inner file viewer scrolls.
   - Neutral dark zinc/graphite palette (`#141416` / `#1C1C1F`) with crisp `1px solid #2E2E34` borders and `#38BDF8` sky blue interactive accents.
-- **Bandizip-Style Unified Top Ribbon Toolbar**:
+- **Unified Top Ribbon Toolbar**:
   - Single streamlined action bar with contextual sky-blue primary button states (`[ 📦 Compress... ]` when staging files; `[ 📤 Extract... ]` when opening archives).
 - **Keka-Style Compact Popup Dialogs with Live Streaming Morph**:
   - Completely eliminated `backdrop-blur` and heavy window overlays; dialogs stay neatly contained within the File Viewer bounds.

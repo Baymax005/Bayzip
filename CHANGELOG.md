@@ -21,6 +21,10 @@ All notable changes, version milestones, security fixes, and performance enhance
   - Clicking `▴ Expand` in the footer restores the full floating card.
 - **Responsive Active Cancellation Feedback**:
   - Cancel buttons across CompressModal, ExtractModal, footer HUD, and ProgressWindow now immediately show an animated spinner, change text to "Cancelling...", disable the button, and apply rose warning styling while aborting the stream.
+- **Accidental Close Guard (`src/components/AbortConfirmationModal.tsx`)**:
+  - Intercepted `onCloseRequested` and titlebar `✕` clicks whenever compression, extraction, or archive verification is actively running.
+  - Displays a modal warning: *"Compression is in progress. Abort and delete partial archive?"*
+  - Provides safe choices: `[ Continue ]` to keep running, `[ Minimize (Keep HUD) ]` if detached, or `[ Abort & Exit ]` which gracefully aborts threads and deletes incomplete files before closing.
 
 ## [v2.4.0] - 2026-11-10
 
@@ -48,7 +52,7 @@ All notable changes, version milestones, security fixes, and performance enhance
   - Enforced `h-screen overflow-hidden flex flex-col bg-[#141416]` — the main window chrome never scrolls vertically.
   - Neutral dark zinc/graphite palette (`#141416` main window, `#1C1C1F` surfaces, `#252529` inputs/buttons with `#2E2E34` / `#323238` crisp borders).
   - Sky Blue (`#38BDF8`) primary interactive accents and emerald signature (`#10B981`) for format badges and verification indicators.
-- **Bandizip-Style Unified Top Ribbon Toolbar**:
+- **Unified Top Ribbon Toolbar**:
   - Replaced separate mode tabs with a unified single-line action toolbar:
     - Left group: `[ 📂 Open Archive ]`, `[ ➕ Add Files ]`, `[ 📁 Add Folder ]`.
     - Right group: `[ 📦 Compress... ]`, `[ 📤 Extract... ]`, `[ 🛡️ Test ]`, `[ ✕ Clear ]`, `[ About ]`, `[ ⚙️ ]`.
@@ -497,9 +501,9 @@ All notable changes, version milestones, security fixes, and performance enhance
   - Added official Bayzip branding bitmaps: 150x57 `installer-header.bmp` for wizard page headers and 164x314 `installer-sidebar.bmp` for Welcome and Finish pages.
   - Added `uninstallerIcon` (`icons/icon.ico`) so `uninstall.exe` and the Windows "Installed Apps" / "Apps & Features" uninstall page in Windows Settings display the authentic Bayzip icon.
 
-### 🪟 Native Windows Shell Icon Extraction & WinRAR/Bandizip-Style Architecture
+### 🪟 Native Windows Shell Icon Extraction & Native Architecture
 - **Direct Windows Shell Icon Extraction (`SHGetFileInfoW`)**:
-  - Implemented authentic system icon extraction via Win32 Shell API (`SHGetFileInfoW`), adopting the proven native architecture used by WinRAR and Bandizip.
+  - Implemented authentic system icon extraction via Win32 Shell API (`SHGetFileInfoW`), adopting the proven native architecture used by professional Windows archivers.
   - Automatically queries the Windows shell association cache for each file extension, extracting the user's authentic desktop application icons for **Microsoft Word (`.docx`, `.doc`)**, **Adobe Acrobat / PDF (`.pdf`)**, **Cisco Packet Tracer (`.pkt`, `.pka`)**, **Microsoft Excel (`.xlsx`)**, **PowerPoint (`.pptx`)**, and any registered system file type.
   - Converts native 32-bit Windows `HICON` handles to 32-bit RGBA pixel buffers and encodes them into memory-efficient, transparent base64 PNG data URLs using `flate2`.
   - **Thread-Safe In-Memory Icon Caching (`icon.rs` & `FileFormatIcon.tsx`)**:

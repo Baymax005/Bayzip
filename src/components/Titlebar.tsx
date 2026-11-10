@@ -3,9 +3,10 @@ import { BayzipLogo } from "./BayzipLogo";
 
 export interface TitlebarProps {
   activeDocument?: string;
+  onClose?: () => void;
 }
 
-export function Titlebar({ activeDocument }: TitlebarProps = {}) {
+export function Titlebar({ activeDocument, onClose }: TitlebarProps = {}) {
   return (
     <div
       data-tauri-drag-region
@@ -74,7 +75,11 @@ export function Titlebar({ activeDocument }: TitlebarProps = {}) {
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            getCurrentWindow().close().catch((err) => console.error("Close error:", err));
+            if (onClose) {
+              onClose();
+            } else {
+              getCurrentWindow().close().catch((err) => console.error("Close error:", err));
+            }
           }}
           className="h-full px-4 hover:bg-[#E81123] hover:text-white flex items-center justify-center text-[#9CA3AF] transition-colors cursor-pointer"
           title="Close"
