@@ -18,7 +18,8 @@
         "height": 700,
         "decorations": false,
         "transparent": false,
-        "shadow": true
+        "shadow": true,
+        "visible": false
       },
       {
         "label": "settings",
@@ -36,6 +37,18 @@
         "label": "progress",
         "title": "Bayzip Progress",
         "url": "index.html?window=progress",
+        "width": 480,
+        "height": 260,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "visible": false
+      },
+      {
+        "label": "mini-extract",
+        "title": "Bayzip Extract",
+        "url": "index.html?window=mini-extract",
         "width": 480,
         "height": 260,
         "resizable": false,

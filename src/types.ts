@@ -70,7 +70,7 @@ export interface ArchiveInfo {
 }
 
 export interface StartupCommand {
-  action?: "compress" | "extract" | null;
+  action?: "compress" | "extract" | "extract-here" | "extract-to-folder" | "mini-extract" | null;
   paths: string[];
 }
 

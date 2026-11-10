@@ -15,7 +15,7 @@ export function Titlebar({ activeDocument, onClose }: TitlebarProps = {}) {
           getCurrentWindow().toggleMaximize().catch(() => {});
         }
       }}
-      className="h-8 w-full flex justify-between items-center bg-[#141416] cursor-default select-none border-b border-[#2E2E34] shrink-0"
+      className="h-8 w-full flex justify-between items-center bg-[#141416] cursor-default select-none border-b border-[#2E2E34] shrink-0 relative z-50"
     >
       {/* Left Branding Area - Fully Grabbable */}
       <div data-tauri-drag-region className="flex items-center space-x-2 px-3 cursor-default">

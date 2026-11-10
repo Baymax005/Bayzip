@@ -88,8 +88,14 @@ fn get_cli_args() -> StartupCommand {
         let clean = arg.trim_matches('\"').to_string();
         if clean == "--gui-compress" {
             action = Some("compress".to_string());
-        } else if clean == "--gui-extract" || clean == "--extract-here" || clean == "--extract-to-folder" {
+        } else if clean == "--gui-extract" {
             action = Some("extract".to_string());
+        } else if clean == "--extract-here" {
+            action = Some("extract-here".to_string());
+        } else if clean == "--extract-to-folder" {
+            action = Some("extract-to-folder".to_string());
+        } else if clean == "--mini-extract" {
+            action = Some("mini-extract".to_string());
         } else if !clean.starts_with("--") {
             paths.push(clean);
         }
@@ -351,6 +357,9 @@ async fn focus_main_window(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
+    if let Some(window) = app.get_webview_window("mini-extract") {
+        let _ = window.close();
+    }
     if let Some(window) = app.get_webview_window("progress") {
         let _ = window.close();
     }
@@ -395,6 +404,27 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            use tauri::Manager;
+            let args: Vec<String> = std::env::args().collect();
+            let is_mini_extract = args.iter().any(|a| {
+                let clean = a.trim_matches('\"');
+                clean == "--extract-here" || clean == "--extract-to-folder" || clean == "--mini-extract"
+            });
+
+            if is_mini_extract {
+                if let Some(mini_window) = app.get_webview_window("mini-extract") {
+                    let _ = mini_window.show();
+                    let _ = mini_window.set_focus();
+                }
+            } else {
+                if let Some(main_window) = app.get_webview_window("main") {
+                    let _ = main_window.show();
+                    let _ = main_window.set_focus();
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_system_specs, 
             get_cli_args, 

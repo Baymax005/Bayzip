@@ -1353,6 +1353,20 @@ export default function App() {
           onMinimizeToFooter={() => setIsProgressMinimized(true)}
           onDetachToDesktop={handleDetachProgress}
         />
+
+        {/* 6. In-Canvas Draggable Password Prompt Modal */}
+        <PasswordModal
+          isOpen={isPasswordPromptOpen}
+          onClose={() => setIsPasswordPromptOpen(false)}
+          password={extractPassword}
+          setPassword={setExtractPassword}
+          showPassword={showExtractPassword}
+          setShowPassword={setShowExtractPassword}
+          isExtracting={isExtracting}
+          extractError={extractError}
+          onSubmit={handleExtract}
+          archiveName={archiveInfo?.filename || (selectedArchive ? selectedArchive.split(/[/\\]/).pop() : undefined)}
+        />
       </div>
 
       {/* Result Modals */}
@@ -1384,19 +1398,6 @@ export default function App() {
         isSyncingRegistry={isSyncingRegistry}
         contextMenuStatus={contextMenuStatus}
         onRegisterContextMenu={handleRegisterContextMenu}
-      />
-
-      {/* Password Prompt Modal */}
-      <PasswordModal
-        isOpen={isPasswordPromptOpen}
-        onClose={() => setIsPasswordPromptOpen(false)}
-        password={extractPassword}
-        setPassword={setExtractPassword}
-        showPassword={showExtractPassword}
-        setShowPassword={setShowExtractPassword}
-        isExtracting={isExtracting}
-        extractError={extractError}
-        onSubmit={handleExtract}
       />
 
       {/* Safe In-Memory File Preview Modal */}
