@@ -3,6 +3,7 @@ use std::io::{Read, Write, BufWriter};
 use std::path::Path;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
+use zeroize::Zeroize;
 
 use crate::types::{ArchiveEntryItem, CompressProgress};
 use crate::inspector::{safe_atomic_rename, get_optimal_read_slice, get_optimal_write_buffer};
@@ -249,9 +250,10 @@ pub fn write_bay_toc_trailer<W: Write>(
         rand::thread_rng().fill_bytes(&mut salt);
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
-        let key_bytes = crate::crypto::derive_bay_key(pwd.trim(), &salt);
+        let mut key_bytes = crate::crypto::derive_bay_key(pwd.trim(), &salt);
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
+        key_bytes.zeroize();
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let encrypted_toc = cipher
@@ -289,6 +291,10 @@ pub fn compress_bay(
 ) -> Result<(), String> {
     if is_compression_cancelled() {
         return Err("Compression cancelled by user".to_string());
+    }
+
+    if files.is_empty() {
+        return Err("No files provided for compression".to_string());
     }
 
     let pwd_trimmed = password.map(|s| s.trim()).filter(|s| !s.is_empty());

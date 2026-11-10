@@ -18,6 +18,17 @@ extern "system" {
 }
 
 #[cfg(target_os = "windows")]
+fn get_powershell_exe() -> std::path::PathBuf {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let ps = std::path::PathBuf::from(&system_root).join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    if ps.exists() {
+        ps
+    } else {
+        std::path::PathBuf::from("powershell.exe")
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub fn notify_shell_associations_changed() {
     unsafe {
         // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_FLUSH = 0x1000
@@ -34,7 +45,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
             let app_dir = std::env::var_os("LOCALAPPDATA")
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::env::temp_dir())
+                .unwrap_or_else(std::env::temp_dir)
                 .join("Bayzip");
             let _ = std::fs::create_dir_all(&app_dir);
             let icon_file = app_dir.join("bayzip.ico");
@@ -267,8 +278,8 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 let _ = std::fs::remove_file(temp_reg);
 
                 // Refresh Windows Explorer shell & clear icon cache
-                let mut refresh_cmd = Command::new("cmd");
-                refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+                let mut refresh_cmd = Command::new(crate::inspector::get_system32_exe("ie4uinit.exe"));
+                refresh_cmd.arg("-show");
                 refresh_cmd.creation_flags(CREATE_NO_WINDOW);
                 let _ = refresh_cmd.output();
 
@@ -277,7 +288,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
 
                 // Register Windows 11 Modern Context Menu (Sparse Package Identity)
                 let mut is_win11 = false;
-                let mut ver_cmd = Command::new("powershell");
+                let mut ver_cmd = Command::new(get_powershell_exe());
                 ver_cmd.args(["-NoProfile", "-NonInteractive", "-Command", "[System.Environment]::OSVersion.Version.Build"]);
                 ver_cmd.creation_flags(CREATE_NO_WINDOW);
                 if let Ok(output) = ver_cmd.output() {
@@ -293,9 +304,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 if is_win11 && dest_dll.exists() && manifest_file.exists() {
                     let manifest_escaped = manifest_file.to_string_lossy().replace('\'', "''");
                     let app_dir_escaped = app_dir.to_string_lossy().replace('\'', "''");
-                    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-                    let ps_exe = std::path::PathBuf::from(&system_root).join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
-                    let mut ps_cmd = Command::new(if ps_exe.exists() { ps_exe } else { std::path::PathBuf::from("powershell.exe") });
+                    let mut ps_cmd = Command::new(get_powershell_exe());
                     let ps_script = format!(
                         "Add-AppxPackage -Register '{}' -ExternalLocation '{}' -ErrorAction SilentlyContinue",
                         manifest_escaped,
@@ -311,8 +320,8 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 {
                     notify_shell_associations_changed();
 
-                    let mut refresh_cmd = Command::new("cmd");
-                    refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+                    let mut refresh_cmd = Command::new(crate::inspector::get_system32_exe("ie4uinit.exe"));
+                    refresh_cmd.arg("-show");
                     refresh_cmd.creation_flags(CREATE_NO_WINDOW);
                     let _ = refresh_cmd.output();
                 }
@@ -332,7 +341,7 @@ pub fn unregister_context_menu_sync() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         // 1. Unregister Windows 11 Modern Context Menu Sparse Package
-        let mut ps_cmd = Command::new("powershell");
+        let mut ps_cmd = Command::new(get_powershell_exe());
         ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", "Get-AppxPackage -Name 'Bayzip.ShellExtension' | Remove-AppxPackage -ErrorAction SilentlyContinue"]);
         ps_cmd.creation_flags(CREATE_NO_WINDOW);
         let _ = ps_cmd.output();

@@ -3,7 +3,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::core::{implement, GUID, HRESULT, PWSTR};
 use windows_core::Interface;
-use windows::Win32::Foundation::{BOOL, CLASS_E_CLASSNOTAVAILABLE, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, S_FALSE, S_OK};
+use windows::Win32::Foundation::{
+    BOOL, CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_FAIL, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, S_FALSE, S_OK,
+};
 use windows::Win32::System::Com::{
     CoTaskMemAlloc, CoTaskMemFree, IBindCtx, IClassFactory, IClassFactory_Impl,
 };
@@ -129,34 +131,46 @@ impl Drop for BayzipExplorerCommand {
 
 impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
     fn GetTitle(&self, _psiitemarray: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
-        let title = match self.action {
-            CommandAction::Root => "Bayzip",
-            CommandAction::CompressGamer => "Compress to .bayg (Gamer Preset)",
-            CommandAction::CompressBay => "Compress to .bay (Ultra-Fast)",
-            CommandAction::ExtractHere => "Extract Here",
-            CommandAction::OpenGui => "Open in Bayzip",
-        };
-        to_co_task_mem_pwstr(title)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let title = match self.action {
+                CommandAction::Root => "Bayzip",
+                CommandAction::CompressGamer => "Compress to .bayg (Gamer Preset)",
+                CommandAction::CompressBay => "Compress to .bay (Ultra-Fast)",
+                CommandAction::ExtractHere => "Extract Here",
+                CommandAction::OpenGui => "Open in Bayzip",
+            };
+            to_co_task_mem_pwstr(title)
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn GetIcon(&self, _psiitemarray: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
-        let icon_path = get_bayzip_icon_path();
-        to_co_task_mem_pwstr(&icon_path)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let icon_path = get_bayzip_icon_path();
+            to_co_task_mem_pwstr(&icon_path)
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn GetToolTip(&self, _psiitemarray: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
-        to_co_task_mem_pwstr("Bayzip Archiver")
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            to_co_task_mem_pwstr("Bayzip Archiver")
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn GetCanonicalName(&self) -> windows::core::Result<GUID> {
-        let u128_id = match self.action {
-            CommandAction::Root => 0x44e23c12_5883_4903_9da9_33d72120c19a,
-            CommandAction::CompressGamer => 0x44e23c12_5883_4903_9da9_33d72120c19b,
-            CommandAction::CompressBay => 0x44e23c12_5883_4903_9da9_33d72120c19c,
-            CommandAction::ExtractHere => 0x44e23c12_5883_4903_9da9_33d72120c19d,
-            CommandAction::OpenGui => 0x44e23c12_5883_4903_9da9_33d72120c19e,
-        };
-        Ok(GUID::from_u128(u128_id))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let u128_id = match self.action {
+                CommandAction::Root => 0x44e23c12_5883_4903_9da9_33d72120c19a,
+                CommandAction::CompressGamer => 0x44e23c12_5883_4903_9da9_33d72120c19b,
+                CommandAction::CompressBay => 0x44e23c12_5883_4903_9da9_33d72120c19c,
+                CommandAction::ExtractHere => 0x44e23c12_5883_4903_9da9_33d72120c19d,
+                CommandAction::OpenGui => 0x44e23c12_5883_4903_9da9_33d72120c19e,
+            };
+            Ok(GUID::from_u128(u128_id))
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn GetState(
@@ -164,7 +178,10 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
         _psiitemarray: Option<&IShellItemArray>,
         _foktousetickedstate: BOOL,
     ) -> windows::core::Result<u32> {
-        Ok(ECS_ENABLED.0 as u32)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Ok(ECS_ENABLED.0 as u32)
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn Invoke(
@@ -172,89 +189,98 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
         psiitemarray: Option<&IShellItemArray>,
         _pbc: Option<&IBindCtx>,
     ) -> windows::core::Result<()> {
-        let paths = get_selected_paths(psiitemarray);
-        if paths.is_empty() {
-            return Ok(());
-        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let paths = get_selected_paths(psiitemarray);
+            if paths.is_empty() {
+                return Ok(());
+            }
 
-        let exe = get_bayzip_exe_path();
-        let mut cmd = std::process::Command::new(exe);
+            let exe = get_bayzip_exe_path();
+            let mut cmd = std::process::Command::new(exe);
 
-        match self.action {
-            CommandAction::Root | CommandAction::OpenGui => {
-                let is_all_archives = !paths.is_empty() && paths.iter().all(|p| {
-                    let path = std::path::Path::new(p);
-                    if path.is_dir() {
-                        return false;
+            match self.action {
+                CommandAction::Root | CommandAction::OpenGui => {
+                    let is_all_archives = !paths.is_empty() && paths.iter().all(|p| {
+                        let path = std::path::Path::new(p);
+                        if path.is_dir() {
+                            return false;
+                        }
+                        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                        matches!(
+                            ext.as_str(),
+                            "bay" | "bayg" | "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "iso" | "cab"
+                        )
+                    });
+
+                    if is_all_archives {
+                        cmd.arg("--gui-extract");
+                    } else {
+                        cmd.arg("--gui-compress");
                     }
-                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                    matches!(
-                        ext.as_str(),
-                        "bay" | "bayg" | "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "iso" | "cab"
-                    )
-                });
+                    for p in &paths {
+                        cmd.arg(p);
+                    }
+                }
+                CommandAction::CompressGamer => {
+                    cmd.arg("--quick-compress");
+                    cmd.arg(".bayg");
+                    for p in &paths {
+                        cmd.arg(p);
+                    }
+                }
+                CommandAction::CompressBay => {
+                    cmd.arg("--quick-compress");
+                    cmd.arg(".bay");
+                    for p in &paths {
+                        cmd.arg(p);
+                    }
+                }
+                CommandAction::ExtractHere => {
+                    cmd.arg("--extract-here");
+                    for p in &paths {
+                        cmd.arg(p);
+                    }
+                }
+            }
 
-                if is_all_archives {
-                    cmd.arg("--gui-extract");
-                } else {
-                    cmd.arg("--gui-compress");
-                }
-                for p in &paths {
-                    cmd.arg(p);
-                }
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
             }
-            CommandAction::CompressGamer => {
-                cmd.arg("--quick-compress");
-                cmd.arg(".bayg");
-                for p in &paths {
-                    cmd.arg(p);
-                }
-            }
-            CommandAction::CompressBay => {
-                cmd.arg("--quick-compress");
-                cmd.arg(".bay");
-                for p in &paths {
-                    cmd.arg(p);
-                }
-            }
-            CommandAction::ExtractHere => {
-                cmd.arg("--extract-here");
-                for p in &paths {
-                    cmd.arg(p);
-                }
-            }
-        }
 
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-
-        let _ = cmd.spawn();
-        Ok(())
+            let _ = cmd.spawn();
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn GetFlags(&self) -> windows::core::Result<u32> {
-        if self.action == CommandAction::Root {
-            Ok(ECF_HASSUBCOMMANDS.0 as u32)
-        } else {
-            Ok(ECF_DEFAULT.0 as u32)
-        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if self.action == CommandAction::Root {
+                Ok(ECF_HASSUBCOMMANDS.0 as u32)
+            } else {
+                Ok(ECF_DEFAULT.0 as u32)
+            }
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn EnumSubCommands(&self) -> windows::core::Result<IEnumExplorerCommand> {
-        if self.action == CommandAction::Root {
-            let sub_commands = vec![
-                BayzipExplorerCommand::new(CommandAction::CompressGamer).into(),
-                BayzipExplorerCommand::new(CommandAction::CompressBay).into(),
-                BayzipExplorerCommand::new(CommandAction::ExtractHere).into(),
-                BayzipExplorerCommand::new(CommandAction::OpenGui).into(),
-            ];
-            Ok(BayzipEnumExplorerCommand::new(sub_commands).into())
-        } else {
-            Err(windows::core::Error::from_hresult(E_NOTIMPL))
-        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if self.action == CommandAction::Root {
+                let sub_commands = vec![
+                    BayzipExplorerCommand::new(CommandAction::CompressGamer).into(),
+                    BayzipExplorerCommand::new(CommandAction::CompressBay).into(),
+                    BayzipExplorerCommand::new(CommandAction::ExtractHere).into(),
+                    BayzipExplorerCommand::new(CommandAction::OpenGui).into(),
+                ];
+                Ok(BayzipEnumExplorerCommand::new(sub_commands).into())
+            } else {
+                Err(windows::core::Error::from_hresult(E_NOTIMPL))
+            }
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 }
 
@@ -287,55 +313,96 @@ impl IEnumExplorerCommand_Impl for BayzipEnumExplorerCommand_Impl {
         ppelem: *mut Option<IExplorerCommand>,
         pcfetched: *mut u32,
     ) -> HRESULT {
-        if ppelem.is_null() {
-            return E_POINTER;
-        }
-
-        let mut fetched = 0u32;
-        let mut idx = self.index.load(Ordering::SeqCst);
-
-        while fetched < celt && idx < self.commands.len() {
-            unsafe {
-                *ppelem.add(fetched as usize) = Some(self.commands[idx].clone());
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Defensive validation of COM out-parameters
+            if ppelem.is_null() || (celt > 1 && pcfetched.is_null()) {
+                return E_POINTER;
             }
-            fetched += 1;
-            idx += 1;
-        }
 
-        self.index.store(idx, Ordering::SeqCst);
+            if !pcfetched.is_null() {
+                unsafe { *pcfetched = 0 };
+            }
 
-        if !pcfetched.is_null() {
-            unsafe { *pcfetched = fetched };
-        }
+            let mut fetched = 0u32;
+            let mut idx = self.index.load(Ordering::SeqCst);
 
-        if fetched == celt {
-            S_OK
-        } else {
-            S_FALSE
-        }
+            // F-01 Fix: Use std::ptr::write to initialize raw memory without dropping
+            // uninitialized content, preventing 0xC0000005 access violation in explorer.exe.
+            while fetched < celt && idx < self.commands.len() {
+                unsafe {
+                    std::ptr::write(ppelem.add(fetched as usize), Some(self.commands[idx].clone()));
+                }
+                fetched += 1;
+                idx += 1;
+            }
+
+            // Explicitly initialize any remaining requested slots to None
+            for i in (fetched as usize)..(celt as usize) {
+                unsafe {
+                    std::ptr::write(ppelem.add(i), None);
+                }
+            }
+
+            self.index.store(idx, Ordering::SeqCst);
+
+            if !pcfetched.is_null() {
+                unsafe { *pcfetched = fetched };
+            }
+
+            if fetched == celt {
+                S_OK
+            } else {
+                S_FALSE
+            }
+        }))
+        .unwrap_or(E_FAIL)
     }
 
     fn Skip(&self, celt: u32) -> windows::core::Result<()> {
-        let current = self.index.load(Ordering::SeqCst);
-        let next = (current + celt as usize).min(self.commands.len());
-        self.index.store(next, Ordering::SeqCst);
-        Ok(())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let current = self.index.load(Ordering::SeqCst);
+            let next = (current + celt as usize).min(self.commands.len());
+            self.index.store(next, Ordering::SeqCst);
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn Reset(&self) -> windows::core::Result<()> {
-        self.index.store(0, Ordering::SeqCst);
-        Ok(())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.index.store(0, Ordering::SeqCst);
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn Clone(&self) -> windows::core::Result<IEnumExplorerCommand> {
-        let cloned = BayzipEnumExplorerCommand::new(self.commands.clone());
-        cloned.index.store(self.index.load(Ordering::SeqCst), Ordering::SeqCst);
-        Ok(cloned.into())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let cloned = BayzipEnumExplorerCommand::new(self.commands.clone());
+            cloned.index.store(self.index.load(Ordering::SeqCst), Ordering::SeqCst);
+            Ok(cloned.into())
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 }
 
+// F-02 Fix: Track BayzipClassFactory lifetime with OBJECT_COUNT
+// to prevent premature DLL unloads and Use-After-Free crashes in Windows Explorer.
 #[implement(IClassFactory)]
 pub struct BayzipClassFactory;
+
+impl BayzipClassFactory {
+    pub fn new() -> Self {
+        OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for BayzipClassFactory {
+    fn drop(&mut self) {
+        OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 impl IClassFactory_Impl for BayzipClassFactory_Impl {
     fn CreateInstance(
@@ -344,24 +411,35 @@ impl IClassFactory_Impl for BayzipClassFactory_Impl {
         riid: *const GUID,
         ppvobject: *mut *mut std::ffi::c_void,
     ) -> windows::core::Result<()> {
-        if punkouter.is_some() {
-            return Err(windows::core::Error::from_hresult(windows::Win32::Foundation::CLASS_E_NOAGGREGATION));
-        }
-        if ppvobject.is_null() {
-            return Err(windows::core::Error::from_hresult(E_POINTER));
-        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if ppvobject.is_null() {
+                return Err(windows::core::Error::from_hresult(E_POINTER));
+            }
+            unsafe { *ppvobject = std::ptr::null_mut(); }
 
-        let command: IExplorerCommand = BayzipExplorerCommand::new(CommandAction::Root).into();
-        unsafe { command.query(riid, ppvobject).ok() }
+            if punkouter.is_some() {
+                return Err(windows::core::Error::from_hresult(CLASS_E_NOAGGREGATION));
+            }
+            if riid.is_null() {
+                return Err(windows::core::Error::from_hresult(E_POINTER));
+            }
+
+            let command: IExplorerCommand = BayzipExplorerCommand::new(CommandAction::Root).into();
+            unsafe { command.query(riid, ppvobject).ok() }
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 
     fn LockServer(&self, flock: BOOL) -> windows::core::Result<()> {
-        if flock.as_bool() {
-            OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
-        } else {
-            OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
-        }
-        Ok(())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if flock.as_bool() {
+                OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+            } else {
+                OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+            }
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
     }
 }
 
@@ -371,24 +449,34 @@ pub unsafe extern "system" fn DllGetClassObject(
     riid: *const GUID,
     ppv: *mut *mut std::ffi::c_void,
 ) -> HRESULT {
-    if ppv.is_null() {
-        return E_POINTER;
-    }
-    *ppv = std::ptr::null_mut();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+        unsafe { *ppv = std::ptr::null_mut(); }
 
-    if unsafe { *rclsid } != CLSID_BAYZIP_SHELL {
-        return CLASS_E_CLASSNOTAVAILABLE;
-    }
+        if rclsid.is_null() || riid.is_null() {
+            return E_POINTER;
+        }
 
-    let factory: IClassFactory = BayzipClassFactory.into();
-    unsafe { factory.query(riid, ppv).into() }
+        if unsafe { *rclsid } != CLSID_BAYZIP_SHELL {
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+
+        let factory: IClassFactory = BayzipClassFactory::new().into();
+        unsafe { factory.query(riid, ppv).into() }
+    }))
+    .unwrap_or(E_FAIL)
 }
 
 #[no_mangle]
 pub unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
-    if OBJECT_COUNT.load(Ordering::SeqCst) == 0 {
-        S_OK
-    } else {
-        S_FALSE
-    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if OBJECT_COUNT.load(Ordering::SeqCst) == 0 {
+            S_OK
+        } else {
+            S_FALSE
+        }
+    }))
+    .unwrap_or(S_FALSE)
 }

@@ -182,6 +182,21 @@ pub fn safe_atomic_rename(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to)
 }
 
+/// Securely resolve Windows System32 executables to eliminate PATH hijacking risks (V-SEC-07).
+pub fn get_system32_exe(exe_name: &str) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let system_root = std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let candidate = system_root.join("System32").join(exe_name);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    PathBuf::from(exe_name)
+}
+
 pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo, String> {
     let p = Path::new(path);
     if !p.exists() {

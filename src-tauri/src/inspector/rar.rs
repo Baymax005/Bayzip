@@ -6,6 +6,7 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 
 use crate::types::ArchiveEntryItem;
+use super::get_system32_exe;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -15,7 +16,7 @@ pub fn list_rar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut total_uncompressed = 0u64;
 
     // Try verbose list first (-tvf) to extract accurate entry sizes and total uncompressed bytes
-    let mut cmd_verbose = Command::new("tar.exe");
+    let mut cmd_verbose = Command::new(get_system32_exe("tar.exe"));
     cmd_verbose.args(["-tvf", &p.to_string_lossy()]);
     #[cfg(target_os = "windows")]
     cmd_verbose.creation_flags(CREATE_NO_WINDOW);
@@ -113,7 +114,7 @@ pub fn list_rar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
 
     // Fallback to standard -tf if verbose parsing produced no entries
     if items.is_empty() {
-        let mut cmd = Command::new("tar.exe");
+        let mut cmd = Command::new(get_system32_exe("tar.exe"));
         cmd.args(["-tf", &p.to_string_lossy()]);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -149,7 +150,7 @@ pub fn preview_rar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>
         return Err("Invalid entry name for archive preview".into());
     }
 
-    let mut cmd = Command::new("tar.exe");
+    let mut cmd = Command::new(get_system32_exe("tar.exe"));
     // Use -- delimiter before entry_name to strictly prevent CLI flag injection
     cmd.args(["-xf", &path.to_string_lossy(), "-O", "--", clean_name]);
     #[cfg(target_os = "windows")]

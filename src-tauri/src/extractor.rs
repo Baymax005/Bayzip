@@ -1112,7 +1112,7 @@ pub fn extract_with_system_tar(
     let _priority_guard = ScopedPriorityGuard::new();
 
     // Pre-inspect archive entries with tar.exe -tf to strictly prevent Zip-Slip / path traversal before writing to disk
-    let mut check_cmd = Command::new("tar.exe");
+    let mut check_cmd = Command::new(crate::inspector::get_system32_exe("tar.exe"));
     check_cmd.args(["-tf", &archive_path.to_string_lossy()]);
     #[cfg(target_os = "windows")]
     check_cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1159,7 +1159,7 @@ pub fn extract_with_system_tar(
         total_expected_bytes = uncompressed_size;
     }
 
-    let mut cmd = Command::new("tar.exe");
+    let mut cmd = Command::new(crate::inspector::get_system32_exe("tar.exe"));
     let mut args: Vec<String> = vec![
         "-xvf".into(),
         archive_path.to_string_lossy().to_string(),
@@ -1173,7 +1173,7 @@ pub fn extract_with_system_tar(
     }
     cmd.args(&args);
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | crate::priority::BELOW_NORMAL_PRIORITY_CLASS);
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::piped());
 
@@ -1547,8 +1547,8 @@ pub fn headless_extract_here(archive_path: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let mut refresh_cmd = Command::new("cmd");
-        refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+        let mut refresh_cmd = Command::new(crate::inspector::get_system32_exe("ie4uinit.exe"));
+        refresh_cmd.arg("-show");
         refresh_cmd.creation_flags(CREATE_NO_WINDOW);
         let _ = refresh_cmd.output();
     }
@@ -1590,8 +1590,8 @@ pub fn headless_extract_to_subfolder(archive_path: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let mut refresh_cmd = Command::new("cmd");
-        refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+        let mut refresh_cmd = Command::new(crate::inspector::get_system32_exe("ie4uinit.exe"));
+        refresh_cmd.arg("-show");
         refresh_cmd.creation_flags(CREATE_NO_WINDOW);
         let _ = refresh_cmd.output();
     }

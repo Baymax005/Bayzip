@@ -517,7 +517,7 @@ pub fn test_with_system_tar(
     archive_path: &Path,
     app: Option<&AppHandle>,
 ) -> Result<(usize, u64, Vec<TestArchiveErrorItem>), String> {
-    let mut cmd = std::process::Command::new("tar");
+    let mut cmd = std::process::Command::new(crate::inspector::get_system32_exe("tar.exe"));
     cmd.arg("-tf").arg(archive_path);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -536,6 +536,7 @@ pub fn test_with_system_tar(
         for line in reader.lines() {
             if is_test_cancelled() {
                 let _ = child.kill();
+                let _ = child.wait();
                 return Err("Testing cancelled by user".to_string());
             }
             if let Ok(l) = line {

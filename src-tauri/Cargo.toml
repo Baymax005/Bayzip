@@ -1,6 +1,6 @@
 [package]
 name = "bayzip"
-version = "2.4.2"
+version = "2.4.3"
 description = "Bayzip - High-Performance Hardware-Accelerated Archiver"
 authors = ["Muhammad Ali (Baymax)"]
 edition = "2021"
@@ -41,6 +41,7 @@ sevenz-rust2 = { version = "0.23.0", features = ["compress", "aes256"] }
 brotli = "9.0"
 lz4_flex = "0.11"
 base64 = "0.22"
+zeroize = { version = "1", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
@@ -49,6 +50,7 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
 ] }
 
 
@@ -60,5 +62,5 @@ opt-level = 3
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+panic = "unwind"
 strip = true

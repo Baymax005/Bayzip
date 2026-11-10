@@ -233,8 +233,8 @@ pub fn headless_quick_compress_targets(format: &str, targets: &[&str]) -> Result
 
     #[cfg(target_os = "windows")]
     {
-        let mut refresh_cmd = Command::new("cmd");
-        refresh_cmd.args(["/C", "ie4uinit.exe -show"]);
+        let mut refresh_cmd = Command::new(crate::inspector::get_system32_exe("ie4uinit.exe"));
+        refresh_cmd.arg("-show");
         refresh_cmd.creation_flags(CREATE_NO_WINDOW);
         let _ = refresh_cmd.output();
     }

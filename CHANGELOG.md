@@ -2,6 +2,28 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.3] - 2026-11-11
+
+### 🛡️ Phase 1 Security & Explorer COM Hardening, Zeroization & Binary Anchoring
+- **Windows Explorer COM Shell Extension Memory Safety (`crates/bayzip_shell/src/lib.rs`)**:
+  - **Eliminated Uninitialized Memory Drop (F-01)**: Fixed `IEnumExplorerCommand_Impl::Next` to use `std::ptr::write` for raw out-pointer initialization, preventing fatal `0xC0000005` Access Violation crashes when `explorer.exe` queries context menu items.
+  - **COM Object Lifetime & Use-After-Free Prevention (F-02)**: Added strict `OBJECT_COUNT` tracking to `BayzipClassFactory` (new & Drop), ensuring `DllCanUnloadNow()` never returns `S_OK` while Explorer holds a reference to `IClassFactory`.
+  - **Explorer Panic Safety Wrapper (F-03)**: Wrapped all COM entry point callbacks and DLL functions (`DllGetClassObject`, `DllCanUnloadNow`, `IExplorerCommand`, `IEnumExplorerCommand`, `IClassFactory`) with `std::panic::catch_unwind`, ensuring any unexpected Rust panic returns `E_FAIL` rather than aborting `explorer.exe`.
+  - **Defensive Out-Pointer & Null Guarding (F-04)**: Ensured `*ppvobject` and `*ppv` are explicitly zeroed upon entry, and verified non-null interface pointers.
+- **Cryptographic Memory Zeroization (`src-tauri/src/crypto.rs`, `Cargo.toml`)**:
+  - Integrated `zeroize` crate to zero out master encryption keys, derived keys, and intermediate SHA-256 digest states upon completion in `derive_bay_key`, `ChunkedAesWriter`, and `ChunkedAesReader`.
+  - Added key zeroization to instant Table of Contents encryption and decryption routines in `compressor/bay.rs` and `inspector/bay.rs`.
+- **System32 Binary Anchoring & PATH Hijacking Elimination (`src-tauri/src/inspector/mod.rs`, `extractor.rs`, `rar.rs`, `registry.rs`)**:
+  - Added `get_system32_exe` helper anchoring system binary lookups to `%SystemRoot%\System32\` for `tar.exe`, `powershell.exe`, and `ie4uinit.exe`.
+  - Replaced unanchored shell subshells (`cmd /C ie4uinit.exe -show`) with direct invocations of `%SystemRoot%\System32\ie4uinit.exe -show`.
+- **Workspace Profile & Cargo Panic Strategy (`src-tauri/Cargo.toml`)**:
+  - Changed workspace release profile from `panic = "abort"` to `panic = "unwind"`, enabling active unwinding support across the workspace so that `std::panic::catch_unwind` wrappers in `bayzip_shell.dll` are fully operational in release builds without aborting `explorer.exe`.
+  - Added `"Win32_System_Threading"` to `windows` dependencies in the main `Cargo.toml`.
+- **Empty Files Panic Guard (`src-tauri/src/compressor/bay.rs`)**:
+  - Added empty slice validation in `compress_bay` to prevent out-of-bounds panics on empty file lists.
+- **Process Cleanup in Archive Tester (`src-tauri/src/tester.rs`)**:
+  - Added `child.wait()` on cancellation in `test_with_system_tar` to prevent zombie process leaks.
+
 ## [v2.4.2] - 2026-11-10
 
 ### 🪟 Standalone Mini Extract Window, Unblurred Titlebar & Draggable Password Modal

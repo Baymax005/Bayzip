@@ -5,11 +5,12 @@ use aes_gcm::{
 };
 use rand::RngCore;
 use sha2::{Sha256, Digest};
+use zeroize::Zeroize;
 
 pub const BAY_CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4 MB plaintext chunk
 pub const BAY_ENC_V3_MAGIC: &[u8; 8] = b"BAYENC\x03\x00";
 
-/// PBKDF2-like key derivation using 10,000 rounds of SHA-256
+/// PBKDF2-like key derivation using 10,000 rounds of SHA-256 with memory zeroization
 pub fn derive_bay_key(password: &str, salt: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(password.as_bytes());
@@ -18,13 +19,14 @@ pub fn derive_bay_key(password: &str, salt: &[u8]) -> [u8; 32] {
 
     for _ in 1..10_000 {
         let mut h = Sha256::new();
-        h.update(&current);
+        h.update(current);
         h.update(salt);
         current = h.finalize();
     }
 
     let mut key = [0u8; 32];
     key.copy_from_slice(&current);
+    current.zeroize();
     key
 }
 
@@ -52,9 +54,10 @@ impl<W: Write> ChunkedAesWriter<W> {
         inner.write_all(&salt)?;
         inner.write_all(&base_nonce)?;
 
-        let key_bytes = derive_bay_key(password, &salt);
+        let mut key_bytes = derive_bay_key(password, &salt);
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
+        key_bytes.zeroize();
 
         Ok(Self {
             inner,
@@ -77,14 +80,14 @@ impl<W: Write> ChunkedAesWriter<W> {
 
         // In-place encryption: encrypts the payload in self.buffer and appends the 16-byte tag
         self.cipher.encrypt_in_place(nonce, b"", &mut self.buffer)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("AES-256-GCM encryption error: {}", e)))?;
+            .map_err(|e| std::io::Error::other(format!("AES-256-GCM encryption error: {}", e)))?;
 
         let chunk_len = self.buffer.len() as u32;
         self.inner.write_all(&chunk_len.to_le_bytes())?;
         self.inner.write_all(&self.buffer)?;
 
         self.chunk_index = self.chunk_index.checked_add(1)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Archive chunk count exceeded limit"))?;
+            .ok_or_else(|| std::io::Error::other("Archive chunk count exceeded limit"))?;
         self.buffer.clear();
         Ok(())
     }
@@ -143,9 +146,10 @@ impl<R: Read> ChunkedAesReader<R> {
         inner.read_exact(&mut base_nonce)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Failed to read base nonce: {}", e)))?;
 
-        let key_bytes = derive_bay_key(password, &salt);
+        let mut key_bytes = derive_bay_key(password, &salt);
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
+        key_bytes.zeroize();
 
         Ok(Self {
             inner,
@@ -209,7 +213,7 @@ impl<R: Read> ChunkedAesReader<R> {
 
         self.plain_offset = 0;
         self.chunk_index = self.chunk_index.checked_add(1)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Archive chunk count exceeded limit"))?;
+            .ok_or_else(|| std::io::Error::other("Archive chunk count exceeded limit"))?;
 
         Ok(true)
     }

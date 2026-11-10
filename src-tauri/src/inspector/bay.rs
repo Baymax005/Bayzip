@@ -5,6 +5,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce, Key,
 };
+use zeroize::Zeroize;
 
 use crate::crypto::{derive_bay_key, ChunkedAesReader};
 use crate::types::ArchiveEntryItem;
@@ -232,9 +233,10 @@ pub fn read_bay_trailer_stream<R: Read + Seek>(
         reader.read_exact(&mut enc_bytes)
             .map_err(|e| format!("Failed to read encrypted BAYETOC payload: {}", e))?;
 
-        let key_bytes = derive_bay_key(pwd, salt);
+        let mut key_bytes = derive_bay_key(pwd, salt);
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
+        key_bytes.zeroize();
         let nonce = Nonce::from_slice(nonce_bytes);
 
         let decrypted = cipher.decrypt(nonce, enc_bytes.as_ref())
