@@ -2,6 +2,24 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.2] - 2026-11-10
+
+### 🪟 Standalone Mini Extract Window, Unblurred Titlebar & Draggable Password Modal
+- **Standalone Context Menu Mini Extract Window (`src/components/MiniExtractWindow.tsx`)**:
+  - Registered frameless mini window (`window=mini-extract`, `index.html?window=mini-extract`, 480x260) tailored for context menu commands (`--extract-here`, `--extract-to-folder`, `--mini-extract`).
+  - Completely eliminates the need to open the heavy 800x700 main app window when quickly unpacking files from Windows Explorer.
+  - If the archive is encrypted, prompts for the decryption password directly within the mini dialog with auto-focus, Enter key submission, and show/hide password toggle.
+  - Streams real-time extraction telemetry: live animated gradient progress bar, percentage, throughput speed (MB/s), ETA countdown, current unpack path, and processed bytes.
+  - Automatically reveals the output folder in Windows Explorer upon completion and auto-closes gracefully.
+  - Responsive Cancel button with safe background process abortion (`cancel_extraction`).
+- **Unblurred & Fully Interactive Navigation Titlebar (`src/components/Titlebar.tsx`)**:
+  - Elevated Titlebar with `relative z-50`, ensuring window dragging (`data-tauri-drag-region`), window minimization, maximization, and close controls remain 100% interactive and never blurred or blocked by modals.
+- **Protected & Draggable Password Dialog (`src/components/PasswordModal.tsx`, `App.tsx`)**:
+  - Scoped inside canvas bounds with zero backdrop blur so background content and navigation bar stay clear.
+  - Removed accidental backdrop click dismissal so misclicking never discards entered passwords or closes the prompt; dismissal is strictly controlled via explicit `Cancel` button or `Escape` key.
+  - Integrated `useDraggableModal` with grabbable header, `Draggable` badge, and `Center` reset button.
+  - Added archive filename tag and inline error feedback for incorrect passwords.
+
 ## [v2.4.1] - 2026-11-10
 
 ### 🪟 Draggable Modals, Standalone Desktop Progress HUD & Smooth Minimization
