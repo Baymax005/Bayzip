@@ -66,12 +66,14 @@ export function ProgressWindow() {
 
   // Setup Tauri event listeners
   useEffect(() => {
+    let isMounted = true;
     let unlistenCompress: (() => void) | undefined;
     let unlistenExtract: (() => void) | undefined;
     let unlistenTest: (() => void) | undefined;
 
     const setupListeners = async () => {
-      unlistenCompress = await listen<CompressProgress>("compress_progress", (event) => {
+      const uCompress = await listen<CompressProgress>("compress_progress", (event) => {
+        if (!isMounted) return;
         setStreamType("compress");
         setPercent(event.payload.percent);
         setCurrentFile(event.payload.current_file);
@@ -82,8 +84,14 @@ export function ProgressWindow() {
           if (name) setTargetName(name);
         }
       });
+      if (!isMounted) {
+        uCompress();
+      } else {
+        unlistenCompress = uCompress;
+      }
 
-      unlistenExtract = await listen<ExtractProgress>("extract_progress", (event) => {
+      const uExtract = await listen<ExtractProgress>("extract_progress", (event) => {
+        if (!isMounted) return;
         setStreamType("extract");
         setPercent(event.payload.percent);
         setCurrentFile(event.payload.current_file);
@@ -96,19 +104,31 @@ export function ProgressWindow() {
           if (name) setTargetName(name);
         }
       });
+      if (!isMounted) {
+        uExtract();
+      } else {
+        unlistenExtract = uExtract;
+      }
 
-      unlistenTest = await listen<TestArchiveProgress>("test_progress", (event) => {
+      const uTest = await listen<TestArchiveProgress>("test_progress", (event) => {
+        if (!isMounted) return;
         setStreamType("test");
         setPercent(event.payload.percent);
         setCurrentFile(event.payload.current_file);
         setBytesProcessed(event.payload.bytes_tested);
         setTotalBytes(event.payload.total_bytes);
       });
+      if (!isMounted) {
+        uTest();
+      } else {
+        unlistenTest = uTest;
+      }
     };
 
     setupListeners();
 
     return () => {
+      isMounted = false;
       if (unlistenCompress) unlistenCompress();
       if (unlistenExtract) unlistenExtract();
       if (unlistenTest) unlistenTest();

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 import { BayzipLogo } from "./BayzipLogo";
 import { SystemSpecs, CompressProgress } from "../types";
 import { formatBytes } from "../utils/format";
@@ -84,6 +84,12 @@ export function CompressModal({
   }, [selectedFormat, formatAlgorithms]);
 
   const totalCores = specs?.cpu_cores || 8;
+  const isRamGuarded =
+    sliderValue === 100 &&
+    selectedFormat === ".bay" &&
+    selectedAlgorithm !== "LZ4 (Fastest)" &&
+    totalCores > 8;
+
   const { threads, estimatedRam, presetName } = useMemo(() => {
     let t = 1;
     let ram = 64;
@@ -111,8 +117,10 @@ export function CompressModal({
         name = "High";
         break;
       case 100:
-        t = totalCores;
-        ram = 512;
+        t = (selectedFormat === ".bay" && selectedAlgorithm !== "LZ4 (Fastest)")
+          ? Math.min(totalCores, 8)
+          : totalCores;
+        ram = selectedFormat === ".bay" ? 256 : 512;
         name = "Ultra";
         break;
       default:
@@ -122,7 +130,19 @@ export function CompressModal({
     }
 
     return { threads: t, estimatedRam: ram, presetName: name };
-  }, [sliderValue, totalCores]);
+  }, [sliderValue, totalCores, selectedFormat, selectedAlgorithm]);
+
+  // Keyboard shortcut: Escape to dismiss configuration modal
+  useEffect(() => {
+    if (!isOpen || isCompressing) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, isCompressing, onClose]);
 
   // Live throughput calculations
   const { speedText, etaText } = useDynamicThroughput({
@@ -331,6 +351,9 @@ export function CompressModal({
                 type="text"
                 value={customArchiveName}
                 onChange={(e) => setCustomArchiveName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onStartCompress();
+                }}
                 placeholder="Archive name..."
                 className="flex-1 bg-[#252529] hover:bg-[#2E2E34] focus:bg-[#252529] border border-[#323238] focus:border-[#38BDF8] rounded-[4px] px-2.5 py-1.5 text-xs text-[#F4F4F6] placeholder-[#6B7280] outline-none font-sans transition-colors"
               />
@@ -399,6 +422,9 @@ export function CompressModal({
                     type={showCompressPassword ? "text" : "password"}
                     value={compressPassword}
                     onChange={(e) => setCompressPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") onStartCompress();
+                    }}
                     placeholder="Enter encryption password..."
                     className="w-full bg-[#252529] border border-[#323238] focus:border-[#38BDF8] rounded-[4px] px-2.5 py-1.5 pr-8 text-xs text-[#F4F4F6] placeholder-[#6B7280] outline-none font-mono"
                     autoFocus
@@ -422,7 +448,7 @@ export function CompressModal({
                   Compression & Hardware: <span className="text-[#38BDF8]">{presetName}</span>
                 </span>
                 <span className="font-mono tabular-nums text-[10px] px-2 py-0.5 rounded-[4px] bg-[#252529] text-[#9CA3AF] border border-[#323238]">
-                  {threads}/{totalCores} Threads • ~{estimatedRam} MB RAM
+                  {threads}/{totalCores} Threads{isRamGuarded ? " (RAM Guard)" : ""} • ~{estimatedRam} MB RAM
                 </span>
               </div>
 
@@ -488,15 +514,17 @@ export function CompressModal({
             <div className="flex items-center justify-end space-x-2 pt-2 border-t border-[#2E2E34]">
               <button
                 type="button"
+                disabled={isCompressing}
                 onClick={onClose}
-                className="px-3.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] font-medium text-xs transition-colors cursor-pointer"
+                className="px-3.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] font-medium text-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
               <button
                 type="button"
+                disabled={isCompressing}
                 onClick={onStartCompress}
-                className="px-4 py-1.5 rounded-[4px] bg-[#38BDF8] hover:bg-[#7DD3FC] text-[#0F172A] font-semibold text-xs shadow-md shadow-sky-500/20 active:scale-95 transition-all cursor-pointer flex items-center space-x-1.5"
+                className="px-4 py-1.5 rounded-[4px] bg-[#38BDF8] hover:bg-[#7DD3FC] text-[#0F172A] font-semibold text-xs shadow-md shadow-sky-500/20 active:scale-95 transition-all cursor-pointer flex items-center space-x-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} className="w-3.5 h-3.5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />

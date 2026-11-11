@@ -79,10 +79,12 @@ export function MiniExtractWindow() {
 
   // Setup progress listener
   useEffect(() => {
+    let isMounted = true;
     let unlisten: (() => void) | undefined;
 
     const setupListener = async () => {
-      unlisten = await listen<ExtractProgress>("extract_progress", (event) => {
+      const u = await listen<ExtractProgress>("extract_progress", (event) => {
+        if (!isMounted) return;
         setPercent(event.payload.percent);
         setCurrentFile(event.payload.current_file || "Extracting...");
         setBytesExtracted(event.payload.bytes_extracted);
@@ -90,11 +92,17 @@ export function MiniExtractWindow() {
           setTotalBytes(Math.round((event.payload.bytes_extracted / event.payload.percent) * 100));
         }
       });
+      if (!isMounted) {
+        u();
+      } else {
+        unlisten = u;
+      }
     };
 
     setupListener();
 
     return () => {
+      isMounted = false;
       if (unlisten) unlisten();
     };
   }, []);

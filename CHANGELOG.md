@@ -2,6 +2,30 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.5] - 2026-11-11
+
+### 🛡️ Phase 3 Frontend Reliability, UI Defense & Error Handling
+- **Dedicated Fluent Dark Error Modal & Universal Exception Handling (`src/components/ErrorModal.tsx`, `App.tsx`) (CRITICAL-06)**:
+  - Created `<ErrorModal>` adhering to Windows 11 Fluent dark-mode aesthetics, featuring diagnostic details box, one-click copy to clipboard, and keyboard Escape dismissal.
+  - Replaced discarded `setCompressError` state in `App.tsx` with unified `globalError` handling.
+  - Added user-facing error reporting for missing encryption passwords, compression execution failures, extraction errors, and verification errors, completely eliminating silent error swallowing.
+- **Dedicated Failure Result Cards (`src/components/ResultModals.tsx`) (CRITICAL-08)**:
+  - Updated `ResultModals` to check `compressResult.success` and `extractResult.success`, rendering dedicated error cards with red badges and error details on backend failure instead of misleading green checkmarks.
+- **Top Toolbar State Shielding & Modal Click-Through Defense (`src/App.tsx`) (CRITICAL-07)**:
+  - Introduced comprehensive `isAnyModalOpen` flag guarding against user interactions while modals (`CompressModal`, `ExtractModal`, `AboutModal`, `SettingsModal`, `PasswordModal`, `ErrorModal`, `ResultModals`) or active tasks (`isCompressing`, `isExtracting`, `testStatus === "testing"`) are active.
+  - Disabled all top toolbar buttons (`Open Archive`, `Add Files`, `Add Folder`, `Compress...`, `Extract...`, `Test`, `Clear`, `About`, `Settings`) with muted styling (`disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none`) when any modal or task is open.
+- **Re-Entrancy & Action Button Locking (`src/components/CompressModal.tsx`, `ExtractModal.tsx`, `App.tsx`) (HIGH-11)**:
+  - Locked "Compress Now" and "Extract Now" action buttons with `disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none` while compression or extraction is active.
+  - Added strict ref guard checks (`isCompressingRef`, `isExtractingRef`, `isTestingRef`) across `handleCompress`, `handleExtract`, `handleSelectFiles`, `handleSelectFolder`, `handleSelectArchive`, `handleClearSelection`, and `handleInPlaceTest` to prevent race conditions from rapid double-clicking.
+- **Hardware Thread Cap & Memory Guard Indicator (`src/components/CompressModal.tsx`) (HIGH-07)**:
+  - Synchronized frontend hardware calculation with the backend Zstandard Level 19 memory cap (8 threads max on 100% Ultra for `.bay`).
+  - Added a visual `(RAM Guard)` indicator in the compression hardware badge when running `.bay` Ultra on multi-core systems (>8 cores).
+- **Asynchronous Event Listener Leak Prevention (`src/components/ProgressWindow.tsx`, `MiniExtractWindow.tsx`) (HIGH-12)**:
+  - Implemented `isMounted` guard patterns for all `listen(...)` promises in `ProgressWindow` and `MiniExtractWindow`, preventing memory leaks when windows quickly unmount before listener promises resolve.
+- **Enhanced Keyboard Navigation (`src/components/CompressModal.tsx`, `ExtractModal.tsx`)**:
+  - Added `Escape` key handling to dismiss configuration dialogs when not executing.
+  - Added `Enter` key submission on text inputs (archive name, password, destination path) to immediately launch operations.
+
 ## [v2.4.4] - 2026-11-11
 
 ### ⚡ Phase 2 Concurrency, Cancellation Hardening & Engine Reliability

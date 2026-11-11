@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { ExtractProgress } from "../types";
 import { formatBytes } from "../utils/format";
 import { useDynamicThroughput } from "../hooks/useDynamicThroughput";
@@ -60,6 +61,18 @@ export function ExtractModal({
 
   const percent = extractProgress?.percent ?? 0;
   const targetArchiveTitle = archiveName || "Archive";
+
+  // Keyboard shortcut: Escape to dismiss configuration modal
+  useEffect(() => {
+    if (!isOpen || isExtracting) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, isExtracting, onClose]);
 
   if (!isOpen) return null;
 
@@ -262,6 +275,9 @@ export function ExtractModal({
                   type="text"
                   value={extractDest}
                   onChange={(e) => setExtractDest(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onStartExtract();
+                  }}
                   placeholder="Select destination folder..."
                   className="flex-1 bg-[#252529] hover:bg-[#2E2E34] focus:bg-[#252529] border border-[#323238] focus:border-[#38BDF8] rounded-[4px] px-2.5 py-1.5 text-xs text-[#F4F4F6] placeholder-[#6B7280] outline-none font-mono transition-colors"
                 />
@@ -302,15 +318,17 @@ export function ExtractModal({
             <div className="flex items-center justify-end space-x-2 pt-2 border-t border-[#2E2E34]">
               <button
                 type="button"
+                disabled={isExtracting}
                 onClick={onClose}
-                className="px-3.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] font-medium text-xs transition-colors cursor-pointer"
+                className="px-3.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] font-medium text-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
               <button
                 type="button"
+                disabled={isExtracting}
                 onClick={onStartExtract}
-                className="px-4 py-1.5 rounded-[4px] bg-[#38BDF8] hover:bg-[#7DD3FC] text-[#0F172A] font-semibold text-xs shadow-md shadow-sky-500/20 active:scale-95 transition-all cursor-pointer flex items-center space-x-1.5"
+                className="px-4 py-1.5 rounded-[4px] bg-[#38BDF8] hover:bg-[#7DD3FC] text-[#0F172A] font-semibold text-xs shadow-md shadow-sky-500/20 active:scale-95 transition-all cursor-pointer flex items-center space-x-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} className="w-3.5 h-3.5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />

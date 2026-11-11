@@ -20,6 +20,7 @@ import { UnifiedDropHub } from "./components/UnifiedDropHub";
 import { ArchiveTreeInspector, normalizeArchiveEntryPath, StreamProgressTelemetry } from "./components/ArchiveTreeInspector";
 import { FilePreviewModal } from "./components/FilePreviewModal";
 import { AbortConfirmationModal } from "./components/AbortConfirmationModal";
+import { ErrorModal } from "./components/ErrorModal";
 
 import {
   SystemSpecs,
@@ -81,7 +82,11 @@ export default function App() {
   const [compressProgress, setCompressProgress] = useState<CompressProgress | null>(null);
   const [isProgressMinimized, setIsProgressMinimized] = useState(false);
   const [compressResult, setCompressResult] = useState<CompressResult | null>(null);
-  const [, setCompressError] = useState<string | null>(null);
+  const [globalError, setGlobalError] = useState<{
+    title: string;
+    message: string;
+    details?: string;
+  } | null>(null);
   const [, setActiveCompressConfig] = useState<{
     format: string;
     algorithm: string;
@@ -128,6 +133,22 @@ export default function App() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewTargetDisplayPath, setPreviewTargetDisplayPath] = useState<string>("");
+
+  // Global modal and in-flight operation defense flag
+  const isAnyModalOpen =
+    isCompressModalOpen ||
+    isExtractModalOpen ||
+    isAboutOpen ||
+    isSettingsOpen ||
+    isPasswordPromptOpen ||
+    Boolean(globalError) ||
+    Boolean(compressResult) ||
+    Boolean(extractResult) ||
+    isPreviewOpen ||
+    isConfirmCloseOpen ||
+    isCompressing ||
+    isExtracting ||
+    testStatus === "testing";
 
   // Registry Sync State
   const [isSyncingRegistry, setIsSyncingRegistry] = useState(false);
@@ -747,6 +768,7 @@ export default function App() {
 
   // Toolbar Actions
   const handleSelectFiles = async () => {
+    if (isCompressingRef.current || isExtractingRef.current || isTestingRef.current) return;
     try {
       const selected = await open({
         multiple: true,
@@ -769,6 +791,7 @@ export default function App() {
   };
 
   const handleSelectFolder = async () => {
+    if (isCompressingRef.current || isExtractingRef.current || isTestingRef.current) return;
     try {
       const selected = await open({
         directory: true,
@@ -787,7 +810,7 @@ export default function App() {
   };
 
   const handleSelectArchive = async () => {
-    if (isExtracting) return;
+    if (isExtractingRef.current || isCompressingRef.current || isTestingRef.current) return;
     try {
       const selected = await open({
         multiple: false,
@@ -809,6 +832,7 @@ export default function App() {
   };
 
   const handleClearSelection = () => {
+    if (isCompressingRef.current || isExtractingRef.current || isTestingRef.current) return;
     setSelectedFiles([]);
     setSelectedArchive(null);
     setArchiveInfo(null);
@@ -825,7 +849,7 @@ export default function App() {
 
   // In-Place Test Action
   const handleInPlaceTest = async () => {
-    if (isTestingRef.current) return;
+    if (isTestingRef.current || isCompressingRef.current || isExtractingRef.current) return;
 
     let targetArchive = selectedArchive;
 
@@ -908,13 +932,17 @@ export default function App() {
 
   // Compression Execution
   const handleCompress = async () => {
-    if (selectedFiles.length === 0) return;
+    if (isCompressingRef.current || isExtractingRef.current || isTestingRef.current || selectedFiles.length === 0) return;
 
     if (selectedEncryption !== "none" && !compressPassword.trim()) {
-      setCompressError("Please enter an archive password to enable encryption.");
+      setGlobalError({
+        title: "Encryption Password Required",
+        message: "Please enter an archive password to enable encryption.",
+      });
       return;
     }
 
+    isCompressingRef.current = true;
     const targetArchiveName =
       customArchiveName.trim() ||
       (selectedFiles.length === 1 ? selectedFiles[0].split(/[/\\]/).pop() || "archive" : "archive");
@@ -929,7 +957,6 @@ export default function App() {
     setIsCompressModalOpen(false);
     setIsProgressMinimized(false);
     setIsCancellingCompress(false);
-    setCompressError(null);
     setCompressProgress({
       percent: 0,
       current_file: "Initializing compression...",
@@ -960,13 +987,20 @@ export default function App() {
               excluded_paths: excludedCompressPaths.size > 0 ? Array.from(excludedCompressPaths) : undefined,
             },
           });
+          if (!res.success) {
+            setGlobalError({
+              title: "Compression Failed",
+              message: res.error || `Failed to compress ${file}`,
+            });
+            break;
+          }
           totalOrig += res.original_size;
           totalComp += res.compressed_size;
           totalElapsed += res.elapsed_ms;
           lastRes = res;
         }
 
-        if (lastRes) {
+        if (lastRes && lastRes.success) {
           setCompressResult({
             ...lastRes,
             original_size: totalOrig,
@@ -990,10 +1024,22 @@ export default function App() {
           },
         });
         setCompressResult(res);
+        if (!res.success) {
+          setGlobalError({
+            title: "Compression Failed",
+            message: res.error || "An unexpected error occurred during compression.",
+          });
+        }
       }
     } catch (err) {
       console.error("Compression execution error:", err);
+      setGlobalError({
+        title: "Compression Failed",
+        message: "Failed to create archive.",
+        details: String(err),
+      });
     } finally {
+      isCompressingRef.current = false;
       setIsCompressing(false);
       setIsCompressModalOpen(false);
       setIsCancellingCompress(false);
@@ -1011,7 +1057,7 @@ export default function App() {
     openFolderOnExtract?: boolean;
     password?: string;
   }) => {
-    if (!selectedArchive) return;
+    if (isExtractingRef.current || isCompressingRef.current || isTestingRef.current || !selectedArchive) return;
 
     const effectivePassword = options?.password !== undefined ? options.password : extractPassword;
     const effectiveDest = options?.destination || extractDest;
@@ -1024,6 +1070,7 @@ export default function App() {
       return;
     }
 
+    isExtractingRef.current = true;
     setIsExtracting(true);
     setIsExtractModalOpen(false);
     setIsProgressMinimized(false);
@@ -1056,16 +1103,29 @@ export default function App() {
       setExtractResult(res);
       setIsPasswordPromptOpen(false);
 
-      if (effectiveOpenFolder && res.output_directory) {
+      if (!res.success) {
+        setGlobalError({
+          title: "Extraction Failed",
+          message: res.error || "An unexpected error occurred during extraction.",
+        });
+      } else if (effectiveOpenFolder && res.output_directory) {
         revealItemInDir(res.output_directory).catch(() => {});
       }
     } catch (err) {
       console.error("Extraction execution error:", err);
-      setExtractError(String(err));
-      if (String(err).toLowerCase().includes("password")) {
+      const errStr = String(err);
+      setExtractError(errStr);
+      if (errStr.toLowerCase().includes("password")) {
         setIsPasswordPromptOpen(true);
+      } else {
+        setGlobalError({
+          title: "Extraction Failed",
+          message: "Failed to extract archive contents.",
+          details: errStr,
+        });
       }
     } finally {
+      isExtractingRef.current = false;
       setIsExtracting(false);
       setIsExtractModalOpen(false);
       setIsCancellingExtract(false);
@@ -1129,8 +1189,9 @@ export default function App() {
         <div className="flex items-center space-x-1.5">
           <button
             type="button"
+            disabled={isAnyModalOpen}
             onClick={handleSelectArchive}
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             title="Open existing archive to inspect & extract (Ctrl+O)"
           >
             <span className="text-[#38BDF8]">📂</span>
@@ -1139,8 +1200,9 @@ export default function App() {
 
           <button
             type="button"
+            disabled={isAnyModalOpen}
             onClick={handleSelectFiles}
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             title="Add files to compress (Ctrl+N)"
           >
             <span className="text-slate-400">➕</span>
@@ -1149,8 +1211,9 @@ export default function App() {
 
           <button
             type="button"
+            disabled={isAnyModalOpen}
             onClick={handleSelectFolder}
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             title="Add directory to compress"
           >
             <span className="text-[#FBBF24]">📁</span>
@@ -1163,6 +1226,7 @@ export default function App() {
           {/* [ Compress... ] Button (Active Sky-Blue when files are staged) */}
           <button
             type="button"
+            disabled={isAnyModalOpen}
             onClick={() => {
               if (selectedFiles.length === 0) {
                 handleSelectFiles();
@@ -1170,7 +1234,7 @@ export default function App() {
                 setIsCompressModalOpen(true);
               }
             }}
-            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-[4px] text-xs transition-all cursor-pointer ${
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-[4px] text-xs transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none ${
               selectedFiles.length > 0
                 ? "bg-[#38BDF8] hover:bg-[#7DD3FC] text-[#0F172A] font-semibold shadow-sm"
                 : "bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] border border-[#323238]"
@@ -1184,6 +1248,7 @@ export default function App() {
           {/* [ Extract... ] Button (Active Sky-Blue when archive is open) */}
           <button
             type="button"
+            disabled={isAnyModalOpen}
             onClick={() => {
               if (!selectedArchive) {
                 handleSelectArchive();
@@ -1191,7 +1256,7 @@ export default function App() {
                 setIsExtractModalOpen(true);
               }
             }}
-            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-[4px] text-xs transition-all cursor-pointer ${
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-[4px] text-xs transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none ${
               selectedArchive && archiveInfo
                 ? "bg-[#38BDF8] hover:bg-[#7DD3FC] text-[#0F172A] font-semibold shadow-sm"
                 : "bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] border border-[#323238]"
@@ -1205,8 +1270,9 @@ export default function App() {
           {/* [ 🛡️ Test ] Button (In-Place Verification) */}
           <button
             type="button"
+            disabled={isAnyModalOpen || !selectedArchive || !archiveInfo}
             onClick={handleInPlaceTest}
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             title="Verify archive stream integrity & checksums in-place (Ctrl+T)"
           >
             <span>🛡️</span>
@@ -1217,8 +1283,9 @@ export default function App() {
           {(selectedArchive || selectedFiles.length > 0) && (
             <button
               type="button"
+              disabled={isAnyModalOpen}
               onClick={handleClearSelection}
-              className="flex items-center space-x-1 px-2 py-1.5 rounded-[4px] bg-[#252529] hover:bg-rose-950/40 text-[#9CA3AF] hover:text-rose-300 border border-[#323238] hover:border-rose-800 transition-colors cursor-pointer"
+              className="flex items-center space-x-1 px-2 py-1.5 rounded-[4px] bg-[#252529] hover:bg-rose-950/40 text-[#9CA3AF] hover:text-rose-300 border border-[#323238] hover:border-rose-800 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
               title="Clear selection and return to home"
             >
               <span>✕</span>
@@ -1231,8 +1298,9 @@ export default function App() {
           {/* [ About ] */}
           <button
             type="button"
+            disabled={isAnyModalOpen}
             onClick={() => setIsAboutOpen(true)}
-            className="px-2 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-white border border-[#323238] transition-colors cursor-pointer"
+            className="px-2 py-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-white border border-[#323238] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             title="About Bayzip"
           >
             About
@@ -1241,8 +1309,9 @@ export default function App() {
           {/* [ ⚙️ Settings ] */}
           <button
             type="button"
+            disabled={isAnyModalOpen}
             onClick={handleOpenSettings}
-            className="p-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-[#38BDF8] border border-[#323238] transition-colors cursor-pointer"
+            className="p-1.5 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#9CA3AF] hover:text-[#38BDF8] border border-[#323238] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             title="Settings & Shell Integrations"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
@@ -1453,6 +1522,15 @@ export default function App() {
             : testProgress?.percent ?? 0
         }
         isHudDetached={isHudDetached}
+      />
+
+      {/* Global Error Modal */}
+      <ErrorModal
+        isOpen={Boolean(globalError)}
+        title={globalError?.title || "Error"}
+        message={globalError?.message || ""}
+        details={globalError?.details}
+        onClose={() => setGlobalError(null)}
       />
     </div>
   );
