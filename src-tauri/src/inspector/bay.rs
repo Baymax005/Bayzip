@@ -56,7 +56,7 @@ pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem
         if decoder.read_exact(&mut size_bytes).is_err() { break; }
         let file_size = u64::from_le_bytes(size_bytes);
 
-        total_size += file_size;
+        total_size = total_size.saturating_add(file_size);
         let clean = rel_path_str.replace('\\', "/");
         let is_dir = clean.ends_with('/') || entry_type == 2;
         items.push(ArchiveEntryItem {
@@ -133,6 +133,7 @@ impl BayTrailerSource for &str {
 /// Enforces strict bounded memory allocation safety caps (V-SEC-03):
 /// 1. Verifies declared TOC/ETOC size does not exceed `MAX_TOC_SIZE` (64 MB).
 /// 2. Verifies declared TOC/ETOC size does not exceed the remaining archive file bounds.
+///
 /// Corrupted or maliciously crafted archives declaring oversized TOCs are rejected with an explicit error
 /// before heap allocation occurs.
 pub fn read_bay_trailer_stream<R: Read + Seek>(

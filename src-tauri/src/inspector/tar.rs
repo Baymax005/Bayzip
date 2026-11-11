@@ -5,7 +5,7 @@ use crate::types::ArchiveEntryItem;
 
 pub fn list_tar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut items = Vec::new();
-    let mut total_uncompressed = 0;
+    let mut total_uncompressed: u64 = 0;
     let is_gz = p.to_string_lossy().to_lowercase().ends_with(".gz") || p.to_string_lossy().to_lowercase().ends_with(".tgz");
     if let Ok(file) = File::open(p) {
         if is_gz {
@@ -18,7 +18,7 @@ pub fn list_tar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
                         if !name.is_empty() {
                             let size = entry.size();
                             let is_dir = entry.header().entry_type().is_dir();
-                            total_uncompressed += size;
+                            total_uncompressed = total_uncompressed.saturating_add(size);
                             items.push(ArchiveEntryItem { name, size, is_dir });
                         }
                     }
@@ -33,7 +33,7 @@ pub fn list_tar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
                         if !name.is_empty() {
                             let size = entry.size();
                             let is_dir = entry.header().entry_type().is_dir();
-                            total_uncompressed += size;
+                            total_uncompressed = total_uncompressed.saturating_add(size);
                             items.push(ArchiveEntryItem { name, size, is_dir });
                         }
                     }

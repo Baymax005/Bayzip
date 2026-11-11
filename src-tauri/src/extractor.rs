@@ -353,7 +353,7 @@ pub fn extract_bay_stream<R: Read>(
                     .map_err(|e| format!("Error reading decompressed entry: {}", e))?;
                 out_file.write_all(&io_buf[..sz])
                     .map_err(|e| format!("Error writing extracted file: {}", e))?;
-                total_extracted += file_size;
+                total_extracted = total_extracted.saturating_add(file_size);
             }
 
             if let Some(app_handle) = app {
@@ -412,7 +412,7 @@ pub fn extract_bay_stream<R: Read>(
                             break;
                         }
                         remaining -= n as u64;
-                        total_extracted += n as u64;
+                        total_extracted = total_extracted.saturating_add(n as u64);
 
                         if let Some(app_handle) = app {
                             if last_emit.elapsed().as_millis() >= 50 {
@@ -588,7 +588,7 @@ pub fn extract_zip_archive(
             let mut candidate_root: Option<String> = None;
             let mut is_single = true;
             for name in archive.file_names() {
-                let clean = name.trim().trim_start_matches(|c| c == '/' || c == '\\').trim_start_matches("./");
+                let clean = name.trim().trim_start_matches(['/', '\\']).trim_start_matches("./");
                 if clean.is_empty() || clean == "." { continue; }
                 if !clean.contains('/') && !clean.contains('\\') && !name.ends_with('/') {
                     is_single = false;
@@ -701,7 +701,7 @@ pub fn extract_zip_archive(
                 if sz > 0 {
                     file.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Zip read error: {}", e))?;
                     out_file.write_all(&io_buf[..sz]).map_err(|e| format!("Zip write error: {}", e))?;
-                    total_extracted += file_size;
+                    total_extracted = total_extracted.saturating_add(file_size);
                 }
             } else {
                 let part_path = {
@@ -732,7 +732,7 @@ pub fn extract_zip_archive(
                         Ok(n) => {
                             writer.write_all(&io_buf[..n]).map_err(|e| format!("Zip write error: {}", e))?;
                             remaining -= n as u64;
-                            total_extracted += n as u64;
+                            total_extracted = total_extracted.saturating_add(n as u64);
 
                             if let Some(app_handle) = app {
                                 if last_emit.elapsed().as_millis() >= 50 {
@@ -870,7 +870,7 @@ fn extract_tar_entries<R: Read>(
                 if sz > 0 {
                     entry.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Tar read error: {}", e))?;
                     out_file.write_all(&io_buf[..sz]).map_err(|e| format!("Tar write error: {}", e))?;
-                    total_extracted += file_size;
+                    total_extracted = total_extracted.saturating_add(file_size);
                 }
             } else {
                 let part_path = {
@@ -902,7 +902,7 @@ fn extract_tar_entries<R: Read>(
                         Ok(n) => {
                             writer.write_all(&io_buf[..n]).map_err(|e| format!("Tar write error: {}", e))?;
                             remaining = remaining.saturating_sub(n as u64);
-                            total_extracted += n as u64;
+                            total_extracted = total_extracted.saturating_add(n as u64);
 
                             if let Some(app_handle) = app {
                                 if last_emit.elapsed().as_millis() >= 80 {
@@ -999,7 +999,7 @@ pub fn extract_7z_archive(
     let raw_file = File::open(archive_path).map_err(|e| format!("Failed to open 7z: {}", e))?;
     let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
 
-    let pwd = pwd_opt.map(|s| Password::from(s)).unwrap_or_else(Password::empty);
+    let pwd = pwd_opt.map(Password::from).unwrap_or_else(Password::empty);
 
     let mut sz_reader = match sevenz_rust2::ArchiveReader::new(reader, pwd) {
         Ok(r) => r,
@@ -1027,7 +1027,7 @@ pub fn extract_7z_archive(
             let mut candidate_root: Option<String> = None;
             let mut is_single = true;
             for f in &sz_reader.archive().files {
-                let clean = f.name().trim().trim_start_matches(|c| c == '/' || c == '\\').trim_start_matches("./");
+                let clean = f.name().trim().trim_start_matches(['/', '\\']).trim_start_matches("./");
                 if clean.is_empty() || clean == "." { continue; }
                 if !clean.contains('/') && !clean.contains('\\') && !f.is_directory() && !f.name().ends_with('/') {
                     is_single = false;
@@ -1108,7 +1108,7 @@ pub fn extract_7z_archive(
                 if sz > 0 {
                     reader.read_exact(&mut io_buf[..sz]).map_err(sevenz_rust2::Error::from)?;
                     out_file.write_all(&io_buf[..sz]).map_err(sevenz_rust2::Error::from)?;
-                    total_extracted += file_size;
+                    total_extracted = total_extracted.saturating_add(file_size);
                 }
             } else {
                 let part_path = {
@@ -1140,7 +1140,7 @@ pub fn extract_7z_archive(
                         Ok(n) => {
                             writer.write_all(&io_buf[..n]).map_err(sevenz_rust2::Error::from)?;
                             remaining -= n as u64;
-                            total_extracted += n as u64;
+                            total_extracted = total_extracted.saturating_add(n as u64);
 
                             if let Some(app_handle) = app {
                                 if last_emit.elapsed().as_millis() >= 50 {

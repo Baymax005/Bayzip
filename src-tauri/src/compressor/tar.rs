@@ -34,6 +34,7 @@ pub fn compress_tar(
             .map_err(|e| format!("Failed to create tar file: {}", e))?;
         let mut builder = ::tar::Builder::new(BufWriter::with_capacity(write_buf_size, out_file));
 
+        #[allow(clippy::too_many_arguments)]
         fn add_dir_to_tar<W: Write>(
             dir: &Path,
             base: &Path,

@@ -11,6 +11,7 @@ use crate::inspector::{safe_atomic_rename, get_optimal_read_slice, get_optimal_w
 use super::{is_compression_cancelled, get_io_buffers};
 use super::utils::{is_precompressed_file, is_path_excluded};
 
+#[allow(clippy::too_many_arguments)]
 pub fn compress_zip(
     files: &[String],
     output_path: &Path,
@@ -69,7 +70,8 @@ pub fn compress_zip(
     let deflate_level = match slider_value {
         0..=25 => 1,
         26..=60 => 4,
-        _ => 6,
+        61..=85 => 6,
+        _ => 9,
     };
 
     for file_str in files {
@@ -154,6 +156,7 @@ pub fn compress_zip(
                 }
             }
 
+            #[allow(clippy::too_many_arguments)]
             fn add_dir_to_zip<W: Write + std::io::Seek>(
                 dir: &Path,
                 base: &Path,

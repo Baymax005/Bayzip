@@ -55,7 +55,7 @@ pub fn compress_7z(
             25 => 2,
             50 => 3,
             75 => 5,
-            _ => 6,
+            _ => 9,
         };
 
         let lzma2_opt = if threads > 1 {
@@ -107,6 +107,7 @@ pub fn compress_7z(
                     let _ = sz.push_archive_entry::<&[u8]>(dir_entry, None);
                 }
 
+                #[allow(clippy::too_many_arguments)]
                 fn add_dir_7z<W: Write + Seek>(
                     dir: &Path,
                     base: &Path,

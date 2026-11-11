@@ -52,11 +52,11 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
         return ArchiveFormat::Bzip2;
     }
     // XZ: 0xFD 0x37 0x7A 0x58 0x5A 0x00 ("\xFD7zXZ\x00")
-    if bytes_read >= 6 && &magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] {
+    if bytes_read >= 6 && magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] {
         return ArchiveFormat::Xz;
     }
     // Zstandard: 0x28 0xB5 0x2F 0xFD (0xFD2FB528 Little Endian)
-    if bytes_read >= 4 && &magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
+    if bytes_read >= 4 && magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
         return ArchiveFormat::Zstd;
     }
     // Microsoft Cabinet: 0x4D 0x53 0x43 0x46 ("MSCF")
@@ -65,7 +65,7 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
     }
 
     // POSIX TAR (ustar at offset 257)
-    if let Ok(_) = file.seek(std::io::SeekFrom::Start(257)) {
+    if file.seek(std::io::SeekFrom::Start(257)).is_ok() {
         let mut ustar = [0u8; 5];
         if file.read_exact(&mut ustar).is_ok() && &ustar == b"ustar" {
             return ArchiveFormat::Tar;
@@ -73,7 +73,7 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
     }
 
     // ISO 9660 Disc Image: Sector 16 starts at 32768 (0x8000). Byte 0 is descriptor type, bytes 1..6 are "CD001"
-    if let Ok(_) = file.seek(std::io::SeekFrom::Start(0x8000 + 1)) {
+    if file.seek(std::io::SeekFrom::Start(0x8000 + 1)).is_ok() {
         let mut cd001 = [0u8; 5];
         if file.read_exact(&mut cd001).is_ok() && &cd001 == b"CD001" {
             return ArchiveFormat::Iso;
@@ -256,10 +256,8 @@ pub fn is_archive_encrypted(path: &Path) -> bool {
         if check_rar4_encrypted(&mut file) {
             return true;
         }
-    } else if n >= 8 && &header[0..8] == b"Rar!\x1a\x07\x01\x00" {
-        if check_rar5_encrypted(&mut file) {
-            return true;
-        }
+    } else if n >= 8 && &header[0..8] == b"Rar!\x1a\x07\x01\x00" && check_rar5_encrypted(&mut file) {
+        return true;
     }
     false
 }

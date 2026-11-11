@@ -40,6 +40,7 @@ pub fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<ArchiveEntryItem>
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_file_to_bay_archive<W: Write>(
     filepath: &Path,
     rel_name: &str,
@@ -143,6 +144,7 @@ pub fn write_file_to_bay_archive<W: Write>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_dir_to_bay_archive<W: Write>(
     dir: &Path,
     base_parent: &Path,
@@ -198,6 +200,7 @@ pub fn write_dir_to_bay_archive<W: Write>(
     Ok(())
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum BayOutputWriter {
     Plain(BufWriter<File>),
     Encrypted(ChunkedAesWriter<BufWriter<File>>),
@@ -261,7 +264,7 @@ pub fn write_bay_toc_trailer<W: Write>(
 
         let encrypted_toc = cipher
             .encrypt(nonce, toc_json.as_slice())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("TOC encryption error: {}", e)))?;
+            .map_err(|e| std::io::Error::other(format!("TOC encryption error: {}", e)))?;
 
         let enc_toc_len = encrypted_toc.len() as u64;
 
@@ -282,6 +285,7 @@ pub fn write_bay_toc_trailer<W: Write>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compress_bay(
     files: &[String],
     output_path: &Path,

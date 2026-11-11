@@ -43,6 +43,7 @@ pub fn is_precompressed_extension(path: &Path) -> bool {
 /// 2. Deep Tier: For extensionless or generic extensions (.dat, .bin, .pak, .res, .asset),
 ///    peeks the first 16 bytes for compressed container magic signatures
 ///    (ZIP PK\x03\x04, 7-Zip, RAR, GZIP, BZIP2, XZ, Zstd, JPEG, PNG, WebP, Matroska, MP4 ftyp).
+///
 /// Only reads 16 bytes — NEVER reads or scans the entire file.
 pub fn is_precompressed_file(path: &Path) -> bool {
     // 1. Instant extension check

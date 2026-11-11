@@ -71,7 +71,7 @@ pub fn collect_system_specs() -> SystemSpecs {
 async fn get_system_specs() -> SystemSpecs {
     tauri::async_runtime::spawn_blocking(collect_system_specs)
         .await
-        .unwrap_or_else(|_| SystemSpecs {
+        .unwrap_or(SystemSpecs {
             total_ram_gb: 8.0,
             free_ram_gb: 4.0,
             cpu_cores: 4,

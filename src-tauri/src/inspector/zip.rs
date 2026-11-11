@@ -5,7 +5,7 @@ use crate::types::ArchiveEntryItem;
 
 pub fn list_zip_entries(p: &Path, _password: Option<&str>) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut items = Vec::new();
-    let mut total_uncompressed = 0;
+    let mut total_uncompressed: u64 = 0;
     if let Ok(file) = File::open(p) {
         if let Ok(mut zip) = zip::ZipArchive::new(file) {
             for i in 0..zip.len() {
@@ -15,7 +15,7 @@ pub fn list_zip_entries(p: &Path, _password: Option<&str>) -> (Vec<ArchiveEntryI
                     if !name.is_empty() {
                         let size = entry.size();
                         let is_dir = entry.is_dir() || clean.ends_with('/');
-                        total_uncompressed += size;
+                        total_uncompressed = total_uncompressed.saturating_add(size);
                         items.push(ArchiveEntryItem { name, size, is_dir });
                     }
                 }

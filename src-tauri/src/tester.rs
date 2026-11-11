@@ -9,8 +9,6 @@ use sevenz_rust2::Password;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use crate::types::{
     ArchiveFormat, TestArchiveProgress, TestArchiveResponse, TestArchiveErrorItem, TaskCancelToken,
@@ -445,7 +443,7 @@ pub fn test_7z_archive(
     let raw_file = File::open(archive_path)
         .map_err(|e| format!("Failed to open 7z: {}", e))?;
     let reader = BufReader::with_capacity(2 * 1024 * 1024, raw_file);
-    let pwd = pwd_opt.map(|s| Password::from(s)).unwrap_or_else(Password::empty);
+    let pwd = pwd_opt.map(Password::from).unwrap_or_else(Password::empty);
 
     let mut sz_reader = match sevenz_rust2::ArchiveReader::new(reader, pwd) {
         Ok(r) => r,
@@ -602,7 +600,7 @@ pub fn test_with_system_tar(
     cmd.stderr(std::process::Stdio::piped());
 
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(crate::priority::get_child_process_creation_flags());
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn tar: {}", e))?;
     let mut tested_count = 0usize;

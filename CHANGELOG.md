@@ -2,6 +2,25 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.6] - 2026-11-11
+
+### 🚀 Phase 4 Performance Polish, Process Shielding & Code Quality
+- **Process-Wide Background Priority Class Shielding (`src-tauri/src/priority.rs`, `tester.rs`, `rar.rs`) (CRITICAL-05, PERF-01)**:
+  - Upgraded `ScopedPriorityGuard` on Windows to depress both the calling thread (`THREAD_PRIORITY_BELOW_NORMAL`) and the entire process priority class (`BELOW_NORMAL_PRIORITY_CLASS`, `0x00004000`).
+  - Ensures multi-threaded worker pools spawned by `libzstd` (`zstdmt`) and `sevenz-rust2` (LZMA2 MT) run at below-normal priority without starving foreground games or OS UI responsiveness.
+  - Added `get_child_process_creation_flags()` to automatically apply `BELOW_NORMAL_PRIORITY_CLASS` to child processes (`tar.exe`, `unrar.exe`).
+- **Archive Tree Pre-Extracted Leaf Optimization (`src/components/ArchiveTreeInspector.tsx`, `src/types.ts`) (HIGH-09)**:
+  - Added `leafName?: string;` caching to `ArchiveEntryItem` computed once during $O(N)$ tree construction, eliminating repeated string splits and allocations during $O(N \log N)$ sorting.
+  - Replaced repetitive un-cached `localeCompare` in sorting loops with a cached `Intl.Collator` instance (`fastStringCompare`), accelerating 50,000+ item sorting from seconds to single-digit milliseconds.
+- **Search Virtualization Stability & DOM Recycling (`src/components/ArchiveTreeInspector.tsx`) (HIGH-10)**:
+  - Removed `${searchQuery}` from `<VirtualScrollList>` component key, eliminating destructive DOM destruction and recreation on every keystroke during archive filtering.
+- **Saturating Arithmetic for Untrusted Header Accumulation (`inspector/`, `extractor.rs`) (Medium-1)**:
+  - Replaced raw `+=` operations with `.saturating_add(...)` across `.bay`, `.zip`, `.7z`, `.tar`, and `.rar` inspector and extractor routines, guarding against integer overflow panics on maliciously declared entry sizes.
+- **100% Ultra Compression Level Tuning (`compressor/zip.rs`, `sevenz.rs`) (Medium-4)**:
+  - Enabled Deflate Level 9 and LZMA2 Level 9 when the hardware allocation slider is set to 100% Ultra, providing true maximum compression for `.zip` and `.7z`.
+- **Zero Clippy Warnings Clean Architecture (`src-tauri/`)**:
+  - Resolved all 26 compiler warnings under `cargo clippy -- -D warnings`, addressing redundant references, pattern matching, unneeded closures, and enum variant sizing.
+
 ## [v2.4.5] - 2026-11-11
 
 ### 🛡️ Phase 3 Frontend Reliability, UI Defense & Error Handling

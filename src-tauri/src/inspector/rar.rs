@@ -81,9 +81,9 @@ pub fn list_rar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
                     // Extract the exact filename slice directly from `trimmed` by stepping
                     // past prefix columns to preserve all consecutive spaces within the filename!
                     let mut search_from = 0;
-                    for i in 0..name_start_col {
-                        if let Some(pos) = trimmed[search_from..].find(parts[i]) {
-                            search_from += pos + parts[i].len();
+                    for part in parts.iter().take(name_start_col) {
+                        if let Some(pos) = trimmed[search_from..].find(part) {
+                            search_from += pos + part.len();
                         }
                     }
                     let raw_name_slice = trimmed[search_from..].trim_start();
@@ -100,7 +100,7 @@ pub fn list_rar_entries(p: &Path) -> (Vec<ArchiveEntryItem>, usize, u64) {
                     if !name.is_empty() {
                         let is_dir = is_dir_perm || clean.ends_with('/');
                         let size = if is_dir { 0 } else { parsed_size };
-                        total_uncompressed += size;
+                        total_uncompressed = total_uncompressed.saturating_add(size);
                         items.push(ArchiveEntryItem {
                             name,
                             size,
@@ -154,7 +154,7 @@ pub fn preview_rar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>
     // Use -- delimiter before entry_name to strictly prevent CLI flag injection
     cmd.args(["-xf", &path.to_string_lossy(), "-O", "--", clean_name]);
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(crate::priority::get_child_process_creation_flags());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 

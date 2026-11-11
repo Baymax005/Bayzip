@@ -5,9 +5,9 @@ use crate::types::ArchiveEntryItem;
 
 pub fn list_7z_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut items = Vec::new();
-    let mut total_uncompressed = 0;
+    let mut total_uncompressed: u64 = 0;
     if let Ok(file) = File::open(p) {
-        let pwd = password.map(|s| Password::from(s)).unwrap_or_else(Password::empty);
+        let pwd = password.map(Password::from).unwrap_or_else(Password::empty);
         if let Ok(sz) = sevenz_rust2::ArchiveReader::new(file, pwd) {
             for entry in sz.archive().files.iter() {
                 let raw_name = entry.name();
@@ -18,7 +18,7 @@ pub fn list_7z_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIte
                 }
                 let size = entry.size();
                 let is_dir = entry.is_directory() || trimmed.ends_with('/');
-                total_uncompressed += size;
+                total_uncompressed = total_uncompressed.saturating_add(size);
                 items.push(ArchiveEntryItem {
                     name: trimmed.to_string(),
                     size,

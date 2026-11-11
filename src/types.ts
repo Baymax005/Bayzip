@@ -45,6 +45,7 @@ export interface ArchiveEntryItem {
   name: string;
   size: number;
   is_dir: boolean;
+  leafName?: string;
 }
 
 export interface ArchiveEntryPreview {

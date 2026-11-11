@@ -76,6 +76,13 @@ export interface TreeNode {
 type SortKey = "name" | "size";
 type SortOrder = "asc" | "desc";
 
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function fastStringCompare(a: string, b: string): number {
+  if (a === b) return 0;
+  return collator.compare(a, b);
+}
+
 export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
   archiveInfo,
   selectedArchive,
@@ -224,22 +231,20 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
       } else {
         const lastSlash = clean.lastIndexOf("/");
         const parentPath = lastSlash === -1 ? "" : clean.substring(0, lastSlash);
+        const leaf = lastSlash === -1 ? clean : clean.substring(lastSlash + 1);
         const parentNode = ensureFolder(parentPath);
         parentNode.files.push({
           ...entry,
           name: clean,
+          leafName: leaf,
         });
         parentNode.directFileCount += 1;
       }
     }
 
     const computeStats = (node: TreeNode): { size: number; totalCount: number } => {
-      node.subfolders.sort((a, b) => a.name.localeCompare(b.name));
-      node.files.sort((a, b) => {
-        const leafA = a.name.includes("/") ? a.name.slice(a.name.lastIndexOf("/") + 1) : a.name;
-        const leafB = b.name.includes("/") ? b.name.slice(b.name.lastIndexOf("/") + 1) : b.name;
-        return leafA.localeCompare(leafB);
-      });
+      node.subfolders.sort((a, b) => fastStringCompare(a.name, b.name));
+      node.files.sort((a, b) => fastStringCompare(a.leafName || a.name, b.leafName || b.name));
 
       let totalSize = node.files.reduce((acc, f) => acc + (f.size || 0), 0);
       let count = node.files.length;
@@ -396,17 +401,16 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
     subfolders.sort((a, b) => {
       const mult = sortOrder === "asc" ? 1 : -1;
       if (sortKey === "size") return (a.size - b.size) * mult;
-      return a.name.localeCompare(b.name) * mult;
+      return fastStringCompare(a.name, b.name) * mult;
     });
 
     // Sort files
     files.sort((a, b) => {
       const mult = sortOrder === "asc" ? 1 : -1;
-      const leafA = a.name.includes("/") ? a.name.slice(a.name.lastIndexOf("/") + 1) : a.name;
-      const leafB = b.name.includes("/") ? b.name.slice(b.name.lastIndexOf("/") + 1) : b.name;
-
       if (sortKey === "size") return ((a.size || 0) - (b.size || 0)) * mult;
-      return leafA.localeCompare(leafB) * mult;
+      const leafA = a.leafName || (a.name.includes("/") ? a.name.slice(a.name.lastIndexOf("/") + 1) : a.name);
+      const leafB = b.leafName || (b.name.includes("/") ? b.name.slice(b.name.lastIndexOf("/") + 1) : b.name);
+      return fastStringCompare(leafA, leafB) * mult;
     });
 
     return [
@@ -664,7 +668,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
 
                 {/* Virtualized Rows */}
                 <VirtualScrollList
-                  key={`archive-view-${currentFolderPath}-${searchQuery}-${sortKey}-${sortOrder}`}
+                  key={`archive-view-${currentFolderPath}-${sortKey}-${sortOrder}`}
                   items={displayItems}
                   rowHeight={34}
                   className="flex-1 h-full custom-scrollbar"

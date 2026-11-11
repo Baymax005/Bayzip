@@ -124,7 +124,7 @@ pub fn get_single_root_dir(entries: &[ArchiveEntryItem]) -> Option<String> {
     let mut non_empty_count = 0;
 
     for entry in entries {
-        let clean = entry.name.trim().trim_start_matches(|c| c == '/' || c == '\\').trim_start_matches("./");
+        let clean = entry.name.trim().trim_start_matches(['/', '\\']).trim_start_matches("./");
         if clean.is_empty() || clean == "." {
             continue;
         }
@@ -161,6 +161,7 @@ pub fn has_single_root_dir(entries: &[ArchiveEntryItem]) -> bool {
     get_single_root_dir(entries).is_some()
 }
 
+#[allow(clippy::permissions_set_readonly_false)]
 pub fn clear_readonly(p: &Path) {
     if let Ok(metadata) = p.metadata() {
         let mut perms = metadata.permissions();
