@@ -7,7 +7,7 @@ use sevenz_rust2::{ArchiveWriter, ArchiveEntry, EncoderConfiguration};
 
 use crate::inspector::{safe_atomic_rename, get_optimal_read_slice, get_optimal_write_buffer};
 use super::{is_compression_cancelled, calculate_target_threads, ProgressReader};
-use super::utils::{is_precompressed_file, is_path_excluded};
+use super::utils::{is_precompressed_file, is_path_excluded, is_excluded_or_temp_artifact};
 
 pub fn compress_7z(
     files: &[String],
@@ -52,9 +52,9 @@ pub fn compress_7z(
         let threads = calculate_target_threads(slider_value, total_cores) as u32;
         let lzma_level = match slider_value {
             s if s <= 0 => 1,
-            25 => 2,
-            50 => 3,
-            75 => 5,
+            s if s <= 25 => 2,
+            s if s <= 50 => 3,
+            s if s <= 75 => 5,
             _ => 9,
         };
 
@@ -79,7 +79,13 @@ pub fn compress_7z(
                 return Err("Compression cancelled by user".to_string());
             }
             let p = Path::new(file_str);
-            if !p.exists() {
+            if is_excluded_or_temp_artifact(p, Some(output_path), Some(&temp_output)) {
+                continue;
+            }
+            let Ok(root_meta) = std::fs::symlink_metadata(p) else {
+                continue;
+            };
+            if root_meta.file_type().is_symlink() {
                 continue;
             }
             let parent = p.parent().unwrap_or(p);
@@ -89,7 +95,7 @@ pub fn compress_7z(
                 continue;
             }
 
-            if p.is_file() {
+            if root_meta.is_file() {
                 let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
                 let mut entry = ArchiveEntry::from_path(p, name.to_string());
                 entry.is_directory = false;
@@ -99,7 +105,7 @@ pub fn compress_7z(
                 let prog_reader = ProgressReader::new(f, &mut bytes_processed, total_original, app, &mut last_emit, name, slice_size);
                 sz.push_archive_entry(entry, Some(prog_reader))
                     .map_err(|e| format!("7z entry error: {}", e))?;
-            } else if p.is_dir() {
+            } else if root_meta.is_dir() {
                 if !clean_root.is_empty() {
                     let mut dir_entry = ArchiveEntry::from_path(p, format!("{}/", clean_root));
                     dir_entry.is_directory = true;
@@ -118,6 +124,8 @@ pub fn compress_7z(
                     last_emit: &mut Instant,
                     depth: usize,
                     excluded: Option<&std::collections::HashSet<String>>,
+                    output_path: &Path,
+                    temp_path: &Path,
                 ) -> Result<(), String> {
                     if depth > 32 { return Ok(()); }
                     if let Ok(read_dir) = std::fs::read_dir(dir) {
@@ -128,18 +136,24 @@ pub fn compress_7z(
                                 return Err("Compression cancelled by user".to_string());
                             }
                             let path = entry.path();
+                            if is_excluded_or_temp_artifact(&path, Some(output_path), Some(temp_path)) {
+                                continue;
+                            }
                             if let Ok(m) = std::fs::symlink_metadata(&path) {
+                                if m.file_type().is_symlink() {
+                                    continue;
+                                }
                                 let rel = path.strip_prefix(base).unwrap_or(&path);
                                 let clean = rel.to_string_lossy().replace('\\', "/");
                                 let trimmed = clean.trim_start_matches('/');
                                 if trimmed.is_empty() || is_path_excluded(trimmed, excluded) { continue; }
 
-                                if m.is_dir() && !m.file_type().is_symlink() {
+                                if m.is_dir() {
                                     let mut d_entry = ArchiveEntry::from_path(&path, format!("{}/", trimmed.trim_end_matches('/')));
                                     d_entry.is_directory = true;
                                     d_entry.has_stream = false;
                                     let _ = sz.push_archive_entry::<&[u8]>(d_entry, None);
-                                    add_dir_7z(&path, base, sz, bytes_processed, total_original, app, last_emit, depth + 1, excluded)?;
+                                    add_dir_7z(&path, base, sz, bytes_processed, total_original, app, last_emit, depth + 1, excluded, output_path, temp_path)?;
                                 } else if m.is_file() {
                                     let mut f_entry = ArchiveEntry::from_path(&path, trimmed.to_string());
                                     f_entry.is_directory = false;
@@ -155,7 +169,7 @@ pub fn compress_7z(
                     }
                     Ok(())
                 }
-                add_dir_7z(p, parent, &mut sz, &mut bytes_processed, total_original, app, &mut last_emit, 0, excluded)?;
+                add_dir_7z(p, parent, &mut sz, &mut bytes_processed, total_original, app, &mut last_emit, 0, excluded, output_path, &temp_output)?;
             }
         }
 
@@ -207,7 +221,14 @@ pub fn headless_quick_compress_7z_items(paths: &[&Path], output_path: &Path) -> 
         };
         sz.set_content_methods(vec![lzma2_opt.into()]);
 
-        fn add_dir_7z_quick<W: Write + Seek>(dir: &Path, base: &Path, sz: &mut ArchiveWriter<W>, depth: usize) -> Result<(), String> {
+        fn add_dir_7z_quick<W: Write + Seek>(
+            dir: &Path,
+            base: &Path,
+            sz: &mut ArchiveWriter<W>,
+            depth: usize,
+            output_path: &Path,
+            temp_path: &Path,
+        ) -> Result<(), String> {
             if depth > 32 || is_compression_cancelled() { return Ok(()); }
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
@@ -215,18 +236,24 @@ pub fn headless_quick_compress_7z_items(paths: &[&Path], output_path: &Path) -> 
                         return Err("Compression cancelled by user".to_string());
                     }
                     let path = entry.path();
+                    if is_excluded_or_temp_artifact(&path, Some(output_path), Some(temp_path)) {
+                        continue;
+                    }
                     if let Ok(m) = std::fs::symlink_metadata(&path) {
+                        if m.file_type().is_symlink() {
+                            continue;
+                        }
                         let rel = path.strip_prefix(base).unwrap_or(&path);
                         let clean = rel.to_string_lossy().replace('\\', "/");
                         let trimmed = clean.trim_start_matches('/');
                         if trimmed.is_empty() { continue; }
 
-                        if m.is_dir() && !m.file_type().is_symlink() {
+                        if m.is_dir() {
                             let mut d_entry = ArchiveEntry::from_path(&path, format!("{}/", trimmed.trim_end_matches('/')));
                             d_entry.is_directory = true;
                             d_entry.has_stream = false;
                             let _ = sz.push_archive_entry::<&[u8]>(d_entry, None);
-                            add_dir_7z_quick(&path, base, sz, depth + 1)?;
+                            add_dir_7z_quick(&path, base, sz, depth + 1, output_path, temp_path)?;
                         } else if m.is_file() {
                             let mut f_entry = ArchiveEntry::from_path(&path, trimmed.to_string());
                             f_entry.is_directory = false;
@@ -245,8 +272,17 @@ pub fn headless_quick_compress_7z_items(paths: &[&Path], output_path: &Path) -> 
             if is_compression_cancelled() {
                 return Err("Compression cancelled by user".to_string());
             }
+            if is_excluded_or_temp_artifact(p, Some(output_path), Some(&temp_output)) {
+                continue;
+            }
+            let Ok(root_meta) = std::fs::symlink_metadata(p) else {
+                continue;
+            };
+            if root_meta.file_type().is_symlink() {
+                continue;
+            }
             let parent = p.parent().unwrap_or(p);
-            if p.is_file() {
+            if root_meta.is_file() {
                 let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
                 let mut entry = ArchiveEntry::from_path(p, name.to_string());
                 entry.is_directory = false;
@@ -254,7 +290,7 @@ pub fn headless_quick_compress_7z_items(paths: &[&Path], output_path: &Path) -> 
                 let f = File::open(p).map_err(|e| format!("Failed to open file: {}", e))?;
                 sz.push_archive_entry(entry, Some(f))
                     .map_err(|e| format!("7z entry error: {}", e))?;
-            } else if p.is_dir() {
+            } else if root_meta.is_dir() {
                 let rel_root = p.strip_prefix(parent).unwrap_or(p).to_string_lossy().replace('\\', "/");
                 let clean_root = rel_root.trim_start_matches('/').trim_end_matches('/');
                 if !clean_root.is_empty() {
@@ -263,7 +299,7 @@ pub fn headless_quick_compress_7z_items(paths: &[&Path], output_path: &Path) -> 
                     dir_entry.has_stream = false;
                     let _ = sz.push_archive_entry::<&[u8]>(dir_entry, None);
                 }
-                add_dir_7z_quick(p, parent, &mut sz, 0)?;
+                add_dir_7z_quick(p, parent, &mut sz, 0, output_path, &temp_output)?;
             }
         }
 

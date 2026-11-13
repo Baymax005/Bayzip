@@ -9,7 +9,7 @@ use zip::AesMode;
 use crate::types::CompressProgress;
 use crate::inspector::{safe_atomic_rename, get_optimal_read_slice, get_optimal_write_buffer};
 use super::{is_compression_cancelled, get_io_buffers};
-use super::utils::{is_precompressed_file, is_path_excluded};
+use super::utils::{is_precompressed_file, is_path_excluded, is_excluded_or_temp_artifact};
 
 #[allow(clippy::too_many_arguments)]
 pub fn compress_zip(
@@ -79,6 +79,9 @@ pub fn compress_zip(
             return Err("Compression cancelled by user".to_string());
         }
         let p = Path::new(file_str);
+        if is_excluded_or_temp_artifact(p, Some(output_path), Some(&temp_output)) {
+            continue;
+        }
         let parent_dir = p.parent().unwrap_or(p);
         let root_rel = p.strip_prefix(parent_dir).unwrap_or(p);
         let root_str = root_rel.to_string_lossy().replace('\\', "/");
@@ -87,7 +90,13 @@ pub fn compress_zip(
             continue;
         }
         
-        let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let Ok(root_meta) = std::fs::symlink_metadata(p) else {
+            continue;
+        };
+        if root_meta.file_type().is_symlink() {
+            continue;
+        }
+        let file_len = root_meta.len();
         let is_precomp = smart_bypass && is_precompressed_file(p);
         let entry_method = if is_precomp {
             zip::CompressionMethod::Stored
@@ -99,7 +108,7 @@ pub fn compress_zip(
             .compression_level(if entry_method == zip::CompressionMethod::Stored { None } else { Some(deflate_level) })
             .large_file(file_len >= 0xFFFF_FFFF);
 
-        if p.is_file() {
+        if root_meta.is_file() {
             let slice_size = get_optimal_read_slice(p);
             let mut f = File::open(p).map_err(|e| format!("Failed to open file '{}': {}", p.display(), e))?;
             let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
@@ -143,7 +152,7 @@ pub fn compress_zip(
                     Err(e) => return Err(format!("File read error: {}", e)),
                 }
             }
-        } else if p.is_dir() {
+        } else if root_meta.is_dir() {
             if !clean_root.is_empty() {
                 let dir_name = format!("{}/", clean_root);
                 let dir_options = SimpleFileOptions::default()
@@ -173,6 +182,8 @@ pub fn compress_zip(
                 depth: usize,
                 smart_bypass: bool,
                 excluded: Option<&std::collections::HashSet<String>>,
+                output_path: &Path,
+                temp_path: &Path,
             ) -> Result<(), String> {
                 if depth > 32 { return Ok(()); }
                 if let Ok(entries) = std::fs::read_dir(dir) {
@@ -181,7 +192,13 @@ pub fn compress_zip(
                             return Err("Compression cancelled by user".to_string());
                         }
                         let path = entry.path();
+                        if is_excluded_or_temp_artifact(&path, Some(output_path), Some(temp_path)) {
+                            continue;
+                        }
                         if let Ok(m) = std::fs::symlink_metadata(&path) {
+                            if m.file_type().is_symlink() {
+                                continue;
+                            }
                             let rel = path.strip_prefix(base).unwrap_or(&path);
                             let rel_str = rel.to_string_lossy().replace('\\', "/");
                             let clean_rel = rel_str.trim_start_matches('/').trim_end_matches('/');
@@ -199,14 +216,14 @@ pub fn compress_zip(
                                 .compression_level(if entry_method == zip::CompressionMethod::Stored { None } else { Some(deflate_level) })
                                 .large_file(is_large);
 
-                            if m.is_dir() && !m.file_type().is_symlink() {
+                            if m.is_dir() {
                                 let dir_name = format!("{}/", clean_rel);
                                 if let Some(pwd) = has_pwd {
                                     let _ = writer.add_directory(&dir_name, options.with_aes_encryption(aes_mode, pwd));
                                 } else {
                                     let _ = writer.add_directory(&dir_name, options);
                                 }
-                                add_dir_to_zip(&path, base, writer, read_buf, method, deflate_level, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1, smart_bypass, excluded)?;
+                                add_dir_to_zip(&path, base, writer, read_buf, method, deflate_level, has_pwd, aes_mode, bytes_processed, total_original, app, last_emit, depth + 1, smart_bypass, excluded, output_path, temp_path)?;
                             } else if m.is_file() {
                                 let mut f = match File::open(&path) {
                                     Ok(file) => file,
@@ -258,7 +275,7 @@ pub fn compress_zip(
                 }
                 Ok(())
             }
-            add_dir_to_zip(p, parent_dir, &mut writer, &mut read_buf, method, deflate_level, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0, smart_bypass, excluded)?;
+            add_dir_to_zip(p, parent_dir, &mut writer, &mut read_buf, method, deflate_level, has_pwd, aes_mode, &mut bytes_processed, total_original, app, &mut last_emit, 0, smart_bypass, excluded, output_path, &temp_output)?;
         }
     }
 
@@ -306,6 +323,8 @@ pub fn headless_quick_compress_zip_items(paths: &[&Path], output_path: &Path) ->
             base: &Path,
             writer: &mut zip::ZipWriter<W>,
             depth: usize,
+            output_path: &Path,
+            temp_path: &Path,
         ) -> Result<(), String> {
             if depth > 32 || is_compression_cancelled() { return Ok(()); }
             if let Ok(entries) = std::fs::read_dir(dir) {
@@ -314,16 +333,22 @@ pub fn headless_quick_compress_zip_items(paths: &[&Path], output_path: &Path) ->
                         return Err("Compression cancelled by user".to_string());
                     }
                     let path = entry.path();
+                    if is_excluded_or_temp_artifact(&path, Some(output_path), Some(temp_path)) {
+                        continue;
+                    }
                     if let Ok(m) = std::fs::symlink_metadata(&path) {
+                        if m.file_type().is_symlink() {
+                            continue;
+                        }
                         let rel = path.strip_prefix(base).unwrap_or(&path);
                         let rel_str = rel.to_string_lossy().replace('\\', "/");
-                        if m.is_dir() && !m.file_type().is_symlink() {
+                        if m.is_dir() {
                             let dir_opt = SimpleFileOptions::default()
                                 .compression_method(zip::CompressionMethod::Deflated)
                                 .compression_level(Some(6))
                                 .large_file(false);
                             let _ = writer.add_directory(format!("{}/", rel_str), dir_opt);
-                            add_dir(&path, base, writer, depth + 1)?;
+                            add_dir(&path, base, writer, depth + 1, output_path, temp_path)?;
                         } else if m.is_file() {
                             if let Ok(mut f) = File::open(&path) {
                                 let is_precomp = is_precompressed_file(&path);
@@ -352,38 +377,46 @@ pub fn headless_quick_compress_zip_items(paths: &[&Path], output_path: &Path) ->
             if is_compression_cancelled() {
                 return Err("Compression cancelled by user".to_string());
             }
+            if is_excluded_or_temp_artifact(p, Some(output_path), Some(&temp_output)) {
+                continue;
+            }
             let parent = p.parent().unwrap_or(p);
-            if p.is_file() {
-                if let Ok(mut f) = File::open(p) {
-                    let file_len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-                    let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-                    let is_precomp = is_precompressed_file(p);
-                    let entry_method = if is_precomp {
-                        zip::CompressionMethod::Stored
-                    } else {
-                        zip::CompressionMethod::Deflated
-                    };
-                    let file_opt = SimpleFileOptions::default()
-                        .compression_method(entry_method)
-                        .compression_level(if is_precomp { None } else { Some(6) })
-                        .large_file(file_len >= 0xFFFF_FFFF);
-                    writer.start_file(file_name, file_opt)
-                        .map_err(|e| format!("Zip start error: {}", e))?;
-                    std::io::copy(&mut f, &mut writer)
-                        .map_err(|e| format!("Zip copy error: {}", e))?;
+            if let Ok(m) = std::fs::symlink_metadata(p) {
+                if m.file_type().is_symlink() {
+                    continue;
                 }
-            } else if p.is_dir() {
-                let rel_name = p.strip_prefix(parent).unwrap_or(p);
-                let rel_str = rel_name.to_string_lossy().replace('\\', "/");
-                let clean_rel = rel_str.trim_start_matches('/').to_string();
-                if !clean_rel.is_empty() {
-                    let dir_opt = SimpleFileOptions::default()
-                        .compression_method(zip::CompressionMethod::Deflated)
-                        .compression_level(Some(6))
-                        .large_file(false);
-                    let _ = writer.add_directory(format!("{}/", clean_rel), dir_opt);
+                if m.is_file() {
+                    if let Ok(mut f) = File::open(p) {
+                        let file_len = f.metadata().map(|fm| fm.len()).unwrap_or(m.len());
+                        let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+                        let is_precomp = is_precompressed_file(p);
+                        let entry_method = if is_precomp {
+                            zip::CompressionMethod::Stored
+                        } else {
+                            zip::CompressionMethod::Deflated
+                        };
+                        let file_opt = SimpleFileOptions::default()
+                            .compression_method(entry_method)
+                            .compression_level(if is_precomp { None } else { Some(6) })
+                            .large_file(file_len >= 0xFFFF_FFFF);
+                        writer.start_file(file_name, file_opt)
+                            .map_err(|e| format!("Zip start error: {}", e))?;
+                        std::io::copy(&mut f, &mut writer)
+                            .map_err(|e| format!("Zip copy error: {}", e))?;
+                    }
+                } else if m.is_dir() {
+                    let rel_name = p.strip_prefix(parent).unwrap_or(p);
+                    let rel_str = rel_name.to_string_lossy().replace('\\', "/");
+                    let clean_rel = rel_str.trim_start_matches('/').to_string();
+                    if !clean_rel.is_empty() {
+                        let dir_opt = SimpleFileOptions::default()
+                            .compression_method(zip::CompressionMethod::Deflated)
+                            .compression_level(Some(6))
+                            .large_file(false);
+                        let _ = writer.add_directory(format!("{}/", clean_rel), dir_opt);
+                    }
+                    add_dir(p, parent, &mut writer, 0, output_path, &temp_output)?;
                 }
-                add_dir(p, parent, &mut writer, 0)?;
             }
         }
 

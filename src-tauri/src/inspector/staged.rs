@@ -32,9 +32,16 @@ pub fn inspect_staged_items_sync(paths: &[String]) -> Result<Vec<ArchiveEntryIte
                             Some(s) => s,
                             None => continue,
                         };
+                        let lower_name = file_name.to_ascii_lowercase();
+                        if lower_name.ends_with(".baytmp") || lower_name.ends_with(".baypart") {
+                            continue;
+                        }
                         let rel = format!("{}/{}", rel_prefix, file_name);
-                        if let Ok(m) = entry.metadata() {
+                        if let Ok(m) = std::fs::symlink_metadata(entry.path()) {
                             let is_symlink = m.file_type().is_symlink();
+                            if is_symlink {
+                                continue;
+                            }
                             if m.is_dir() {
                                 entries.push(ArchiveEntryItem {
                                     name: format!("{}/", rel),

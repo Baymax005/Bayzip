@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.4.1-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.4.1" /></a>
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.4.7-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.4.7" /></a>
   <a href="#windows-shell-integration"><img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows 10 | 11" /></a>
   <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2.0" /></a>
   <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021 Edition" /></a>
@@ -20,7 +20,7 @@
 
 <p align="center">
   <a href="src-tauri/src/crypto.rs"><img src="https://img.shields.io/badge/security-AES--256--GCM%20AEAD-10B981?style=flat-square&logo=shield&logoColor=white" alt="AES-256-GCM AEAD Security" /></a>
-  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-31%2F31%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="31/31 Automated Tests Passing" /></a>
+  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-41%2F41%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="41/41 Automated Tests Passing" /></a>
   <a href="src-tauri/src/compressor/mod.rs"><img src="https://img.shields.io/badge/engine-Zstandard%20%7C%20LZ4%20%7C%20Brotli-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Compression Engine" /></a>
   <a href="src-tauri/crates/bayzip_shell/src/lib.rs"><img src="https://img.shields.io/badge/shell-Windows%2011%20COM-6366F1?style=flat-square&logo=windows&logoColor=white" alt="Windows 11 COM Shell Extension" /></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/audit-35%2F35%20remediated-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="35/35 Technical Audit Findings Remediated" /></a>

@@ -167,7 +167,10 @@ pub fn resolve_unique_folder_name(target_dir: &Path) -> PathBuf {
 pub fn is_path_excluded(raw_path: &str, excluded: Option<&std::collections::HashSet<String>>) -> bool {
     if let Some(set) = excluded {
         let clean = raw_path.replace('\\', "/");
-        let trimmed = clean.trim_start_matches('/');
+        let trimmed = clean
+            .trim_start_matches('/')
+            .trim_start_matches("./")
+            .trim_start_matches('/');
         let lower = trimmed.to_lowercase();
         if set.contains(trimmed) || set.contains(&lower) {
             return true;
@@ -229,6 +232,7 @@ pub fn extract_bay_stream<R: Read>(
     excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     let mut extracted_files = Vec::new();
+    let mut newly_created = Vec::new();
     let root_strip = single_root_prefix.filter(|prefix| {
         dest_dir.file_name()
             .and_then(|s| s.to_str())
@@ -332,8 +336,13 @@ pub fn extract_bay_stream<R: Read>(
 
         let is_dir = entry_type == 2 || rel_path_str.ends_with('/');
         if is_dir {
+            let dir_existed = std::fs::symlink_metadata(&out_path).is_ok();
             let _ = std::fs::create_dir_all(&out_path);
-            extracted_files.push(out_path.to_string_lossy().to_string());
+            let out_str = out_path.to_string_lossy().to_string();
+            if !dir_existed && out_path.exists() {
+                newly_created.push(out_str.clone());
+            }
+            extracted_files.push(out_str);
             drain_bay_entry_bytes(&mut decoder, file_size, &mut io_buf)?;
             continue;
         }
@@ -342,7 +351,9 @@ pub fn extract_bay_stream<R: Read>(
             let _ = std::fs::create_dir_all(parent);
         }
 
-        if file_size <= 64 * 1024 {
+        let file_existed = std::fs::symlink_metadata(&out_path).is_ok();
+
+        if file_size <= 64 * 1024 && !file_existed {
             clear_readonly(&out_path);
             let mut out_file = File::create(&out_path)
                 .map_err(|e| format!("Failed to create output file {:?}: {}", out_path, e))?;
@@ -443,21 +454,31 @@ pub fn extract_bay_stream<R: Read>(
                 return Err(err);
             }
 
-            writer.flush().map_err(|e| format!("Flush error: {}", e))?;
+            if let Err(e) = writer.flush() {
+                drop(writer);
+                let _ = std::fs::remove_file(&part_path);
+                return Err(format!("Flush error: {}", e));
+            }
             drop(writer);
 
-            safe_atomic_rename(&part_path, &out_path)
-                .map_err(|e| format!("Failed to finalize extracted file {:?}: {}", out_path, e))?;
+            if let Err(e) = safe_atomic_rename(&part_path, &out_path) {
+                let _ = std::fs::remove_file(&part_path);
+                return Err(format!("Failed to finalize extracted file {:?}: {}", out_path, e));
+            }
         }
 
-        extracted_files.push(out_path.to_string_lossy().to_string());
+        let out_str = out_path.to_string_lossy().to_string();
+        if !file_existed {
+            newly_created.push(out_str.clone());
+        }
+        extracted_files.push(out_str);
     }
 
     Ok(())
     })();
 
     if let Err(e) = res {
-        cleanup_extracted_files(&extracted_files);
+        cleanup_extracted_files(&newly_created);
         return Err(e);
     }
 
@@ -582,6 +603,7 @@ pub fn extract_zip_archive(
     let reader = BufReader::with_capacity(4 * 1024 * 1024, raw_file);
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("Invalid zip archive: {}", e))?;
     let mut extracted = Vec::new();
+    let mut newly_created = Vec::new();
     let root_strip = {
         let dest_stem = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
         if let Some(prefix) = dest_stem {
@@ -686,20 +708,35 @@ pub fn extract_zip_archive(
 
         let outpath = dest_dir.join(&effective_path);
         let clean = raw_name.replace('\\', "/");
+        if file.is_symlink() {
+            continue;
+        }
         if file.is_dir() || clean.ends_with('/') {
+            let dir_existed = std::fs::symlink_metadata(&outpath).is_ok();
             let _ = std::fs::create_dir_all(&outpath);
+            if !dir_existed && outpath.exists() {
+                newly_created.push(outpath.to_string_lossy().to_string());
+            }
         } else {
             if let Some(p) = outpath.parent() {
                 let _ = std::fs::create_dir_all(p);
             }
             let file_size = file.size();
+            let file_existed = std::fs::symlink_metadata(&outpath).is_ok();
 
-            if file_size <= 64 * 1024 {
-                clear_readonly(&outpath);
-                let mut out_file = File::create(&outpath).map_err(|e| format!("Create file error: {}", e))?;
+            if file_size <= 64 * 1024 && !file_existed {
                 let sz = file_size as usize;
                 if sz > 0 {
                     file.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Zip read error: {}", e))?;
+                }
+                let mut eof_check = [0u8; 1];
+                let extra = file.read(&mut eof_check).map_err(|e| format!("Zip CRC/read error: {}", e))?;
+                if extra != 0 {
+                    return Err(format!("Zip entry '{}' exceeded declared size", safe_path.display()));
+                }
+                clear_readonly(&outpath);
+                let mut out_file = File::create(&outpath).map_err(|e| format!("Create file error: {}", e))?;
+                if sz > 0 {
                     out_file.write_all(&io_buf[..sz]).map_err(|e| format!("Zip write error: {}", e))?;
                     total_extracted = total_extracted.saturating_add(file_size);
                 }
@@ -728,7 +765,11 @@ pub fn extract_zip_archive(
                     }
                     let to_read = (remaining as usize).min(io_buf.len());
                     match file.read(&mut io_buf[..to_read]) {
-                        Ok(0) => break,
+                        Ok(0) => {
+                            drop(writer);
+                            let _ = std::fs::remove_file(&part_path);
+                            return Err(format!("Premature EOF inside zip entry '{}'", safe_path.display()));
+                        }
                         Ok(n) => {
                             writer.write_all(&io_buf[..n]).map_err(|e| format!("Zip write error: {}", e))?;
                             remaining -= n as u64;
@@ -757,13 +798,37 @@ pub fn extract_zip_archive(
                         }
                     }
                 }
-                writer.flush().map_err(|e| format!("Zip flush error: {}", e))?;
+                let mut eof_check = [0u8; 1];
+                match file.read(&mut eof_check) {
+                    Ok(0) => {}
+                    Ok(_) => {
+                        drop(writer);
+                        let _ = std::fs::remove_file(&part_path);
+                        return Err(format!("Zip entry '{}' exceeded declared size", safe_path.display()));
+                    }
+                    Err(e) => {
+                        drop(writer);
+                        let _ = std::fs::remove_file(&part_path);
+                        return Err(format!("Zip CRC/read error: {}", e));
+                    }
+                }
+                if let Err(e) = writer.flush() {
+                    drop(writer);
+                    let _ = std::fs::remove_file(&part_path);
+                    return Err(format!("Zip flush error: {}", e));
+                }
                 drop(writer);
-                safe_atomic_rename(&part_path, &outpath)
-                    .map_err(|e| format!("Failed to finalize extracted file: {}", e))?;
+                if let Err(e) = safe_atomic_rename(&part_path, &outpath) {
+                    let _ = std::fs::remove_file(&part_path);
+                    return Err(format!("Failed to finalize extracted file: {}", e));
+                }
             }
 
-            extracted.push(outpath.to_string_lossy().to_string());
+            let out_str = outpath.to_string_lossy().to_string();
+            if !file_existed {
+                newly_created.push(out_str.clone());
+            }
+            extracted.push(out_str);
         }
 
         if let Some(app_handle) = app {
@@ -787,7 +852,7 @@ pub fn extract_zip_archive(
     })();
 
     if let Err(e) = res {
-        cleanup_extracted_files(&extracted);
+        cleanup_extracted_files(&newly_created);
         return Err(e);
     }
 
@@ -806,6 +871,7 @@ fn extract_tar_entries<R: Read>(
 
     let total_expected_bytes = expected_size.unwrap_or(1).max(1);
     let mut extracted_files = Vec::new();
+    let mut newly_created = Vec::new();
     let mut total_extracted: u64 = 0;
     let mut last_emit = Instant::now();
     let mut io_buf = vec![0u8; 256 * 1024];
@@ -851,19 +917,27 @@ fn extract_tar_entries<R: Read>(
 
         let out_path = dest_dir.join(&effective_path);
         let clean = path_str.replace('\\', "/");
-        let header = entry.header();
-        let is_dir = header.entry_type().is_dir() || clean.ends_with('/');
+        let entry_type = entry.header().entry_type();
+        let is_dir = entry_type.is_dir() || clean.ends_with('/');
+        if !is_dir && !entry_type.is_file() && !entry_type.is_contiguous() {
+            continue;
+        }
 
         if is_dir {
+            let dir_existed = std::fs::symlink_metadata(&out_path).is_ok();
             let _ = std::fs::create_dir_all(&out_path);
+            if !dir_existed && out_path.exists() {
+                newly_created.push(out_path.to_string_lossy().to_string());
+            }
         } else {
             if let Some(p) = out_path.parent() {
                 let _ = std::fs::create_dir_all(p);
             }
 
             let file_size = entry.size();
+            let file_existed = std::fs::symlink_metadata(&out_path).is_ok();
 
-            if file_size <= 64 * 1024 {
+            if file_size <= 64 * 1024 && !file_existed {
                 clear_readonly(&out_path);
                 let mut out_file = File::create(&out_path).map_err(|e| format!("Create file error: {}", e))?;
                 let sz = file_size as usize;
@@ -898,7 +972,11 @@ fn extract_tar_entries<R: Read>(
                     }
                     let to_read = (remaining as usize).min(io_buf.len());
                     match entry.read(&mut io_buf[..to_read]) {
-                        Ok(0) => break,
+                        Ok(0) => {
+                            drop(writer);
+                            let _ = std::fs::remove_file(&part_path);
+                            return Err(format!("Premature EOF inside tar entry '{}'", safe_path.display()));
+                        }
                         Ok(n) => {
                             writer.write_all(&io_buf[..n]).map_err(|e| format!("Tar write error: {}", e))?;
                             remaining = remaining.saturating_sub(n as u64);
@@ -923,20 +1001,30 @@ fn extract_tar_entries<R: Read>(
                         }
                     }
                 }
-                writer.flush().map_err(|e| format!("Flush error: {}", e))?;
+                if let Err(e) = writer.flush() {
+                    drop(writer);
+                    let _ = std::fs::remove_file(&part_path);
+                    return Err(format!("Flush error: {}", e));
+                }
                 drop(writer);
-                safe_atomic_rename(&part_path, &out_path)
-                    .map_err(|e| format!("Failed to finalize extracted file: {}", e))?;
+                if let Err(e) = safe_atomic_rename(&part_path, &out_path) {
+                    let _ = std::fs::remove_file(&part_path);
+                    return Err(format!("Failed to finalize extracted file: {}", e));
+                }
             }
 
-            extracted_files.push(out_path.to_string_lossy().to_string());
+            let out_str = out_path.to_string_lossy().to_string();
+            if !file_existed {
+                newly_created.push(out_str.clone());
+            }
+            extracted_files.push(out_str);
         }
     }
     Ok(())
     })();
 
     if let Err(e) = res {
-        cleanup_extracted_files(&extracted_files);
+        cleanup_extracted_files(&newly_created);
         return Err(e);
     }
 
@@ -1021,6 +1109,7 @@ pub fn extract_7z_archive(
     };
 
     let mut extracted = Vec::new();
+    let mut newly_created = Vec::new();
     let root_strip = {
         let dest_stem = dest_dir.file_name().and_then(|s| s.to_str()).map(base_folder_stem);
         if let Some(prefix) = dest_stem {
@@ -1093,14 +1182,19 @@ pub fn extract_7z_archive(
         let out_path = dest_dir.join(&effective_path);
         let clean = raw_name.replace('\\', "/");
         if entry.is_directory() || clean.ends_with('/') {
+            let dir_existed = std::fs::symlink_metadata(&out_path).is_ok();
             let _ = std::fs::create_dir_all(&out_path);
+            if !dir_existed && out_path.exists() {
+                newly_created.push(out_path.to_string_lossy().to_string());
+            }
         } else {
             if let Some(p) = out_path.parent() {
                 let _ = std::fs::create_dir_all(p);
             }
             let file_size = entry.size();
+            let file_existed = std::fs::symlink_metadata(&out_path).is_ok();
 
-            if file_size <= 64 * 1024 {
+            if file_size <= 64 * 1024 && !file_existed {
                 clear_readonly(&out_path);
                 let mut out_file = File::create(&out_path)
                     .map_err(sevenz_rust2::Error::from)?;
@@ -1136,7 +1230,14 @@ pub fn extract_7z_archive(
                     }
                     let to_read = (remaining as usize).min(io_buf.len());
                     match reader.read(&mut io_buf[..to_read]) {
-                        Ok(0) => break,
+                        Ok(0) => {
+                            drop(writer);
+                            let _ = std::fs::remove_file(&part_path);
+                            return Err(sevenz_rust2::Error::from(std::io::Error::new(
+                                std::io::ErrorKind::UnexpectedEof,
+                                format!("Premature EOF inside 7z entry '{}'", safe_path.display()),
+                            )));
+                        }
                         Ok(n) => {
                             writer.write_all(&io_buf[..n]).map_err(sevenz_rust2::Error::from)?;
                             remaining -= n as u64;
@@ -1167,13 +1268,23 @@ pub fn extract_7z_archive(
                         }
                     }
                 }
-                writer.flush().map_err(sevenz_rust2::Error::from)?;
+                if let Err(e) = writer.flush() {
+                    drop(writer);
+                    let _ = std::fs::remove_file(&part_path);
+                    return Err(sevenz_rust2::Error::from(e));
+                }
                 drop(writer);
-                safe_atomic_rename(&part_path, &out_path)
-                    .map_err(sevenz_rust2::Error::from)?;
+                if let Err(e) = safe_atomic_rename(&part_path, &out_path) {
+                    let _ = std::fs::remove_file(&part_path);
+                    return Err(sevenz_rust2::Error::from(e));
+                }
             }
 
-            extracted.push(out_path.to_string_lossy().to_string());
+            let out_str = out_path.to_string_lossy().to_string();
+            if !file_existed {
+                newly_created.push(out_str.clone());
+            }
+            extracted.push(out_str);
         }
 
         processed_count += 1;
@@ -1201,11 +1312,11 @@ pub fn extract_7z_archive(
     match res {
         Ok(_) => Ok(extracted),
         Err(sevenz_rust2::Error::PasswordRequired) => {
-            cleanup_extracted_files(&extracted);
+            cleanup_extracted_files(&newly_created);
             Err("Password required: This 7z archive is encrypted with AES-256.".into())
         }
         Err(e) => {
-            cleanup_extracted_files(&extracted);
+            cleanup_extracted_files(&newly_created);
             if e.to_string().to_lowercase().contains("password") {
                 Err("Incorrect password: Could not decrypt 7z archive.".into())
             } else {
@@ -1223,12 +1334,15 @@ pub fn extract_with_system_tar(
     excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
     let _priority_guard = ScopedPriorityGuard::new();
+    if is_extraction_cancelled() {
+        return Err("Extraction cancelled by user".into());
+    }
 
     // Pre-inspect archive entries with tar.exe -tf to strictly prevent Zip-Slip / path traversal before writing to disk
     let mut check_cmd = Command::new(crate::inspector::get_system32_exe("tar.exe"));
     check_cmd.args(["-tf", &archive_path.to_string_lossy()]);
     #[cfg(target_os = "windows")]
-    check_cmd.creation_flags(CREATE_NO_WINDOW);
+    check_cmd.creation_flags(crate::priority::get_child_process_creation_flags());
     check_cmd.stdout(Stdio::piped());
     check_cmd.stderr(Stdio::piped());
 
@@ -1241,21 +1355,57 @@ pub fn extract_with_system_tar(
         return Err(format!("System tar archive inspection failed: {}", err_text.trim()));
     }
 
+    let mut preexisting_paths = std::collections::HashSet::new();
     let stdout_str = String::from_utf8_lossy(&output.stdout);
     for raw_line in stdout_str.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed.is_empty() {
+        let trimmed = raw_line.trim_end_matches(['\r', '\n']);
+        if trimmed.trim().is_empty() {
             continue;
         }
         let clean = trimmed.replace('\\', "/");
         if clean == "." || clean == "./" {
             continue;
         }
-        if sanitize_archive_path(&clean).is_none() {
+        let Some(safe_path) = sanitize_archive_path(&clean) else {
             return Err(format!(
                 "Security violation: archive entry '{}' contains dangerous path or traversal pattern. Extraction aborted.",
                 trimmed
             ));
+        };
+        let candidate = dest_dir.join(&safe_path);
+        if std::fs::symlink_metadata(&candidate).is_ok() {
+            let norm = candidate
+                .to_string_lossy()
+                .replace('\\', "/")
+                .trim_end_matches('/')
+                .to_ascii_lowercase();
+            preexisting_paths.insert(norm);
+        }
+    }
+
+    // Secondary inspection with -tvf to block symlinks and hardlinks before extraction
+    let mut tvf_cmd = Command::new(crate::inspector::get_system32_exe("tar.exe"));
+    tvf_cmd.args(["-tvf", &archive_path.to_string_lossy()]);
+    #[cfg(target_os = "windows")]
+    tvf_cmd.creation_flags(crate::priority::get_child_process_creation_flags());
+    tvf_cmd.stdout(Stdio::piped());
+    tvf_cmd.stderr(Stdio::piped());
+
+    if let Ok(tvf_output) = tvf_cmd.output() {
+        if tvf_output.status.success() {
+            let tvf_str = String::from_utf8_lossy(&tvf_output.stdout);
+            for line in tvf_str.lines() {
+                let l = line.trim_start();
+                if l.is_empty() {
+                    continue;
+                }
+                if l.starts_with('l') || l.starts_with('h') || l.contains(" -> ") || l.contains(" link to ") {
+                    return Err(format!(
+                        "Security violation: archive contains symlink or hardlink entry '{}'. Extraction aborted.",
+                        l.trim()
+                    ));
+                }
+            }
         }
     }
 
@@ -1278,6 +1428,8 @@ pub fn extract_with_system_tar(
         archive_path.to_string_lossy().to_string(),
         "-C".into(),
         dest_dir.to_string_lossy().to_string(),
+        "--no-same-permissions".into(),
+        "--no-same-owner".into(),
     ];
     if let Some(set) = excluded {
         for exc in set.iter() {
@@ -1286,7 +1438,7 @@ pub fn extract_with_system_tar(
     }
     cmd.args(&args);
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW | crate::priority::BELOW_NORMAL_PRIORITY_CLASS);
+    cmd.creation_flags(crate::priority::get_child_process_creation_flags());
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::piped());
 
@@ -1304,6 +1456,7 @@ pub fn extract_with_system_tar(
     });
 
     let mut extracted_files = Vec::new();
+    let mut newly_created = Vec::new();
     let mut current_file_name = String::new();
     let mut current_file_path: Option<PathBuf> = None;
     let mut completed_bytes: u64 = 0;
@@ -1315,18 +1468,18 @@ pub fn extract_with_system_tar(
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader_handle.join();
-            cleanup_extracted_files(&extracted_files);
+            cleanup_extracted_files(&newly_created);
             return Err("Extraction cancelled by user".into());
         }
 
         while let Ok(line) = rx.try_recv() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed.trim().is_empty() {
                 continue;
             }
 
-            if let Some(rel_path) = trimmed.strip_prefix("x ") {
-                let clean_rel = rel_path.trim().replace('\\', "/");
+            if let Some(rel_path) = trimmed.trim_start().strip_prefix("x ") {
+                let clean_rel = rel_path.replace('\\', "/");
                 let safe = sanitize_archive_path(&clean_rel);
 
                 if let Some(prev_path) = current_file_path.take() {
@@ -1337,22 +1490,34 @@ pub fn extract_with_system_tar(
 
                 if let Some(safe_path) = safe {
                     let out_path = dest_dir.join(&safe_path);
+                    let norm_key = out_path
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                        .trim_end_matches('/')
+                        .to_ascii_lowercase();
+                    let was_preexisting = preexisting_paths.contains(&norm_key);
                     if is_path_excluded(&clean_rel, excluded) {
-                        if out_path.is_file() {
-                            let _ = std::fs::remove_file(&out_path);
-                        } else if out_path.is_dir() {
-                            let _ = std::fs::remove_dir(&out_path);
+                        if !was_preexisting {
+                            if out_path.is_file() {
+                                let _ = std::fs::remove_file(&out_path);
+                            } else if out_path.is_dir() {
+                                let _ = std::fs::remove_dir(&out_path);
+                            }
                         }
                     } else {
                         current_file_name = safe_path.to_string_lossy().to_string();
                         current_file_path = Some(out_path.clone());
-                        extracted_files.push(out_path.to_string_lossy().to_string());
+                        let out_str = out_path.to_string_lossy().to_string();
+                        if !was_preexisting {
+                            newly_created.push(out_str.clone());
+                        }
+                        extracted_files.push(out_str);
                     }
                 } else {
                     current_file_name = clean_rel;
                 }
             } else if trimmed.to_lowercase().contains("error") || trimmed.to_lowercase().contains("fatal") {
-                error_lines.push(trimmed.to_string());
+                error_lines.push(trimmed.trim().to_string());
             }
         }
 
@@ -1361,23 +1526,35 @@ pub fn extract_with_system_tar(
                 let _ = reader_handle.join();
 
                 while let Ok(line) = rx.try_recv() {
-                    let trimmed = line.trim();
-                    if let Some(rel_path) = trimmed.strip_prefix("x ") {
-                        let clean_rel = rel_path.trim().replace('\\', "/");
+                    let trimmed = line.trim_end_matches(['\r', '\n']);
+                    if let Some(rel_path) = trimmed.trim_start().strip_prefix("x ") {
+                        let clean_rel = rel_path.replace('\\', "/");
                         if let Some(safe_path) = sanitize_archive_path(&clean_rel) {
                             let out_path = dest_dir.join(&safe_path);
+                            let norm_key = out_path
+                                .to_string_lossy()
+                                .replace('\\', "/")
+                                .trim_end_matches('/')
+                                .to_ascii_lowercase();
+                            let was_preexisting = preexisting_paths.contains(&norm_key);
                             if is_path_excluded(&clean_rel, excluded) {
-                                if out_path.is_file() {
-                                    let _ = std::fs::remove_file(&out_path);
-                                } else if out_path.is_dir() {
-                                    let _ = std::fs::remove_dir(&out_path);
+                                if !was_preexisting {
+                                    if out_path.is_file() {
+                                        let _ = std::fs::remove_file(&out_path);
+                                    } else if out_path.is_dir() {
+                                        let _ = std::fs::remove_dir(&out_path);
+                                    }
                                 }
                             } else {
-                                extracted_files.push(out_path.to_string_lossy().to_string());
+                                let out_str = out_path.to_string_lossy().to_string();
+                                if !was_preexisting {
+                                    newly_created.push(out_str.clone());
+                                }
+                                extracted_files.push(out_str);
                             }
                         }
                     } else if trimmed.to_lowercase().contains("error") || trimmed.to_lowercase().contains("fatal") {
-                        error_lines.push(trimmed.to_string());
+                        error_lines.push(trimmed.trim().to_string());
                     }
                 }
 
@@ -1387,7 +1564,7 @@ pub fn extract_with_system_tar(
                     } else {
                         format!("tar.exe exited with error code: {:?}", status.code())
                     };
-                    cleanup_extracted_files(&extracted_files);
+                    cleanup_extracted_files(&newly_created);
                     return Err(format!("Extraction error: {}", err_msg));
                 }
                 break;
@@ -1423,7 +1600,7 @@ pub fn extract_with_system_tar(
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader_handle.join();
-                cleanup_extracted_files(&extracted_files);
+                cleanup_extracted_files(&newly_created);
                 return Err(format!("Error monitoring tar.exe process: {}", e));
             }
         }
@@ -1535,43 +1712,36 @@ pub fn extract_archive_sync(
         false
     };
 
-    let dest_dir = if let Some(custom_dest) = destination {
-        if custom_dest.trim().is_empty() {
-            if rar_single_root_match {
-                parent.to_path_buf()
+    let use_subfolder = extract_to_subfolder.unwrap_or(true);
+    let dest_dir = if let Some(custom_dest) = destination.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let p = PathBuf::from(custom_dest);
+        if !use_subfolder {
+            p
+        } else if rar_single_root_match {
+            if p.file_name().and_then(|s| s.to_str()).map(|n| n.eq_ignore_ascii_case(&stem)).unwrap_or(false) {
+                p.parent().map(|d| d.to_path_buf()).unwrap_or_else(|| parent.to_path_buf())
             } else {
-                resolve_unique_folder_name(&parent.join(&stem))
+                p
             }
         } else {
-            let p = PathBuf::from(custom_dest);
-            if rar_single_root_match {
-                if p.file_name().and_then(|s| s.to_str()).map(|n| n.eq_ignore_ascii_case(&stem)).unwrap_or(false) {
-                    p.parent().map(|d| d.to_path_buf()).unwrap_or_else(|| parent.to_path_buf())
-                } else {
-                    p
-                }
-            } else {
-                // If the user or frontend selected a destination folder, we only resolve a unique name
-                // if `p` actually ends with the archive stem subfolder!
-                // We must NEVER rename an existing parent directory (like Downloads, Desktop, or Documents) into Downloads (1)!
-                let is_stem_folder = p.file_name()
-                    .and_then(|s| s.to_str())
-                    .map(|n| n.eq_ignore_ascii_case(&stem) || base_folder_stem(n).eq_ignore_ascii_case(&stem))
-                    .unwrap_or(false);
+            // If the user or frontend selected a destination folder, we only resolve a unique name
+            // if `p` actually ends with the archive stem subfolder!
+            // We must NEVER rename an existing parent directory (like Downloads, Desktop, or Documents) into Downloads (1)!
+            let is_stem_folder = p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.eq_ignore_ascii_case(&stem) || base_folder_stem(n).eq_ignore_ascii_case(&stem))
+                .unwrap_or(false);
 
-                if is_stem_folder {
-                    resolve_unique_folder_name(&p)
-                } else {
-                    p
-                }
+            if is_stem_folder {
+                resolve_unique_folder_name(&p)
+            } else {
+                p
             }
         }
+    } else if !use_subfolder || rar_single_root_match {
+        parent.to_path_buf()
     } else {
-        if rar_single_root_match {
-            parent.to_path_buf()
-        } else {
-            resolve_unique_folder_name(&parent.join(&stem))
-        }
+        resolve_unique_folder_name(&parent.join(&stem))
     };
 
     let target_folder = if rar_single_root_match {

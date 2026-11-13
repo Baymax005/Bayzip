@@ -1,7 +1,7 @@
 # 🧪 Bayzip Automated Test Suite & Quality Report
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-31%2F31%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="31/31 Automated Tests Passing" />
+  <img src="https://img.shields.io/badge/tests-41%2F41%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="41/41 Automated Tests Passing" />
   <img src="https://img.shields.io/badge/typecheck-0%20errors-0078D6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 0 Errors" />
   <img src="https://img.shields.io/badge/duration-0.08s-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Execution Time 0.08s" />
   <img src="https://img.shields.io/badge/coverage-100%25%20Passing-10B981?style=flat-square&logo=shield&logoColor=white" alt="100% Passing" />
@@ -24,7 +24,7 @@ Bayzip enforces strict automated regression and security testing across all cont
 
 ---
 
-## 📊 Automated Test Matrix (31 Unit Tests)
+## 📊 Automated Test Matrix (41 Unit Tests)
 
 | # | Test Module | Test Name | Purpose & Security Verification | Status |
 |---|---|---|---|:---:|
@@ -59,6 +59,16 @@ Bayzip enforces strict automated regression and security testing across all cont
 | 29 | `priority` | `test_concurrent_threads_priority_guards_restore_independently` | Confirms priority adjustments in concurrent worker threads remain isolated and do not collide. | `PASSED` |
 | 30 | `priority` | `test_background_shield_toggle` | Verifies priority shield toggling behavior. | `PASSED` |
 | 31 | `system` | `test_collect_system_specs` | Validates asynchronous physical hardware query (CPU core counts, total RAM). | `PASSED` |
+| 32 | `types` | `test_task_cancel_token_lifecycle` | Verifies atomic cancel flag initialization, cancellation signaling, and token isolation lifecycle. | `PASSED` |
+| 33 | `types` | `test_task_cancel_tokens_are_isolated` | Confirms independent `TaskCancelToken` instances do not interfere across concurrent tasks. | `PASSED` |
+| 34 | `compressor` | `test_compression_task_guard_isolation` | Verifies RAII `CompressionTaskGuard` isolates thread-local cancellation scopes without zombie leaks. | `PASSED` |
+| 35 | `extractor` | `test_extraction_task_guard_isolation` | Verifies RAII `ExtractionTaskGuard` scopes isolate cancellation flags per extraction job. | `PASSED` |
+| 36 | `tester` | `test_tester_task_guard_isolation` | Verifies RAII `TestTaskGuard` scopes isolate cancellation flags during integrity tests. | `PASSED` |
+| 37 | `extractor` | `test_cleanup_extracted_files_safely_removes_created_files` | Validates `cleanup_extracted_files` safely deletes newly extracted items without panicking on missing paths. | `PASSED` |
+| 38 | `compressor::utils` | `test_is_path_excluded_dot_slash_prefix` | Ensures `./`, `/`, and backslash relative path prefixes normalize cleanly during exclusion matching. | `PASSED` |
+| 39 | `compressor::utils` | `test_is_excluded_or_temp_artifact` | Verifies `.baytmp`, `.baypart`, output archive, and temp archive paths are excluded from self-inclusion. | `PASSED` |
+| 40 | `inspector::preview` | `test_extract_entry_ext` | Validates extension parsing on nested paths containing dots in folder names and extensionless files. | `PASSED` |
+| 41 | `inspector::preview` | `test_is_likely_utf8_text` | Verifies 0-byte empty text handling, trailing incomplete UTF-8 boundary tolerance, and binary NUL rejection. | `PASSED` |
 
 ---
 
@@ -66,40 +76,50 @@ Bayzip enforces strict automated regression and security testing across all cont
 
 ### Backend Rust Test Suite (`cargo test`)
 ```text
-running 31 tests
+running 41 tests
 test compressor::tests::test_calculate_target_threads_scaling ... ok
-test compressor::tests::test_calculate_zstd_level_gamer_preset_cap ... ok
-test extractor::tests::test_drain_bay_entry_bytes_exact_match ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_encrypted_toc_exceeding_file_bounds ... ok
-test extractor::tests::test_drain_bay_entry_bytes_io_error ... ok
 test compressor::tests::test_is_gamer_preset_normalization ... ok
+test extractor::tests::test_drain_bay_entry_bytes_io_error ... ok
+test compressor::utils::tests::test_is_path_excluded_dot_slash_prefix ... ok
+test compressor::tests::test_calculate_zstd_level_gamer_preset_cap ... ok
+test compressor::tests::test_compression_task_guard_isolation ... ok
+test extractor::tests::test_drain_bay_entry_bytes_exact_match ... ok
 test extractor::tests::test_drain_bay_entry_bytes_premature_eof ... ok
 test extractor::tests::test_drain_bay_entry_bytes_unaligned_chunking ... ok
 test extractor::tests::test_drain_bay_entry_bytes_zero_length ... ok
+test extractor::tests::test_extraction_task_guard_isolation ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_encrypted_toc_exceeding_file_bounds ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_file_too_small ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_toc ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_encrypted_toc ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_zero_encrypted_toc_len ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_toc ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_toc_exceeding_file_bounds ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_zero_encrypted_toc_len ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_zero_toc_len ... ok
-test inspector::tests::test_absolute_and_drive_paths ... ok
+test compressor::utils::tests::test_is_excluded_or_temp_artifact ... ok
+test inspector::preview::tests::test_extract_entry_ext ... ok
 test inspector::bay::tests::test_read_bay_trailer_valid_toc ... ok
-test inspector::tests::test_empty_and_dot_paths ... ok
+test inspector::preview::tests::test_is_likely_utf8_text ... ok
+test inspector::tests::test_absolute_and_drive_paths ... ok
 test inspector::tests::test_dos_reserved_devices ... ok
+test inspector::tests::test_empty_and_dot_paths ... ok
 test inspector::tests::test_invalid_characters ... ok
 test inspector::tests::test_parent_traversal ... ok
 test inspector::tests::test_trailing_period_and_space_evasion ... ok
 test inspector::tests::test_valid_paths ... ok
 test priority::tests::test_background_shield_toggle ... ok
+test types::tests::test_task_cancel_token_lifecycle ... ok
+test tester::tests::test_tester_task_guard_isolation ... ok
+test types::tests::test_task_cancel_tokens_are_isolated ... ok
+test priority::tests::test_concurrent_threads_priority_guards_restore_independently ... ok
+test extractor::tests::test_cleanup_extracted_files_safely_removes_created_files ... ok
 test priority::tests::test_nested_scoped_priority_guards_unwind_correctly ... ok
 test priority::tests::test_scoped_priority_guard_restores_thread_priority ... ok
-test priority::tests::test_concurrent_threads_priority_guards_restore_independently ... ok
 test tests::test_collect_system_specs ... ok
+test crypto::tests::test_chunked_aes_wrong_password ... ok
 test crypto::tests::test_chunked_aes_truncation_detection ... ok
 test crypto::tests::test_chunked_aes_roundtrip ... ok
-test crypto::tests::test_chunked_aes_wrong_password ... ok
 
-test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
 ```
 
 ### Frontend TypeScript Static Analysis (`npx tsc --noEmit`)

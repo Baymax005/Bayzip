@@ -118,7 +118,13 @@ pub fn is_precompressed_file(path: &Path) -> bool {
 
 pub fn is_path_excluded(clean_rel: &str, excluded: Option<&std::collections::HashSet<String>>) -> bool {
     if let Some(set) = excluded {
-        let clean = clean_rel.replace('\\', "/").trim_start_matches('/').trim_end_matches('/').to_lowercase();
+        let replaced = clean_rel.replace('\\', "/");
+        let clean = replaced
+            .trim_start_matches('/')
+            .trim_start_matches("./")
+            .trim_start_matches('/')
+            .trim_end_matches('/')
+            .to_lowercase();
         if set.contains(&clean) {
             return true;
         }
@@ -127,6 +133,55 @@ pub fn is_path_excluded(clean_rel: &str, excluded: Option<&std::collections::Has
             if clean.starts_with(&format!("{}/", exc_clean)) || clean == exc_clean {
                 return true;
             }
+        }
+    }
+    false
+}
+
+/// Returns `true` if `path` is a Bayzip temporary artifact (`.baytmp`, `.baypart`)
+/// or matches `output_path` / `temp_path` to prevent archive self-inclusion.
+pub fn is_excluded_or_temp_artifact(
+    path: &Path,
+    output_path: Option<&Path>,
+    temp_path: Option<&Path>,
+) -> bool {
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".baytmp") || lower.ends_with(".baypart") {
+            return true;
+        }
+    }
+
+    let norm_str = |p: &Path| -> String {
+        let s = p.to_string_lossy().replace('/', "\\");
+        s.strip_prefix("\\\\?\\").unwrap_or(&s).to_ascii_lowercase()
+    };
+    let canonical_or_parent = |p: &Path| -> Option<std::path::PathBuf> {
+        if let Ok(c) = std::fs::canonicalize(p) {
+            return Some(c);
+        }
+        let parent = p.parent()?;
+        let name = p.file_name()?;
+        std::fs::canonicalize(parent).ok().map(|cp| cp.join(name))
+    };
+    let matches_target = |candidate: &Path, target: &Path| -> bool {
+        if norm_str(candidate) == norm_str(target) {
+            return true;
+        }
+        if let (Some(cc), Some(ct)) = (canonical_or_parent(candidate), canonical_or_parent(target)) {
+            return norm_str(&cc) == norm_str(&ct);
+        }
+        false
+    };
+
+    if let Some(out) = output_path {
+        if matches_target(path, out) {
+            return true;
+        }
+    }
+    if let Some(tmp) = temp_path {
+        if matches_target(path, tmp) {
+            return true;
         }
     }
     false
@@ -162,27 +217,35 @@ pub fn compute_path_size_filtered(
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
                         let ep = entry.path();
+                        if is_excluded_or_temp_artifact(&ep, None, None) {
+                            continue;
+                        }
                         let rel = ep.strip_prefix(base_parent).unwrap_or(&ep);
                         let rel_str = rel.to_string_lossy().replace('\\', "/");
                         let clean = rel_str.trim_start_matches('/');
                         if is_path_excluded(clean, excluded) {
                             continue;
                         }
-                        if let Ok(m) = entry.metadata() {
+                        if let Ok(m) = std::fs::symlink_metadata(&ep) {
+                            if m.file_type().is_symlink() {
+                                continue;
+                            }
                             if m.is_file() {
-                                *total += m.len();
-                            } else if m.is_dir() && !m.file_type().is_symlink() {
+                                *total = total.saturating_add(m.len());
+                            } else if m.is_dir() {
                                 walk_dir(&ep, base_parent, total, depth + 1, excluded);
                             }
                         }
                     }
                 }
             }
-            let rel = p.strip_prefix(base_parent).unwrap_or(p);
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            let clean = rel_str.trim_start_matches('/');
-            if !is_path_excluded(clean, excluded) {
-                walk_dir(p, base_parent, &mut total, 0, excluded);
+            if !is_excluded_or_temp_artifact(p, None, None) {
+                let rel = p.strip_prefix(base_parent).unwrap_or(p);
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let clean = rel_str.trim_start_matches('/');
+                if !is_path_excluded(clean, excluded) {
+                    walk_dir(p, base_parent, &mut total, 0, excluded);
+                }
             }
             (total, true)
         } else {
@@ -196,4 +259,35 @@ pub fn compute_path_size_filtered(
 pub fn compute_path_size(p: &Path) -> (u64, bool) {
     let parent = p.parent().unwrap_or(p);
     compute_path_size_filtered(p, parent, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_is_path_excluded_dot_slash_prefix() {
+        let mut excluded = HashSet::new();
+        excluded.insert("folder/secret.txt".to_string());
+        excluded.insert("sub".to_string());
+
+        assert!(is_path_excluded("./folder/secret.txt", Some(&excluded)));
+        assert!(is_path_excluded("/folder/secret.txt", Some(&excluded)));
+        assert!(is_path_excluded("folder\\secret.txt", Some(&excluded)));
+        assert!(is_path_excluded("./sub/nested/file.bin", Some(&excluded)));
+        assert!(!is_path_excluded("./folder/public.txt", Some(&excluded)));
+    }
+
+    #[test]
+    fn test_is_excluded_or_temp_artifact() {
+        let out = Path::new("D:\\Archives\\bundle.bay");
+        let tmp = Path::new("D:\\Archives\\bundle.bay.baytmp");
+
+        assert!(is_excluded_or_temp_artifact(Path::new("D:\\Work\\foo.baytmp"), None, None));
+        assert!(is_excluded_or_temp_artifact(Path::new("D:\\Work\\foo.BAYPART"), None, None));
+        assert!(is_excluded_or_temp_artifact(Path::new("d:/archives/bundle.bay"), Some(out), Some(tmp)));
+        assert!(is_excluded_or_temp_artifact(Path::new("D:\\Archives\\bundle.bay.baytmp"), Some(out), Some(tmp)));
+        assert!(!is_excluded_or_temp_artifact(Path::new("D:\\Archives\\data.txt"), Some(out), Some(tmp)));
+    }
 }

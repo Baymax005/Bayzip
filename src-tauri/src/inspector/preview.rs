@@ -46,7 +46,7 @@ pub fn preview_archive_entry_sync(
         return Err("Archive file not found".into());
     }
 
-    let ext = entry_name.rsplit('.').next().unwrap_or("").to_lowercase();
+    let ext = extract_entry_ext(entry_name);
 
     // Check restricted executables first
     if RESTRICTED_EXECUTABLE_EXTS.contains(&ext.as_str()) {
@@ -126,7 +126,7 @@ pub fn preview_archive_entry_sync(
 
     // Check text/code or UTF-8
     let is_text_ext = TEXT_CODE_EXTS.contains(&ext.as_str());
-    let is_valid_utf8 = !bytes.is_empty() && !bytes[..bytes.len().min(512)].contains(&0) && std::str::from_utf8(&bytes).is_ok();
+    let is_valid_utf8 = is_likely_utf8_text(&bytes);
 
     if is_text_ext || is_valid_utf8 {
         let (content_str, warning) = if bytes.len() > 1_000_000 {
@@ -165,7 +165,7 @@ pub fn preview_staged_file_sync(file_path: &str) -> Result<ArchiveEntryPreview, 
         return Err("File not found".into());
     }
     let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file");
-    let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
+    let ext = extract_entry_ext(file_name);
     let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
     let total_size = meta.len();
 
@@ -229,7 +229,7 @@ pub fn preview_staged_file_sync(file_path: &str) -> Result<ArchiveEntryPreview, 
 
     // Check text/code or valid UTF-8
     let is_text_ext = TEXT_CODE_EXTS.contains(&ext.as_str());
-    let is_valid_utf8 = !bytes.is_empty() && !bytes[..bytes.len().min(512)].contains(&0) && std::str::from_utf8(&bytes).is_ok();
+    let is_valid_utf8 = is_likely_utf8_text(&bytes);
 
     if is_text_ext || is_valid_utf8 {
         let (content_str, warning) = if bytes.len() > 1_000_000 {
@@ -260,4 +260,52 @@ pub fn preview_staged_file_sync(file_path: &str) -> Result<ArchiveEntryPreview, 
         is_restricted: false,
         warning: Some("Binary File: Direct preview is not supported for this file type.".to_string()),
     })
+}
+
+pub(crate) fn extract_entry_ext(name: &str) -> String {
+    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    Path::new(basename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+}
+
+pub(crate) fn is_likely_utf8_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    let sample = &bytes[..bytes.len().min(64 * 1024)];
+    if sample.contains(&0) {
+        return false;
+    }
+    match std::str::from_utf8(sample) {
+        Ok(_) => true,
+        Err(e) => e.error_len().is_none() && e.valid_up_to() > 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_entry_ext() {
+        assert_eq!(extract_entry_ext("folder/sub/archive.tar.gz"), "gz");
+        assert_eq!(extract_entry_ext("folder.v1/README"), "");
+        assert_eq!(extract_entry_ext("Makefile"), "");
+        assert_eq!(extract_entry_ext(".gitignore"), "");
+        assert_eq!(extract_entry_ext("src\\MAIN.RS"), "rs");
+    }
+
+    #[test]
+    fn test_is_likely_utf8_text() {
+        assert!(is_likely_utf8_text(b""));
+        assert!(is_likely_utf8_text("Hello, 世界!".as_bytes()));
+        // Truncated right before completing the last 3-byte UTF-8 sequence
+        let s = "Hello 世界".as_bytes();
+        assert!(is_likely_utf8_text(&s[..s.len() - 1]));
+        assert!(!is_likely_utf8_text(b"ELF\x00binary"));
+        assert!(!is_likely_utf8_text(&[0xff, 0xfe, 0x00, 0x41]));
+    }
 }

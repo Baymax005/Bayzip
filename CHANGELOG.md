@@ -2,6 +2,29 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.7] - 2026-11-13
+
+### 🛡️ Phase 5 Critical Data Safety, Symlink Hardening & Engine Correctness
+- **Multi-Directory `.bay` Root Path Fidelity & Shared Encoder Loop (`src-tauri/src/compressor/bay.rs`) (`CRIT-01`)**:
+  - Removed the single-item `first_path` / `parent_dir` assumption so each staged item computes its own `parent_dir` cleanly across Brotli, LZ4, and Zstandard encoders.
+  - Extracted a shared `write_bay_items` encoder helper and aligned Brotli quality levels with range guards (`<= 0`, `<= 25`, `<= 50`, `<= 75`).
+- **Non-Destructive Extraction Rollback & `.baypart` Staging Protection (`src-tauri/src/extractor.rs`) (`CRIT-02`)**:
+  - Added `newly_created` tracking across `extract_bay_stream`, `extract_zip_archive`, `extract_tar_entries`, `extract_7z_archive`, and `extract_with_system_tar` so error or cancellation rollbacks (`cleanup_extracted_files`) never delete pre-existing user files.
+  - Enforced `.baypart` atomic staging when overwriting pre-existing files even for payloads `<= 64 KB`, cleaned up leftover `.baypart` temp files on flush/rename errors, and snapshotted `preexisting_paths` in `extract_with_system_tar` before cleanup.
+- **Self-Inclusion Prevention, Path Exclusion Normalization & Symlink Defense (`compressor/`, `inspector/staged.rs`) (`CRIT-03`, `MED-04`)**:
+  - Added `is_excluded_or_temp_artifact` in `compressor/utils.rs` and filtered `.baytmp`, `.baypart`, output archive paths, active temp files, and symlinks (`std::fs::symlink_metadata`) across `.bay`, `.zip`, `.7z`, `.tar` (main & headless) engines and `walk_staged_dir`.
+  - Updated `is_path_excluded` in `compressor/utils.rs` and `extractor.rs` to normalize leading `./` prefixes (`test_is_path_excluded_dot_slash_prefix`, `test_is_excluded_or_temp_artifact`).
+- **System `tar.exe` Symlink/Hardlink Zip-Slip & Pipe Deadlock Fixes (`extractor.rs`, `inspector/rar.rs`) (`CRIT-04`, `CRIT-05`)**:
+  - Added `tar.exe -tvf` symlink and hardlink pre-inspection, `--no-same-permissions --no-same-owner` flags, trailing-space preservation (`trim_end_matches(['\r', '\n'])`), cancellation check on entry, and `get_child_process_creation_flags()` in `extract_with_system_tar`.
+  - Skipped symlink entries in `extract_zip_archive` and non-file/non-directory/non-contiguous entries in `extract_tar_entries`.
+  - Resolved >15 MB preview `stdout`/`stderr` pipe deadlocks in `preview_rar_entry_bytes` by draining `stderr` concurrently and killing `tar.exe` when hitting the 15 MB cap while properly distinguishing clean 0-byte empty entries.
+- **Engine Integrity, CRC Verification & Preview Refinements (`bay.rs`, `tar.rs`, `extractor.rs`, `inspector/preview.rs`)**:
+  - Propagated source read errors instead of zero-padding and enforced EOF marker write checks across `.bay` encoders and headless quick compression.
+  - Added trailing 1-byte reads in `extract_zip_archive` to trigger `zip-rs` CRC-32 validation on small and streamed entries, and returned premature-EOF errors in ZIP, TAR, and 7z extractors when `Ok(0)` occurs early.
+  - Honored `extract_to_subfolder: Some(false)` consistently in `extract_archive_sync`.
+  - Preserved `mtime` metadata headers and bounded reads with `f.take(sz)` in `compress_tar`.
+  - Added `extract_entry_ext` and `is_likely_utf8_text` (with unit tests) in `inspector/preview.rs` for dotted folder names, empty 0-byte files, and UTF-8 truncation boundaries.
+
 ## [v2.4.6] - 2026-11-11
 
 ### 🚀 Phase 4 Performance Polish, Process Shielding & Code Quality

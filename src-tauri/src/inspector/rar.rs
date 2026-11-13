@@ -160,6 +160,13 @@ pub fn preview_rar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to run tar command: {}", e))?;
     let mut stdout = child.stdout.take().ok_or_else(|| "Failed to capture stdout".to_string())?;
+    let err_handle = child.stderr.take().map(|mut err_pipe| {
+        std::thread::spawn(move || {
+            let mut msg = String::new();
+            let _ = err_pipe.read_to_string(&mut msg);
+            msg
+        })
+    });
 
     let max_preview = 15 * 1024 * 1024; // Strict 15 MB limit matching other preview formats
     let mut buf = Vec::new();
@@ -174,18 +181,25 @@ pub fn preview_rar_entry_bytes(path: &Path, entry_name: &str) -> Result<(Vec<u8>
         }
     }
 
-    let mut stderr_msg = String::new();
-    if let Some(mut err_pipe) = child.stderr.take() {
-        let _ = err_pipe.read_to_string(&mut stderr_msg);
+    let hit_limit = buf.len() >= max_preview;
+    drop(stdout);
+    if hit_limit {
+        let _ = child.kill();
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    let exit_status = child.wait().ok();
+    let stderr_msg = err_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
 
     if buf.is_empty() {
+        let succeeded = exit_status.map(|s| s.success()).unwrap_or(false);
+        if succeeded && stderr_msg.trim().is_empty() {
+            return Ok((buf, 0));
+        }
         let err = if !stderr_msg.trim().is_empty() {
             format!("Failed to preview entry: {}", stderr_msg.trim())
         } else {
-            format!("Entry '{}' not found or empty in RAR archive", entry_name)
+            format!("Entry '{}' not found or unreadable in archive", entry_name)
         };
         return Err(err);
     }
