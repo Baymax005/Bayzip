@@ -5,6 +5,7 @@ export interface VirtualScrollListProps<T> {
   rowHeight?: number;
   overscan?: number;
   className?: string;
+  resetScrollTrigger?: string | number;
   renderRow: (item: T, index: number) => React.ReactNode;
 }
 
@@ -13,6 +14,7 @@ export function VirtualScrollList<T>({
   rowHeight = 34,
   overscan = 5,
   className = "",
+  resetScrollTrigger,
   renderRow,
 }: VirtualScrollListProps<T>) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -59,9 +61,17 @@ export function VirtualScrollList<T>({
     };
   }, []);
 
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+    setScrollTop(0);
+  }, [resetScrollTrigger]);
+
   const totalHeight = items.length * rowHeight;
-  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const endIndex = Math.min(items.length, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan);
+  const effectiveScrollTop = Math.min(scrollTop, Math.max(0, totalHeight - viewportHeight));
+  const startIndex = Math.max(0, Math.floor(effectiveScrollTop / rowHeight) - overscan);
+  const endIndex = Math.min(items.length, Math.ceil((effectiveScrollTop + viewportHeight) / rowHeight) + overscan);
   const visibleItems = items.slice(startIndex, endIndex);
   const offsetY = startIndex * rowHeight;
 

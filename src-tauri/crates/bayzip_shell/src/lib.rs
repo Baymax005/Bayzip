@@ -11,7 +11,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::{
     IEnumExplorerCommand, IEnumExplorerCommand_Impl, IExplorerCommand, IExplorerCommand_Impl,
-    IShellItemArray, ECF_DEFAULT, ECF_HASSUBCOMMANDS, ECS_ENABLED, SIGDN_FILESYSPATH,
+    IShellItemArray, ECF_DEFAULT, ECF_HASSUBCOMMANDS, ECS_ENABLED, ECS_HIDDEN, SIGDN_FILESYSPATH,
 };
 
 // 44E23C12-5883-4903-9DA9-33D72120C19A
@@ -102,11 +102,29 @@ fn get_selected_paths(psiitemarray: Option<&IShellItemArray>) -> Vec<String> {
     paths
 }
 
+/// Returns true when the given path points to a supported archive file (never a directory).
+pub fn is_supported_archive_path(p: &str) -> bool {
+    let path = std::path::Path::new(p);
+    if path.is_dir() {
+        return false;
+    }
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "bay" | "bayg" | "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "tbz2" | "bz2" | "txz" | "xz" | "zst" | "iso" | "cab"
+    )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CommandAction {
     Root,
     CompressGamer,
     CompressBay,
+    ExtractToSubfolder,
     ExtractHere,
     OpenGui,
 }
@@ -136,6 +154,7 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
                 CommandAction::Root => "Bayzip",
                 CommandAction::CompressGamer => "Compress to .bayg (Gamer Preset)",
                 CommandAction::CompressBay => "Compress to .bay (Ultra-Fast)",
+                CommandAction::ExtractToSubfolder => "Extract to Subfolder",
                 CommandAction::ExtractHere => "Extract Here",
                 CommandAction::OpenGui => "Open in Bayzip",
             };
@@ -167,6 +186,7 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
                 CommandAction::CompressBay => 0x44e23c12_5883_4903_9da9_33d72120c19c,
                 CommandAction::ExtractHere => 0x44e23c12_5883_4903_9da9_33d72120c19d,
                 CommandAction::OpenGui => 0x44e23c12_5883_4903_9da9_33d72120c19e,
+                CommandAction::ExtractToSubfolder => 0x44e23c12_5883_4903_9da9_33d72120c19f,
             };
             Ok(GUID::from_u128(u128_id))
         }))
@@ -175,10 +195,19 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
 
     fn GetState(
         &self,
-        _psiitemarray: Option<&IShellItemArray>,
+        psiitemarray: Option<&IShellItemArray>,
         _foktousetickedstate: BOOL,
     ) -> windows::core::Result<u32> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if matches!(
+                self.action,
+                CommandAction::ExtractHere | CommandAction::ExtractToSubfolder
+            ) {
+                let paths = get_selected_paths(psiitemarray);
+                if !paths.is_empty() && !paths.iter().all(|p| is_supported_archive_path(p)) {
+                    return Ok(ECS_HIDDEN.0 as u32);
+                }
+            }
             Ok(ECS_ENABLED.0 as u32)
         }))
         .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
@@ -200,17 +229,7 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
 
             match self.action {
                 CommandAction::Root | CommandAction::OpenGui => {
-                    let is_all_archives = !paths.is_empty() && paths.iter().all(|p| {
-                        let path = std::path::Path::new(p);
-                        if path.is_dir() {
-                            return false;
-                        }
-                        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-                        matches!(
-                            ext.as_str(),
-                            "bay" | "bayg" | "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "iso" | "cab"
-                        )
-                    });
+                    let is_all_archives = !paths.is_empty() && paths.iter().all(|p| is_supported_archive_path(p));
 
                     if is_all_archives {
                         cmd.arg("--gui-extract");
@@ -231,6 +250,12 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
                 CommandAction::CompressBay => {
                     cmd.arg("--quick-compress");
                     cmd.arg(".bay");
+                    for p in &paths {
+                        cmd.arg(p);
+                    }
+                }
+                CommandAction::ExtractToSubfolder => {
+                    cmd.arg("--extract-to-folder");
                     for p in &paths {
                         cmd.arg(p);
                     }
@@ -272,6 +297,7 @@ impl IExplorerCommand_Impl for BayzipExplorerCommand_Impl {
                 let sub_commands = vec![
                     BayzipExplorerCommand::new(CommandAction::CompressGamer).into(),
                     BayzipExplorerCommand::new(CommandAction::CompressBay).into(),
+                    BayzipExplorerCommand::new(CommandAction::ExtractToSubfolder).into(),
                     BayzipExplorerCommand::new(CommandAction::ExtractHere).into(),
                     BayzipExplorerCommand::new(CommandAction::OpenGui).into(),
                 ];

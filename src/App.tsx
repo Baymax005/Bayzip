@@ -1,5 +1,5 @@
 import { formatBytes } from "./utils/format";
-import { getArchiveStemName, isArchiveFile } from "./utils/archive";
+import { getArchiveStemName, isArchiveFile, resolveStagedDiskPath, togglePathExclusion } from "./utils/archive";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -58,7 +58,7 @@ export default function App() {
   const [compressPassword, setCompressPassword] = useState<string>("");
   const [showCompressPassword, setShowCompressPassword] = useState<boolean>(false);
   const [archiveToOriginalPath, setArchiveToOriginalPath] = useState(true);
-  const [compressDestDir] = useState<string>("");
+  const [compressDestDir, setCompressDestDir] = useState<string>("");
   const [separateArchives, setSeparateArchives] = useState(false);
   const [smartMediaBypass, setSmartMediaBypass] = useState(true);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
@@ -397,38 +397,8 @@ export default function App() {
 
   // Exclusions Management
   const handleToggleExclude = (rawPath: string, isDir?: boolean) => {
-    const norm = normalizeArchiveEntryPath(rawPath).replace(/\/+$/, "");
-    const prefix = norm + "/";
-
-    setExcludedPaths((prev) => {
-      const next = new Set(prev);
-      const allEntries = archiveInfo?.entries || [];
-      const isCurrentlyExcluded = next.has(norm);
-
-      if (isCurrentlyExcluded) {
-        next.delete(norm);
-        next.delete(norm + "/");
-        if (isDir) {
-          for (const exc of Array.from(next)) {
-            const excClean = exc.replace(/\/+$/, "");
-            if (excClean === norm || excClean.startsWith(prefix)) {
-              next.delete(exc);
-            }
-          }
-        }
-      } else {
-        next.add(norm);
-        if (isDir) {
-          for (const entry of allEntries) {
-            const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
-            if (entryNorm.startsWith(prefix) || entryNorm === norm) {
-              next.add(entryNorm);
-            }
-          }
-        }
-      }
-      return next;
-    });
+    const allEntries = archiveInfo?.entries || [];
+    setExcludedPaths((prev) => togglePathExclusion(prev, rawPath, isDir, allEntries));
   };
 
   const handleIncludeAll = () => {
@@ -436,37 +406,7 @@ export default function App() {
   };
 
   const handleToggleCompressExclude = (rawPath: string, isDir?: boolean) => {
-    const norm = normalizeArchiveEntryPath(rawPath).replace(/\/+$/, "");
-    const prefix = norm + "/";
-
-    setExcludedCompressPaths((prev) => {
-      const next = new Set(prev);
-      const isCurrentlyExcluded = next.has(norm);
-
-      if (isCurrentlyExcluded) {
-        next.delete(norm);
-        next.delete(norm + "/");
-        if (isDir) {
-          for (const exc of Array.from(next)) {
-            const excClean = exc.replace(/\/+$/, "");
-            if (excClean === norm || excClean.startsWith(prefix)) {
-              next.delete(exc);
-            }
-          }
-        }
-      } else {
-        next.add(norm);
-        if (isDir) {
-          for (const entry of stagedEntries) {
-            const entryNorm = normalizeArchiveEntryPath(entry.name).replace(/\/+$/, "");
-            if (entryNorm.startsWith(prefix) || entryNorm === norm) {
-              next.add(entryNorm);
-            }
-          }
-        }
-      }
-      return next;
-    });
+    setExcludedCompressPaths((prev) => togglePathExclusion(prev, rawPath, isDir, stagedEntries));
   };
 
   const handleCompressIncludeAll = () => {
@@ -493,9 +433,10 @@ export default function App() {
     setPreviewData(null);
 
     if (isDiskFile) {
-      setPreviewTargetDisplayPath(entryName);
+      const diskPath = resolveStagedDiskPath(entryName, selectedFiles);
+      setPreviewTargetDisplayPath(diskPath);
       try {
-        const res = await invoke<ArchiveEntryPreview>("preview_staged_file", { path: entryName });
+        const res = await invoke<ArchiveEntryPreview>("preview_staged_file", { path: diskPath });
         setPreviewData(res);
       } catch (err: unknown) {
         setPreviewError(typeof err === "string" ? err : String(err));
@@ -541,7 +482,10 @@ export default function App() {
       setStagedEntries([]);
       setExcludedCompressPaths(new Set());
       setIsInspectingStaged(false);
-      if (!isCompressing) setCustomArchiveName("");
+      if (!isCompressing) {
+        setCustomArchiveName("");
+        setCompressDestDir("");
+      }
       return;
     }
 
@@ -607,15 +551,23 @@ export default function App() {
     };
   }, [selectedFiles, isCompressing]);
 
-  // Auto-fill archive name from first file stem
+  // Auto-fill archive name & default output destination from first staged item
   useEffect(() => {
-    if (selectedFiles.length > 0 && !customArchiveName) {
+    if (selectedFiles.length > 0) {
       const first = selectedFiles[0];
-      const filename = first.split(/[/\\]/).pop() || "bayzip_archive";
-      const stem = getArchiveStemName(filename);
-      setCustomArchiveName(stem);
+      if (!customArchiveName) {
+        const filename = first.split(/[/\\]/).pop() || "bayzip_archive";
+        const stem = getArchiveStemName(filename);
+        setCustomArchiveName(stem);
+      }
+      if (!compressDestDir) {
+        const firstParent = first.replace(/[/\\][^/\\]+$/, "");
+        if (firstParent && firstParent !== first) {
+          setCompressDestDir(firstParent);
+        }
+      }
     }
-  }, [selectedFiles, customArchiveName]);
+  }, [selectedFiles, customArchiveName, compressDestDir]);
 
   // Select Archive Handler
   const selectArchive = async (filePath: string, pwd?: string) => {
@@ -732,11 +684,18 @@ export default function App() {
     invoke<StartupCommand>("get_cli_args")
       .then((cmd) => {
         if (isMounted && cmd && cmd.paths && cmd.paths.length > 0) {
-          const archivePaths = cmd.paths.filter(isArchiveFile);
-          if (archivePaths.length > 0) {
-            selectArchive(archivePaths[0]);
-          } else {
+          if (cmd.action === "compress") {
+            setSelectedArchive(null);
+            setArchiveInfo(null);
             setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
+            setIsCompressModalOpen(true);
+          } else {
+            const archivePaths = cmd.paths.filter(isArchiveFile);
+            if (archivePaths.length > 0) {
+              selectArchive(archivePaths[0]);
+            } else {
+              setSelectedFiles((prev) => [...new Set([...prev, ...cmd.paths])]);
+            }
           }
         }
       })
@@ -876,6 +835,7 @@ export default function App() {
     setSelectedArchive(null);
     setArchiveInfo(null);
     setCustomArchiveName("");
+    setCompressDestDir("");
     setStagedEntries([]);
     setExcludedPaths(new Set());
     setExcludedCompressPaths(new Set());
@@ -991,6 +951,14 @@ export default function App() {
       setGlobalError({
         title: "Encryption Password Required",
         message: "Please enter an archive password to enable encryption.",
+      });
+      return;
+    }
+
+    if (!archiveToOriginalPath && !compressDestDir.trim()) {
+      setGlobalError({
+        title: "Destination Folder Required",
+        message: "Please select an output destination folder or enable 'Archive to original path'.",
       });
       return;
     }
@@ -1239,6 +1207,22 @@ export default function App() {
       setExtractError(String(err));
     } finally {
       setIsInspectingArchive(false);
+    }
+  };
+
+  const handleSelectCompressDestFolder = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select Output Destination Folder",
+        defaultPath: compressDestDir || undefined,
+      });
+      if (selected && typeof selected === "string") {
+        setCompressDestDir(selected);
+      }
+    } catch (err) {
+      console.error("Compression destination folder selection error:", err);
     }
   };
 
@@ -1492,6 +1476,9 @@ export default function App() {
           setShowCompressPassword={setShowCompressPassword}
           archiveToOriginalPath={archiveToOriginalPath}
           setArchiveToOriginalPath={setArchiveToOriginalPath}
+          compressDestDir={compressDestDir}
+          setCompressDestDir={setCompressDestDir}
+          onSelectCompressDestFolder={handleSelectCompressDestFolder}
           separateArchives={separateArchives}
           setSeparateArchives={setSeparateArchives}
           smartMediaBypass={smartMediaBypass}

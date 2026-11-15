@@ -22,6 +22,9 @@ export interface CompressModalProps {
   setShowCompressPassword: (show: boolean) => void;
   archiveToOriginalPath: boolean;
   setArchiveToOriginalPath: (val: boolean) => void;
+  compressDestDir?: string;
+  setCompressDestDir?: (dir: string) => void;
+  onSelectCompressDestFolder?: () => void;
   separateArchives: boolean;
   setSeparateArchives: (val: boolean) => void;
   smartMediaBypass: boolean;
@@ -56,6 +59,9 @@ export function CompressModal({
   setShowCompressPassword,
   archiveToOriginalPath,
   setArchiveToOriginalPath,
+  compressDestDir,
+  setCompressDestDir,
+  onSelectCompressDestFolder,
   separateArchives,
   setSeparateArchives,
   smartMediaBypass,
@@ -483,6 +489,33 @@ export function CompressModal({
                   className="accent-[#38BDF8] rounded-[2px] w-3.5 h-3.5 cursor-pointer"
                 />
               </label>
+
+              {!archiveToOriginalPath && (
+                <div className="space-y-1 bg-[#141416] p-2.5 rounded-[4px] border border-[#323238]">
+                  <label className="text-[10px] text-[#9CA3AF] font-medium block">
+                    Output Destination Folder
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      value={compressDestDir || ""}
+                      onChange={(e) => setCompressDestDir?.(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") onStartCompress();
+                      }}
+                      placeholder="Select destination folder..."
+                      className="flex-1 bg-[#252529] hover:bg-[#2E2E34] focus:bg-[#252529] border border-[#323238] focus:border-[#38BDF8] rounded-[4px] px-2.5 py-1 text-[11px] text-[#F4F4F6] placeholder-[#6B7280] outline-none font-mono transition-colors"
+                    />
+                    <button
+                      type="button"
+                      onClick={onSelectCompressDestFolder}
+                      className="px-2.5 py-1 rounded-[4px] bg-[#252529] hover:bg-[#2E2E34] text-[#F4F4F6] border border-[#323238] font-medium text-[11px] transition-colors cursor-pointer shrink-0"
+                    >
+                      Browse...
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <label className="flex items-center justify-between text-[11px] text-[#F4F4F6] cursor-pointer">
                 <span>Compress each item into separate archive</span>

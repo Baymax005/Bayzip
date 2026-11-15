@@ -15,7 +15,11 @@ use tauri::{AppHandle, Emitter};
 
 pub use types::*;
 pub use priority::ScopedPriorityGuard;
-pub use registry::{register_context_menu_sync, unregister_context_menu_sync};
+pub use registry::{
+    register_context_menu_sync,
+    unregister_context_menu_sync,
+    ensure_context_menu_registered_on_startup,
+};
 pub use inspector::{detect_archive_type, inspect_archive, sanitize_archive_path, archive_stem_name, has_instant_bay_toc, safe_atomic_rename, get_single_root_dir, clear_readonly, get_system32_exe};
 pub use compressor::{headless_quick_compress, headless_quick_compress_targets, compress_files_sync, compute_path_size};
 pub use extractor::{headless_extract_here, headless_extract_to_subfolder, universal_extract, extract_archive_sync};
@@ -80,14 +84,16 @@ async fn get_system_specs() -> SystemSpecs {
         })
 }
 
-#[tauri::command]
-fn get_cli_args() -> StartupCommand {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+pub fn parse_cli_args_from<I, S>(args: I) -> StartupCommand
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     let mut action = None;
     let mut paths = Vec::new();
 
     for arg in args {
-        let clean = arg.trim_matches('\"').to_string();
+        let clean = arg.as_ref().trim_matches('\"').to_string();
         if clean == "--gui-compress" {
             action = Some("compress".to_string());
         } else if clean == "--gui-extract" {
@@ -98,12 +104,28 @@ fn get_cli_args() -> StartupCommand {
             action = Some("extract-to-folder".to_string());
         } else if clean == "--mini-extract" {
             action = Some("mini-extract".to_string());
-        } else if !clean.starts_with("--") {
+        } else if !clean.starts_with("--") && !clean.is_empty() {
             paths.push(clean);
         }
     }
 
     StartupCommand { action, paths }
+}
+
+pub fn is_mini_extract_invocation<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().any(|a| {
+        let clean = a.as_ref().trim_matches('\"');
+        clean == "--extract-here" || clean == "--extract-to-folder" || clean == "--mini-extract"
+    })
+}
+
+#[tauri::command]
+fn get_cli_args() -> StartupCommand {
+    parse_cli_args_from(std::env::args().skip(1))
 }
 
 #[tauri::command]
@@ -294,6 +316,7 @@ async fn minimize_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 async fn open_progress_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     if let Some(window) = app.get_webview_window("progress") {
+        let _ = app.emit("progress_window_reset", ());
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -313,6 +336,7 @@ async fn open_progress_window(app: tauri::AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| format!("Failed to create progress window: {}", e))?;
 
+        let _ = app.emit("progress_window_reset", ());
         let _ = window.set_focus();
         Ok(())
     }
@@ -397,25 +421,21 @@ async fn get_file_icons(extensions: Vec<String>) -> Result<std::collections::Has
 pub fn run() {
     #[cfg(not(test))]
     {
+        let is_mini_extract = is_mini_extract_invocation(std::env::args().skip(1));
+
         #[cfg(target_os = "windows")]
-        {
+        if !is_mini_extract {
             // Auto-register and sync context menu in background on startup
             std::thread::spawn(|| {
-                let _ = register_context_menu_sync();
+                let _ = ensure_context_menu_registered_on_startup();
             });
         }
 
         tauri::Builder::default()
             .plugin(tauri_plugin_dialog::init())
             .plugin(tauri_plugin_opener::init())
-            .setup(|app| {
+            .setup(move |app| {
                 use tauri::Manager;
-                let args: Vec<String> = std::env::args().collect();
-                let is_mini_extract = args.iter().any(|a| {
-                    let clean = a.trim_matches('\"');
-                    clean == "--extract-here" || clean == "--extract-to-folder" || clean == "--mini-extract"
-                });
-
                 if is_mini_extract {
                     if let Some(mini_window) = app.get_webview_window("mini-extract") {
                         let _ = mini_window.show();
@@ -475,5 +495,40 @@ mod tests {
         assert!(specs.cpu_cores >= 1);
         assert!(specs.total_ram_gb > 0.0);
         assert!(specs.free_ram_gb >= 0.0);
+    }
+
+    #[test]
+    fn test_parse_cli_args_gui_compress_and_extract() {
+        let compress_cmd = parse_cli_args_from([
+            "\"--gui-compress\"",
+            "\"D:\\Work\\Folder A\"",
+            "D:\\Work\\file.txt",
+        ]);
+        assert_eq!(compress_cmd.action.as_deref(), Some("compress"));
+        assert_eq!(
+            compress_cmd.paths,
+            vec!["D:\\Work\\Folder A", "D:\\Work\\file.txt"]
+        );
+
+        let extract_cmd = parse_cli_args_from([
+            "--extract-to-folder",
+            "\"D:\\Archives\\a.bay\"",
+            "\"D:\\Archives\\b.zip\"",
+        ]);
+        assert_eq!(extract_cmd.action.as_deref(), Some("extract-to-folder"));
+        assert_eq!(
+            extract_cmd.paths,
+            vec!["D:\\Archives\\a.bay", "D:\\Archives\\b.zip"]
+        );
+    }
+
+    #[test]
+    fn test_is_mini_extract_invocation_skips_startup_sync() {
+        assert!(is_mini_extract_invocation(["--extract-here", "test.bay"]));
+        assert!(is_mini_extract_invocation(["\"--extract-to-folder\"", "test.zip"]));
+        assert!(is_mini_extract_invocation(["--mini-extract", "test.7z"]));
+        assert!(!is_mini_extract_invocation(["--gui-compress", "folder"]));
+        assert!(!is_mini_extract_invocation(["--gui-extract", "test.bay"]));
+        assert!(!is_mini_extract_invocation::<[&str; 0], &str>([]));
     }
 }

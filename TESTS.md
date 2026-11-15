@@ -1,11 +1,11 @@
 # 🧪 Bayzip Automated Test Suite & Quality Report
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-51%2F51%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="51/51 Automated Tests Passing" />
+  <img src="https://img.shields.io/badge/tests-55%2F55%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="55/55 Automated Tests Passing" />
   <img src="https://img.shields.io/badge/typecheck-0%20errors-0078D6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 0 Errors" />
   <img src="https://img.shields.io/badge/duration-0.45s-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Execution Time 0.45s" />
   <img src="https://img.shields.io/badge/coverage-100%25%20Passing-10B981?style=flat-square&logo=shield&logoColor=white" alt="100% Passing" />
-  <img src="https://img.shields.io/badge/audit-46%2F46%20verified-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="46/46 Audit Findings Verified" />
+  <img src="https://img.shields.io/badge/audit-60%2F60%20verified-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="60/60 Audit Findings Verified" />
 </p>
 
 ---
@@ -24,7 +24,7 @@ Bayzip enforces strict automated regression and security testing across all cont
 
 ---
 
-## 📊 Automated Test Matrix (51 Unit Tests)
+## 📊 Automated Test Matrix (55 Unit Tests)
 
 | # | Test Module | Test Name | Purpose & Security Verification | Status |
 |---|---|---|---|:---:|
@@ -79,6 +79,10 @@ Bayzip enforces strict automated regression and security testing across all cont
 | 49 | `tester` | `test_test_tar_archive_delegates_xz_and_bz2` | Confirms `.xz`, `.txz`, `.bz2`, and `.tbz2` archives delegate cleanly through system tar payload testing. | `PASSED` |
 | 50 | `tester` | `test_concurrent_test_task_guards_do_not_clobber_tokens` | Verifies overlapping `TesterTaskGuard` instances isolate cancellation tokens inside the multi-token registry. | `PASSED` |
 | 51 | `priority` | `test_midflight_background_shield_toggle_syncs_process_priority` | Validates `set_background_shield` synchronizes active OS process priority mid-flight under `PROCESS_PRIORITY_STATE`. | `PASSED` |
+| 52 | `registry` | `test_format_registration_stamp_determinism` | Verifies deterministic formatting of shell registration stamp strings across binary paths and version metadata. | `PASSED` |
+| 53 | `registry` | `test_should_skip_startup_registration_when_stamp_and_files_match` | Confirms cached startup registration is skipped only when the stamp matches and registered shell artifacts exist on disk. | `PASSED` |
+| 54 | `lib` | `test_parse_cli_args_gui_compress_and_extract` | Verifies CLI parsing for `--gui-compress` and `--extract` verbs across multi-target paths. | `PASSED` |
+| 55 | `lib` | `test_is_mini_extract_invocation_skips_startup_sync` | Ensures mini-extract CLI invocations are detected reliably so startup background registry synchronization is skipped. | `PASSED` |
 
 ---
 
@@ -86,60 +90,64 @@ Bayzip enforces strict automated regression and security testing across all cont
 
 ### Backend Rust Test Suite (`cargo test`)
 ```text
-running 51 tests
+running 55 tests
 test compressor::tests::test_calculate_target_threads_scaling ... ok
 test compressor::tests::test_is_gamer_preset_normalization ... ok
-test compressor::utils::tests::test_is_path_excluded_dot_slash_prefix ... ok
-test compressor::tests::test_compression_task_guard_isolation ... ok
 test compressor::tests::test_calculate_zstd_level_gamer_preset_cap ... ok
+test compressor::tests::test_compression_task_guard_isolation ... ok
 test extractor::tests::test_drain_bay_entry_bytes_exact_match ... ok
+test compressor::utils::tests::test_is_path_excluded_dot_slash_prefix ... ok
 test extractor::tests::test_drain_bay_entry_bytes_io_error ... ok
 test extractor::tests::test_drain_bay_entry_bytes_premature_eof ... ok
-test compressor::utils::tests::test_is_excluded_or_temp_artifact ... ok
+test extractor::tests::test_drain_bay_entry_bytes_unaligned_chunking ... ok
 test extractor::tests::test_drain_bay_entry_bytes_zero_length ... ok
 test extractor::tests::test_extraction_task_guard_isolation ... ok
-test extractor::tests::test_drain_bay_entry_bytes_unaligned_chunking ... ok
 test extractor::tests::test_should_abort_fallback_on_cancel_and_password ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_encrypted_toc_exceeding_file_bounds ... ok
+test compressor::utils::tests::test_is_excluded_or_temp_artifact ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_file_too_small ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_encrypted_toc_exceeding_file_bounds ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_encrypted_toc ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_toc ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_toc_exceeding_file_bounds ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_zero_encrypted_toc_len ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_zero_toc_len ... ok
-test inspector::bay::tests::test_read_bay_trailer_valid_toc ... ok
 test inspector::preview::tests::test_extract_entry_ext ... ok
+test inspector::bay::tests::test_read_bay_trailer_valid_toc ... ok
 test inspector::preview::tests::test_is_likely_utf8_text ... ok
-test inspector::tests::test_dos_reserved_devices ... ok
 test inspector::tests::test_absolute_and_drive_paths ... ok
+test inspector::tests::test_dos_reserved_devices ... ok
 test inspector::tests::test_empty_and_dot_paths ... ok
-test inspector::tests::test_valid_paths ... ok
+test inspector::tests::test_parent_traversal ... ok
+test inspector::tests::test_invalid_characters ... ok
 test inspector::tests::test_rejects_unencrypted_baytoc_on_bayenc_archive ... ok
 test inspector::tests::test_trailing_period_and_space_evasion ... ok
+test priority::tests::test_nested_scoped_priority_guards_unwind_correctly ... ok
+test inspector::tests::test_valid_paths ... ok
 test extractor::tests::test_cleanup_extracted_files_safely_removes_created_files ... ok
-test inspector::tests::test_invalid_characters ... ok
-test inspector::tests::test_parent_traversal ... ok
+test registry::tests::test_format_registration_stamp_determinism ... ok
+test priority::tests::test_midflight_background_shield_toggle_syncs_process_priority ... ok
 test priority::tests::test_background_shield_toggle ... ok
 test tester::tests::test_concurrent_test_task_guards_do_not_clobber_tokens ... ok
-test tester::tests::test_should_abort_test_fallback_blocks_cancel_and_password ... ok
+test registry::tests::test_should_skip_startup_registration_when_stamp_and_files_match ... ok
 test priority::tests::test_concurrent_threads_priority_guards_restore_independently ... ok
-test priority::tests::test_midflight_background_shield_toggle_syncs_process_priority ... ok
-test tester::tests::test_test_bay_stream_detects_missing_eof_marker ... ok
+test tester::tests::test_should_abort_test_fallback_blocks_cancel_and_password ... ok
 test priority::tests::test_scoped_priority_guard_restores_thread_priority ... ok
-test priority::tests::test_nested_scoped_priority_guards_unwind_correctly ... ok
+test tester::tests::test_test_bay_stream_detects_missing_eof_marker ... ok
 test tester::tests::test_tester_task_guard_isolation ... ok
+test tests::test_is_mini_extract_invocation_skips_startup_sync ... ok
+test tests::test_collect_system_specs ... ok
+test tests::test_parse_cli_args_gui_compress_and_extract ... ok
+test tester::tests::test_test_tar_archive_delegates_xz_and_bz2 ... ok
 test types::tests::test_task_cancel_token_lifecycle ... ok
 test types::tests::test_task_cancel_tokens_are_isolated ... ok
-test tester::tests::test_test_tar_archive_delegates_xz_and_bz2 ... ok
-test tests::test_collect_system_specs ... ok
+test crypto::tests::test_chunked_aes_wrong_password ... ok
+test crypto::tests::test_chunked_aes_truncation_detection ... ok
 test crypto::tests::test_chunked_aes_roundtrip ... ok
 test extractor::tests::test_extract_bay_stream_eof_drain_and_truncation_detection ... ok
-test crypto::tests::test_chunked_aes_truncation_detection ... ok
-test crypto::tests::test_chunked_aes_wrong_password ... ok
-test inspector::tests::test_inspect_encrypted_bay_wrong_password_returns_err ... ok
 test crypto::tests::test_chunked_aes_drop_and_finish ... ok
+test inspector::tests::test_inspect_encrypted_bay_wrong_password_returns_err ... ok
 
-test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
 ```
 
 ### Frontend TypeScript Static Analysis (`npx tsc --noEmit`)

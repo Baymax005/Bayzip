@@ -670,6 +670,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
                   key={`archive-view-${currentFolderPath}-${sortKey}-${sortOrder}`}
                   items={displayItems}
                   rowHeight={34}
+                  resetScrollTrigger={searchQuery}
                   className="flex-1 h-full custom-scrollbar"
                   renderRow={(item) => {
                     if (item.kind === "folder") {

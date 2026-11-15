@@ -2,6 +2,33 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.9] - 2026-11-15
+### Windows Shell Integration & Startup Caching (`HIGH-06`, `HIGH-08`, `MED-03`)
+- **Multi-Location Companion Shell DLL Discovery (`build.rs`, `registry.rs`)**:
+  - Updated `src-tauri/build.rs` to probe `target/release/bayzip_shell.dll`, `crates/bayzip_shell/target/release/bayzip_shell.dll`, `target/debug/bayzip_shell.dll`, and `crates/bayzip_shell/target/debug/bayzip_shell.dll`, selecting the newest valid (`> 1024` bytes) binary for `OUT_DIR/bayzip_shell.dll` and emitting `cargo:rerun-if-changed` hints.
+  - Expanded fallback DLL resolution paths in `src-tauri/src/registry.rs` to locate `bayzip_shell.dll` cleanly across workspace and standalone builds.
+- **Native Shell Submenu State & "Extract to Subfolder" Verb (`crates/bayzip_shell/src/lib.rs`)**:
+  - Added `CommandAction::ExtractToSubfolder` (`"Extract to Subfolder"`, `--extract-to-folder`, GUID `0x44e23c12_5883_4903_9da9_33d72120c19f`) and `is_supported_archive_path`.
+  - Updated `IExplorerCommand::GetState` so `ExtractHere` and `ExtractToSubfolder` return `ECS_HIDDEN` when inspecting non-archives or directories.
+- **Deterministic Registration Stamp Cache & Fast Startup (`registry.rs`, `lib.rs`)**:
+  - Added `format_registration_stamp`, `should_skip_startup_registration`, and `ensure_context_menu_registered_on_startup` backed by `%LOCALAPPDATA%\Bayzip\registration_stamp.txt` to skip redundant registry rewrites when binary path and version stamp are unchanged.
+  - Removed the duplicate initial `ie4uinit.exe -show` / `notify_shell_associations_changed()` invocation during registration updates.
+  - Added `parse_cli_args_from` and `is_mini_extract_invocation` in `src-tauri/src/lib.rs`, skipping background registry synchronization during mini-extract CLI launches.
+
+### Frontend State, CLI Compression Routing & HUD Polish (`MED-01`, `MED-02`, `MED-06`)
+- **Multi-Archive Mini-Extract Queue (`MiniExtractWindow.tsx`)**:
+  - Added `archiveQueue`, `queueIndex`, and `inspectAndBeginTarget` with `(queueIndex + 1/archiveQueue.length)` progress indicators so sequential batch extractions proceed cleanly.
+- **Progress HUD Reset & Idle Cancellation (`lib.rs`, `ProgressWindow.tsx`)**:
+  - Emits `"progress_window_reset"` from `open_progress_window`; `ProgressWindow.tsx` resets `isCancelling` and throughput history via `markStreamProgress` on new streams, cancels all 3 streams when `streamType === "idle"`, and closes the HUD via `close_progress_window` inside `handleRestoreMainApp`.
+- **Compress Destination Folder Picker & CLI `--gui-compress` (`CompressModal.tsx`, `App.tsx`)**:
+  - Wired `compressDestDir` state, folder picker selection, and destination validation (`!archiveToOriginalPath`) in `CompressModal.tsx` and `App.tsx`, alongside `cmd.action === "compress"` startup handling for `--gui-compress`.
+- **Staged Path Resolution, Exclusion Toggle & Virtual Scroll Reset (`utils/archive.ts`, `VirtualScrollList.tsx`, `ArchiveTreeInspector.tsx`, `App.tsx`)**:
+  - Added `togglePathExclusion` and `resolveStagedDiskPath` helpers for exclusion toggling (`handleToggleExclude`, `handleToggleCompressExclude`) and entry preview path resolution (`handlePreviewEntry`).
+  - Added `resetScrollTrigger={searchQuery}` and clamped `effectiveScrollTop` in `VirtualScrollList.tsx` / `ArchiveTreeInspector.tsx`.
+
+### Verification
+- Verified **55/55 unit tests passing** (`cargo test`), adding 4 Phase 7 tests covering registration stamp determinism, startup sync skipping, `--gui-compress`/`--extract` CLI argument parsing, and mini-extract startup sync bypass, with zero `clippy --all-targets -- -D warnings` diagnostics and zero TypeScript errors (`npx tsc --noEmit`).
+
 ## [v2.4.8] - 2026-11-15
 
 ### 🔐 Phase 6 Encrypted Workflow UX, Tester Payload Verification, Crypto Zeroization & Priority Hardening

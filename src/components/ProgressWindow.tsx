@@ -20,6 +20,8 @@ export function ProgressWindow() {
 
   // Speed and ETA calculation refs
   const historyRef = useRef<{ timestamp: number; bytes: number }[]>([]);
+  const lastStreamTypeRef = useRef<StreamType>("idle");
+  const lastPercentRef = useRef<number>(0);
   const [speedText, setSpeedText] = useState<string>("");
   const [etaText, setEtaText] = useState<string>("");
 
@@ -67,14 +69,45 @@ export function ProgressWindow() {
   // Setup Tauri event listeners
   useEffect(() => {
     let isMounted = true;
+    let unlistenReset: (() => void) | undefined;
     let unlistenCompress: (() => void) | undefined;
     let unlistenExtract: (() => void) | undefined;
     let unlistenTest: (() => void) | undefined;
 
+    const markStreamProgress = (nextType: Exclude<StreamType, "idle">, nextPercent: number) => {
+      const isNewStream =
+        lastStreamTypeRef.current !== nextType ||
+        (nextPercent < lastPercentRef.current && nextPercent < 100);
+      if (isNewStream && nextPercent < 100) {
+        setIsCancelling(false);
+        historyRef.current = [];
+        setSpeedText("");
+        setEtaText("");
+      }
+      lastStreamTypeRef.current = nextType;
+      lastPercentRef.current = nextPercent;
+      setStreamType(nextType);
+    };
+
     const setupListeners = async () => {
+      const uReset = await listen("progress_window_reset", () => {
+        if (!isMounted) return;
+        setIsCancelling(false);
+        lastStreamTypeRef.current = "idle";
+        lastPercentRef.current = 0;
+        historyRef.current = [];
+        setSpeedText("");
+        setEtaText("");
+      });
+      if (!isMounted) {
+        uReset();
+      } else {
+        unlistenReset = uReset;
+      }
+
       const uCompress = await listen<CompressProgress>("compress_progress", (event) => {
         if (!isMounted) return;
-        setStreamType("compress");
+        markStreamProgress("compress", event.payload.percent);
         setPercent(event.payload.percent);
         setCurrentFile(event.payload.current_file);
         setBytesProcessed(event.payload.bytes_processed);
@@ -92,7 +125,7 @@ export function ProgressWindow() {
 
       const uExtract = await listen<ExtractProgress>("extract_progress", (event) => {
         if (!isMounted) return;
-        setStreamType("extract");
+        markStreamProgress("extract", event.payload.percent);
         setPercent(event.payload.percent);
         setCurrentFile(event.payload.current_file);
         setBytesProcessed(event.payload.bytes_extracted);
@@ -112,11 +145,15 @@ export function ProgressWindow() {
 
       const uTest = await listen<TestArchiveProgress>("test_progress", (event) => {
         if (!isMounted) return;
-        setStreamType("test");
+        markStreamProgress("test", event.payload.percent);
         setPercent(event.payload.percent);
         setCurrentFile(event.payload.current_file);
         setBytesProcessed(event.payload.bytes_tested);
         setTotalBytes(event.payload.total_bytes);
+        if (event.payload.current_file) {
+          const name = event.payload.current_file.split(/[/\\]/).pop();
+          if (name) setTargetName(name);
+        }
       });
       if (!isMounted) {
         uTest();
@@ -129,6 +166,7 @@ export function ProgressWindow() {
 
     return () => {
       isMounted = false;
+      if (unlistenReset) unlistenReset();
       if (unlistenCompress) unlistenCompress();
       if (unlistenExtract) unlistenExtract();
       if (unlistenTest) unlistenTest();
@@ -144,6 +182,12 @@ export function ProgressWindow() {
         await invoke("cancel_extraction");
       } else if (streamType === "test") {
         await invoke("cancel_test_archive");
+      } else {
+        await Promise.allSettled([
+          invoke("cancel_compression"),
+          invoke("cancel_extraction"),
+          invoke("cancel_test_archive"),
+        ]);
       }
     } catch (err) {
       console.error("Failed to cancel active stream:", err);
@@ -163,6 +207,7 @@ export function ProgressWindow() {
   const handleRestoreMainApp = async () => {
     try {
       await invoke("focus_main_window");
+      await invoke("close_progress_window").catch(() => {});
     } catch (e) {
       console.error("Failed to focus main window:", e);
     }

@@ -13,6 +13,8 @@ type MiniExtractState = "inspecting" | "password" | "extracting" | "done" | "err
 
 export function MiniExtractWindow() {
   const [state, setState] = useState<MiniExtractState>("inspecting");
+  const [archiveQueue, setArchiveQueue] = useState<string[]>([]);
+  const [queueIndex, setQueueIndex] = useState<number>(0);
   const [archivePath, setArchivePath] = useState<string>("");
   const [archiveFilename, setArchiveFilename] = useState<string>("");
   const [destination, setDestination] = useState<string>("");
@@ -107,6 +109,56 @@ export function MiniExtractWindow() {
     };
   }, []);
 
+  const inspectAndBeginTarget = async (
+    target: string,
+    idx: number,
+    queue: string[],
+    shouldSubfolder: boolean
+  ) => {
+    setState("inspecting");
+    setArchivePath(target);
+    const fname = target.split(/[/\\]/).pop() || "archive";
+    setArchiveFilename(fname);
+    setQueueIndex(idx);
+
+    const parent = target.replace(/[/\\][^/\\]+$/, "") || ".";
+    setDestination(parent);
+    setPassword("");
+    setErrorMessage(null);
+    setPercent(0);
+    setBytesExtracted(0);
+    setTotalBytes(0);
+    historyRef.current = [];
+    setSpeedText("");
+    setEtaText("");
+
+    try {
+      const info = await invoke<ArchiveInfo>("get_archive_info", { path: target });
+      setExpectedSize(info.total_uncompressed_size || info.size || undefined);
+
+      if (info.is_encrypted) {
+        setState("password");
+      } else {
+        await startExtraction(
+          target,
+          parent,
+          shouldSubfolder,
+          undefined,
+          info.total_uncompressed_size || info.size,
+          idx,
+          queue
+        );
+      }
+    } catch (inspectErr) {
+      const errStr = String(inspectErr).toLowerCase();
+      if (errStr.includes("password") || errStr.includes("encrypt")) {
+        setState("password");
+      } else {
+        await startExtraction(target, parent, shouldSubfolder, undefined, undefined, idx, queue);
+      }
+    }
+  };
+
   // Initialize from CLI arguments on mount
   useEffect(() => {
     const initFromCli = async () => {
@@ -118,13 +170,8 @@ export function MiniExtractWindow() {
           return;
         }
 
-        const target = cmd.paths[0];
-        setArchivePath(target);
-        const fname = target.split(/[/\\]/).pop() || "archive";
-        setArchiveFilename(fname);
-
-        const parent = target.replace(/[/\\][^/\\]+$/, "") || ".";
-        setDestination(parent);
+        const queue = cmd.paths;
+        setArchiveQueue(queue);
 
         // Decide subfolder extraction mode:
         // If action is explicit "extract-here", do NOT create subfolder.
@@ -132,26 +179,7 @@ export function MiniExtractWindow() {
         const shouldSubfolder = cmd.action !== "extract-here";
         setExtractToSubfolder(shouldSubfolder);
 
-        // Inspect archive to check encryption & size
-        try {
-          const info = await invoke<ArchiveInfo>("get_archive_info", { path: target });
-          setExpectedSize(info.total_uncompressed_size || info.size || undefined);
-
-          if (info.is_encrypted) {
-            setState("password");
-          } else {
-            // Unencrypted: begin extraction immediately!
-            startExtraction(target, parent, shouldSubfolder, undefined, info.total_uncompressed_size || info.size);
-          }
-        } catch (inspectErr) {
-          const errStr = String(inspectErr).toLowerCase();
-          if (errStr.includes("password") || errStr.includes("encrypt")) {
-            setState("password");
-          } else {
-            // Attempt extraction anyway; extractor will return definitive result
-            startExtraction(target, parent, shouldSubfolder, undefined);
-          }
-        }
+        await inspectAndBeginTarget(queue[0], 0, queue, shouldSubfolder);
       } catch (err) {
         setErrorMessage(String(err));
         setState("error");
@@ -177,7 +205,9 @@ export function MiniExtractWindow() {
     targetDest: string,
     subfolder: boolean,
     pwd?: string,
-    size?: number
+    size?: number,
+    idx = queueIndex,
+    queue = archiveQueue
   ) => {
     setState("extracting");
     setErrorMessage(null);
@@ -185,6 +215,9 @@ export function MiniExtractWindow() {
     setPercent(0);
     setCurrentFile("Preparing extraction...");
     setBytesExtracted(0);
+    historyRef.current = [];
+    setSpeedText("");
+    setEtaText("");
 
     let finalDest = targetDest;
     if (subfolder) {
@@ -203,6 +236,13 @@ export function MiniExtractWindow() {
       });
 
       setOutputDirectory(res.output_directory);
+      setPassword("");
+
+      if (idx + 1 < queue.length) {
+        await inspectAndBeginTarget(queue[idx + 1], idx + 1, queue, subfolder);
+        return;
+      }
+
       setState("done");
 
       // Reveal output folder in Windows Explorer
@@ -232,7 +272,15 @@ export function MiniExtractWindow() {
 
   const handlePasswordSubmit = () => {
     if (!password.trim() || state === "extracting") return;
-    startExtraction(archivePath, destination, extractToSubfolder, password);
+    startExtraction(
+      archivePath,
+      destination,
+      extractToSubfolder,
+      password,
+      expectedSize,
+      queueIndex,
+      archiveQueue
+    );
   };
 
   const handleCancel = async () => {
@@ -336,6 +384,7 @@ export function MiniExtractWindow() {
                   {archiveFilename && (
                     <span className="text-[10px] text-[#38BDF8] font-mono bg-[#161618] px-1.5 py-0.5 rounded border border-[#2E2E34] truncate max-w-[180px]">
                       {archiveFilename}
+                      {archiveQueue.length > 1 ? ` (${queueIndex + 1}/${archiveQueue.length})` : ""}
                     </span>
                   )}
                 </div>
@@ -419,6 +468,11 @@ export function MiniExtractWindow() {
                 <span className="w-2 h-2 rounded-full bg-[#38BDF8] animate-pulse shrink-0"></span>
                 <span className="font-semibold text-xs text-white tracking-wide truncate">
                   Extracting <span className="text-[#38BDF8]">{archiveFilename}</span>
+                  {archiveQueue.length > 1 && (
+                    <span className="ml-1.5 text-[10px] font-mono text-[#9CA3AF]">
+                      ({queueIndex + 1}/{archiveQueue.length})
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="text-xs font-bold font-mono text-[#38BDF8] shrink-0">

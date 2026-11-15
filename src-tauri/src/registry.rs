@@ -36,6 +36,73 @@ pub fn notify_shell_associations_changed() {
     }
 }
 
+pub fn format_registration_stamp(version: &str, exe_path: &str, dll_len: usize) -> String {
+    format!(
+        "version={}\nexe={}\ndll_len={}",
+        version.trim(),
+        exe_path.trim(),
+        dll_len
+    )
+}
+
+pub fn should_skip_startup_registration(
+    stamp_content: Option<&str>,
+    expected_stamp: &str,
+    dest_exe_exists: bool,
+    icon_exists: bool,
+    dll_valid: bool,
+) -> bool {
+    dest_exe_exists
+        && icon_exists
+        && dll_valid
+        && stamp_content
+            .map(|s| s.trim() == expected_stamp.trim())
+            .unwrap_or(false)
+}
+
+pub fn ensure_context_menu_registered_on_startup() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            let exe_str = exe_path.to_string_lossy().to_string();
+            let app_dir = std::env::var_os("LOCALAPPDATA")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join("Bayzip");
+
+            let dest_exe = app_dir.join("bayzip.exe");
+            let icon_file = app_dir.join("bayzip.ico");
+            let dest_dll = app_dir.join("bayzip_shell.dll");
+            let embedded_dll = include_bytes!(concat!(env!("OUT_DIR"), "/bayzip_shell.dll"));
+
+            let expected_stamp =
+                format_registration_stamp(env!("CARGO_PKG_VERSION"), &exe_str, embedded_dll.len());
+            let dll_valid = embedded_dll.len() <= 1024
+                || dest_dll
+                    .metadata()
+                    .map(|m| m.len() > 1024)
+                    .unwrap_or(false);
+            let stamp_content =
+                std::fs::read_to_string(app_dir.join("registration_stamp.txt")).ok();
+
+            if should_skip_startup_registration(
+                stamp_content.as_deref(),
+                &expected_stamp,
+                dest_exe.exists(),
+                icon_file.exists(),
+                dll_valid,
+            ) {
+                return Ok("Context menu already up-to-date.".into());
+            }
+        }
+        register_context_menu_sync()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok("Context menu not applicable on non-Windows OS".into())
+    }
+}
+
 pub fn register_context_menu_sync() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
@@ -72,16 +139,31 @@ pub fn register_context_menu_sync() -> Result<String, String> {
             let embedded_dll = include_bytes!(concat!(env!("OUT_DIR"), "/bayzip_shell.dll"));
             if embedded_dll.len() > 1024 {
                 let _ = std::fs::write(&dest_dll, embedded_dll);
-            }
-            if !dest_dll.exists() || dest_dll.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+            } else if !dest_dll.exists()
+                || dest_dll
+                    .metadata()
+                    .map(|m| m.len() <= 1024)
+                    .unwrap_or(true)
+            {
                 if let Some(exe_parent) = exe_path.parent() {
-                    let candidate_dll = exe_parent.join("bayzip_shell.dll");
-                    if candidate_dll.exists() {
-                        let _ = std::fs::copy(&candidate_dll, &dest_dll);
-                    } else {
-                        let build_dll = exe_parent.join("crates").join("bayzip_shell").join("target").join("release").join("bayzip_shell.dll");
-                        if build_dll.exists() {
-                            let _ = std::fs::copy(&build_dll, &dest_dll);
+                    let candidates = [
+                        exe_parent.join("bayzip_shell.dll"),
+                        exe_parent.join("target").join("release").join("bayzip_shell.dll"),
+                        exe_parent
+                            .join("crates")
+                            .join("bayzip_shell")
+                            .join("target")
+                            .join("release")
+                            .join("bayzip_shell.dll"),
+                    ];
+                    for candidate in &candidates {
+                        if candidate
+                            .metadata()
+                            .map(|m| m.len() > 1024)
+                            .unwrap_or(false)
+                        {
+                            let _ = std::fs::copy(candidate, &dest_dll);
+                            break;
                         }
                     }
                 }
@@ -277,15 +359,6 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 let _ = cmd.output();
                 let _ = std::fs::remove_file(temp_reg);
 
-                // Refresh Windows Explorer shell & clear icon cache
-                let mut refresh_cmd = Command::new(crate::inspector::get_system32_exe("ie4uinit.exe"));
-                refresh_cmd.arg("-show");
-                refresh_cmd.creation_flags(CREATE_NO_WINDOW);
-                let _ = refresh_cmd.output();
-
-                #[cfg(target_os = "windows")]
-                notify_shell_associations_changed();
-
                 // Register Windows 11 Modern Context Menu (Sparse Package Identity)
                 let mut is_win11 = false;
                 let mut ver_cmd = Command::new(get_powershell_exe());
@@ -315,7 +388,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                     let _ = ps_cmd.output();
                 }
 
-                // Force Windows Shell and File Explorer to flush icon cache and reload associations
+                // Force Windows Shell and File Explorer to flush icon cache and reload associations once
                 #[cfg(target_os = "windows")]
                 {
                     notify_shell_associations_changed();
@@ -325,6 +398,13 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                     refresh_cmd.creation_flags(CREATE_NO_WINDOW);
                     let _ = refresh_cmd.output();
                 }
+
+                let stamp = format_registration_stamp(
+                    env!("CARGO_PKG_VERSION"),
+                    &exe_str,
+                    embedded_dll.len(),
+                );
+                let _ = std::fs::write(app_dir.join("registration_stamp.txt"), stamp);
 
                 return Ok("Context menu registered successfully!".into());
             }
@@ -373,6 +453,7 @@ pub fn unregister_context_menu_sync() -> Result<String, String> {
 
         let app_dir = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join("Bayzip");
         let _ = std::fs::create_dir_all(&app_dir);
+        let _ = std::fs::remove_file(app_dir.join("registration_stamp.txt"));
         let temp_reg = app_dir.join(format!("bayzip_unreg_{}_{}.reg", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
         let mut utf16_bytes: Vec<u8> = vec![0xFF, 0xFE];
         for u in reg_content.encode_utf16() {
@@ -398,5 +479,65 @@ pub fn unregister_context_menu_sync() -> Result<String, String> {
     #[cfg(not(target_os = "windows"))]
     {
         Ok("Context menu not applicable on non-Windows OS".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_registration_stamp_determinism() {
+        let s1 = format_registration_stamp(" 2.4.8 ", " D:\\Bayzip\\bayzip.exe ", 4096);
+        let s2 = format_registration_stamp("2.4.8", "D:\\Bayzip\\bayzip.exe", 4096);
+        assert_eq!(s1, s2);
+        assert_eq!(s1, "version=2.4.8\nexe=D:\\Bayzip\\bayzip.exe\ndll_len=4096");
+    }
+
+    #[test]
+    fn test_should_skip_startup_registration_when_stamp_and_files_match() {
+        let expected = format_registration_stamp("2.4.8", "C:\\Apps\\Bayzip\\bayzip.exe", 65536);
+        assert!(should_skip_startup_registration(
+            Some(&expected),
+            &expected,
+            true,
+            true,
+            true
+        ));
+        assert!(!should_skip_startup_registration(
+            Some("version=2.4.7\nexe=C:\\Apps\\Bayzip\\bayzip.exe\ndll_len=65536"),
+            &expected,
+            true,
+            true,
+            true
+        ));
+        assert!(!should_skip_startup_registration(
+            None,
+            &expected,
+            true,
+            true,
+            true
+        ));
+        assert!(!should_skip_startup_registration(
+            Some(&expected),
+            &expected,
+            false,
+            true,
+            true
+        ));
+        assert!(!should_skip_startup_registration(
+            Some(&expected),
+            &expected,
+            true,
+            false,
+            true
+        ));
+        assert!(!should_skip_startup_registration(
+            Some(&expected),
+            &expected,
+            true,
+            true,
+            false
+        ));
     }
 }
