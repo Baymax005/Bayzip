@@ -73,3 +73,31 @@ pub fn preview_zip_entry_bytes(path: &Path, entry_name: &str, password: Option<&
 
     Err(format!("Entry '{}' not found in zip archive", entry_name))
 }
+
+pub fn verify_zip_password(path: &Path, password: &str) -> Result<(), String> {
+    let file = File::open(path).map_err(|e| format!("Failed to open zip archive: {}", e))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
+
+    for i in 0..zip.len() {
+        let should_test = {
+            if let Ok(entry) = zip.by_index_raw(i) {
+                !entry.is_dir() && !entry.name().ends_with('/') && entry.encrypted()
+            } else {
+                false
+            }
+        };
+
+        if should_test {
+            let mut dec_file = zip
+                .by_index_decrypt(i, password.as_bytes())
+                .map_err(|_| "Incorrect password: Could not decrypt ZIP archive.".to_string())?;
+            let mut buf = [0u8; 64];
+            dec_file
+                .read(&mut buf)
+                .map_err(|_| "Incorrect password: Could not decrypt ZIP archive.".to_string())?;
+            return Ok(());
+        }
+    }
+
+    Ok(())
+}

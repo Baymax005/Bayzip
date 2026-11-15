@@ -18,4 +18,9 @@ fn main() {
     println!("cargo:rerun-if-changed=target/release/bayzip_shell.dll");
 
     tauri_build::build();
+
+    let lib_resource = out_dir.join("libresource.a");
+    if lib_resource.exists() {
+        println!("cargo:rustc-link-arg={}", lib_resource.display());
+    }
 }

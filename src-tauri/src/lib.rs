@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(dead_code, unused_imports))]
+
 pub mod types;
 pub mod crypto;
 pub mod priority;
@@ -393,73 +395,74 @@ async fn get_file_icons(extensions: Vec<String>) -> Result<std::collections::Has
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(target_os = "windows")]
+    #[cfg(not(test))]
     {
-        // Auto-register and sync context menu in background on startup
-        std::thread::spawn(|| {
-            let _ = register_context_menu_sync();
-        });
-    }
-
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            use tauri::Manager;
-            let args: Vec<String> = std::env::args().collect();
-            let is_mini_extract = args.iter().any(|a| {
-                let clean = a.trim_matches('\"');
-                clean == "--extract-here" || clean == "--extract-to-folder" || clean == "--mini-extract"
+        #[cfg(target_os = "windows")]
+        {
+            // Auto-register and sync context menu in background on startup
+            std::thread::spawn(|| {
+                let _ = register_context_menu_sync();
             });
+        }
 
-            if is_mini_extract {
-                if let Some(mini_window) = app.get_webview_window("mini-extract") {
-                    let _ = mini_window.show();
-                    let _ = mini_window.set_focus();
-                }
-            } else {
-                if let Some(main_window) = app.get_webview_window("main") {
+        tauri::Builder::default()
+            .plugin(tauri_plugin_dialog::init())
+            .plugin(tauri_plugin_opener::init())
+            .setup(|app| {
+                use tauri::Manager;
+                let args: Vec<String> = std::env::args().collect();
+                let is_mini_extract = args.iter().any(|a| {
+                    let clean = a.trim_matches('\"');
+                    clean == "--extract-here" || clean == "--extract-to-folder" || clean == "--mini-extract"
+                });
+
+                if is_mini_extract {
+                    if let Some(mini_window) = app.get_webview_window("mini-extract") {
+                        let _ = mini_window.show();
+                        let _ = mini_window.set_focus();
+                    }
+                } else if let Some(main_window) = app.get_webview_window("main") {
                     let _ = main_window.show();
                     let _ = main_window.set_focus();
                 }
-            }
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            get_system_specs, 
-            get_cli_args, 
-            register_context_menu,
-            unregister_context_menu,
-            compress_files,
-            cancel_compression,
-            cancel_extraction,
-            test_archive,
-            cancel_test_archive,
-            get_selected_items_info,
-            extract_archive,
-            get_archive_info,
-            get_file_size,
-            preview_archive_entry,
-            inspect_staged_items,
-            preview_staged_file,
-            get_file_icon,
-            get_file_icons,
-            get_background_priority_shield,
-            set_background_priority_shield,
-            get_smart_media_bypass,
-            set_smart_media_bypass,
-            open_settings_window,
-            close_settings_window,
-            minimize_settings_window,
-            open_progress_window,
-            close_progress_window,
-            minimize_progress_window,
-            set_progress_always_on_top,
-            focus_main_window,
-            exit_app
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+                Ok(())
+            })
+            .invoke_handler(tauri::generate_handler![
+                get_system_specs,
+                get_cli_args,
+                register_context_menu,
+                unregister_context_menu,
+                compress_files,
+                cancel_compression,
+                cancel_extraction,
+                test_archive,
+                cancel_test_archive,
+                get_selected_items_info,
+                extract_archive,
+                get_archive_info,
+                get_file_size,
+                preview_archive_entry,
+                inspect_staged_items,
+                preview_staged_file,
+                get_file_icon,
+                get_file_icons,
+                get_background_priority_shield,
+                set_background_priority_shield,
+                get_smart_media_bypass,
+                set_smart_media_bypass,
+                open_settings_window,
+                close_settings_window,
+                minimize_settings_window,
+                open_progress_window,
+                close_progress_window,
+                minimize_progress_window,
+                set_progress_always_on_top,
+                focus_main_window,
+                exit_app
+            ])
+            .run(tauri::generate_context!())
+            .expect("error while running tauri application");
+    }
 }
 
 #[cfg(test)]

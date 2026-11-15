@@ -21,7 +21,7 @@ thread_local! {
     static CURRENT_TEST_TOKEN: RefCell<Option<TaskCancelToken>> = const { RefCell::new(None) };
 }
 
-static ACTIVE_TEST_TOKEN: Mutex<Option<TaskCancelToken>> = Mutex::new(None);
+static ACTIVE_TEST_TOKEN: Mutex<Vec<TaskCancelToken>> = Mutex::new(Vec::new());
 
 pub struct TestTaskGuard {
     token: TaskCancelToken,
@@ -34,7 +34,7 @@ impl TestTaskGuard {
             *cell.borrow_mut() = Some(token.clone());
         });
         if let Ok(mut lock) = ACTIVE_TEST_TOKEN.lock() {
-            *lock = Some(token.clone());
+            lock.push(token.clone());
         }
         Self { token }
     }
@@ -56,18 +56,14 @@ impl Drop for TestTaskGuard {
             *cell.borrow_mut() = None;
         });
         if let Ok(mut lock) = ACTIVE_TEST_TOKEN.lock() {
-            if let Some(ref current) = *lock {
-                if Arc::ptr_eq(&current.0, &self.token.0) {
-                    *lock = None;
-                }
-            }
+            lock.retain(|t| !Arc::ptr_eq(&t.0, &self.token.0));
         }
     }
 }
 
 pub fn cancel_test_flag() {
     if let Ok(lock) = ACTIVE_TEST_TOKEN.lock() {
-        if let Some(ref token) = *lock {
+        for token in lock.iter() {
             token.cancel();
         }
     }
@@ -81,9 +77,7 @@ pub fn is_test_cancelled() -> bool {
         return cancelled;
     }
     if let Ok(lock) = ACTIVE_TEST_TOKEN.lock() {
-        if let Some(ref token) = *lock {
-            return token.is_cancelled();
-        }
+        return lock.iter().any(|t| t.is_cancelled());
     }
     false
 }
@@ -99,6 +93,7 @@ fn emit_progress(
     bytes_tested: u64,
     total_bytes: u64,
 ) {
+    #[cfg(not(test))]
     if let Some(app_handle) = app {
         if last_emit.elapsed().as_millis() >= 40 {
             *last_emit = Instant::now();
@@ -115,6 +110,8 @@ fn emit_progress(
             });
         }
     }
+    #[cfg(test)]
+    let _ = (app, last_emit, current_file, bytes_tested, total_bytes);
 }
 
 pub fn test_bay_stream<R: Read>(
@@ -157,7 +154,13 @@ pub fn test_bay_stream<R: Read>(
             let mut b = [0u8; 1];
             match decoder.read_exact(&mut b) {
                 Ok(_) => b[0],
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    errors.push(TestArchiveErrorItem {
+                        file_name: "Archive Stream".to_string(),
+                        error: "Unexpected end of stream (missing EOF marker)".to_string(),
+                    });
+                    break;
+                }
                 Err(e) => {
                     errors.push(TestArchiveErrorItem {
                         file_name: "Archive Stream".to_string(),
@@ -169,6 +172,22 @@ pub fn test_bay_stream<R: Read>(
         };
 
         if entry_type == 0 {
+            loop {
+                match decoder.read(&mut io_buf) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) => {
+                        errors.push(TestArchiveErrorItem {
+                            file_name: "Stream EOF".to_string(),
+                            error: format!(
+                                "Archive stream integrity or decryption verification failed at EOF: {}",
+                                e
+                            ),
+                        });
+                        break;
+                    }
+                }
+            }
             break;
         }
 
@@ -450,7 +469,16 @@ pub fn test_7z_archive(
         Err(sevenz_rust2::Error::PasswordRequired) => {
             return Err("Password required: This 7z archive is encrypted with AES-256.".into());
         }
-        Err(e) => return Err(format!("7z open error: {}", e)),
+        Err(e) => {
+            if crate::inspector::is_archive_encrypted(archive_path) {
+                return Err(if pwd_opt.is_none() {
+                    "Password required: This 7z archive is encrypted with AES-256.".into()
+                } else {
+                    "Incorrect password: Could not decrypt 7z archive.".into()
+                });
+            }
+            return Err(format!("7z open error: {}", e));
+        }
     };
 
     let total_expected_bytes: u64 = sz_reader.archive().files.iter().map(|f| f.size()).sum();
@@ -503,6 +531,13 @@ pub fn test_7z_archive(
         if is_test_cancelled() {
             return Err("Testing cancelled by user".to_string());
         }
+        if e.to_string().to_lowercase().contains("password") || crate::inspector::is_archive_encrypted(archive_path) {
+            return Err(if pwd_opt.is_none() {
+                "Password required: This 7z archive is encrypted with AES-256.".into()
+            } else {
+                "Incorrect password: Could not decrypt 7z archive.".into()
+            });
+        }
         errors.push(TestArchiveErrorItem {
             file_name: "7z Container".to_string(),
             error: format!("Archive decoding error: {}", e),
@@ -520,10 +555,26 @@ pub fn test_tar_archive(
     archive_path: &Path,
     app: Option<&AppHandle>,
 ) -> Result<(usize, u64, Vec<TestArchiveErrorItem>), String> {
+    let path_str = archive_path.to_string_lossy().to_lowercase();
+    let detected = detect_archive_type(archive_path);
+    if path_str.ends_with(".bz2")
+        || path_str.ends_with(".tbz2")
+        || path_str.ends_with(".xz")
+        || path_str.ends_with(".txz")
+        || path_str.ends_with(".iso")
+        || path_str.ends_with(".cab")
+        || (path_str.ends_with(".zst") && !path_str.ends_with(".tar.zst"))
+        || matches!(
+            detected,
+            ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Iso | ArchiveFormat::Cab
+        )
+    {
+        return Err("Delegate compressed container to system tar".into());
+    }
+
     let raw_file = File::open(archive_path)
         .map_err(|e| format!("Failed to open archive: {}", e))?;
     let reader = BufReader::with_capacity(1024 * 1024, raw_file);
-    let path_str = archive_path.to_string_lossy().to_lowercase();
 
     let mut tested_count = 0usize;
     let mut total_tested = 0u64;
@@ -595,7 +646,7 @@ pub fn test_with_system_tar(
     app: Option<&AppHandle>,
 ) -> Result<(usize, u64, Vec<TestArchiveErrorItem>), String> {
     let mut cmd = std::process::Command::new(crate::inspector::get_system32_exe("tar.exe"));
-    cmd.arg("-tf").arg(archive_path);
+    cmd.args(["-xvf"]).arg(archive_path).arg("-O");
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
@@ -603,32 +654,92 @@ pub fn test_with_system_tar(
     cmd.creation_flags(crate::priority::get_child_process_creation_flags());
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn tar: {}", e))?;
-    let mut tested_count = 0usize;
-    let mut errors = Vec::new();
-    let mut last_emit = Instant::now();
+    let total_expected_bytes: u64 = std::fs::metadata(archive_path)
+        .map(|m| m.len() * 2)
+        .unwrap_or(0);
 
-    if let Some(stdout) = child.stdout.take() {
-        use std::io::BufRead;
-        let reader = std::io::BufReader::new(stdout);
-        for line in reader.lines() {
+    let tested_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let current_entry = Arc::new(Mutex::new(String::from("Verifying archive stream...")));
+
+    let stderr_handle = child.stderr.take().map(|stderr| {
+        let tested_ref = tested_count.clone();
+        let entry_ref = current_entry.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = BufReader::new(stderr);
+            let mut diagnostics = Vec::new();
+            for line in reader.lines().map_while(Result::ok) {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Some(entry_name) = trimmed.strip_prefix("x ") {
+                    tested_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Ok(mut guard) = entry_ref.lock() {
+                        *guard = entry_name.to_string();
+                    }
+                } else {
+                    diagnostics.push(trimmed.to_string());
+                }
+            }
+            diagnostics
+        })
+    });
+
+    let mut total_tested = 0u64;
+    let mut last_emit = Instant::now();
+    let mut discard_buf = vec![0u8; 256 * 1024];
+
+    if let Some(mut stdout) = child.stdout.take() {
+        loop {
             if is_test_cancelled() {
                 let _ = child.kill();
                 let _ = child.wait();
+                if let Some(handle) = stderr_handle {
+                    let _ = handle.join();
+                }
                 return Err("Testing cancelled by user".to_string());
             }
-            if let Ok(l) = line {
-                tested_count += 1;
-                emit_progress(app, &mut last_emit, &l, tested_count as u64 * 1024, 0);
+            match stdout.read(&mut discard_buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    total_tested = total_tested.saturating_add(n as u64);
+                    let label = current_entry
+                        .lock()
+                        .map(|g| g.clone())
+                        .unwrap_or_else(|_| "Verifying archive stream...".to_string());
+                    emit_progress(app, &mut last_emit, &label, total_tested, total_expected_bytes);
+                }
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    if let Some(handle) = stderr_handle {
+                        let _ = handle.join();
+                    }
+                    return Err(format!("Tar stream read error: {}", e));
+                }
             }
         }
     }
 
-    let status = child.wait().map_err(|e| format!("Tar process error: {}", e))?;
-    if !status.success() {
-        let mut err_msg = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
-            let _ = stderr.read_to_string(&mut err_msg);
+    if is_test_cancelled() {
+        let _ = child.kill();
+        let _ = child.wait();
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
         }
+        return Err("Testing cancelled by user".to_string());
+    }
+
+    let status = child.wait().map_err(|e| format!("Tar process error: {}", e))?;
+    let stderr_lines = stderr_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+
+    let final_count = tested_count.load(std::sync::atomic::Ordering::Relaxed);
+    let mut errors = Vec::new();
+    if !status.success() {
+        let err_msg = stderr_lines.join("\n");
         errors.push(TestArchiveErrorItem {
             file_name: archive_path.to_string_lossy().to_string(),
             error: if err_msg.trim().is_empty() {
@@ -639,7 +750,16 @@ pub fn test_with_system_tar(
         });
     }
 
-    Ok((tested_count, 0, errors))
+    Ok((final_count, total_tested, errors))
+}
+
+fn should_abort_test_fallback(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    is_test_cancelled()
+        || lower.contains("cancelled")
+        || lower.contains("canceled")
+        || lower.contains("password")
+        || lower.contains("decrypt")
 }
 
 pub fn test_archive_sync(
@@ -664,32 +784,62 @@ pub fn test_archive_sync(
         ArchiveFormat::Bay => test_bay_archive(path, pwd_opt, Some(&app)),
         ArchiveFormat::Zip => test_zip_archive(path, pwd_opt, Some(&app))
             .or_else(|e| {
-                if e.contains("Password") || e.contains("password") {
+                if should_abort_test_fallback(&e) {
                     return Err(e);
                 }
                 test_bay_archive(path, pwd_opt, Some(&app))
-                    .or_else(|_| test_with_system_tar(path, Some(&app)))
+                    .or_else(|e2| {
+                        if should_abort_test_fallback(&e2) {
+                            return Err(e2);
+                        }
+                        test_with_system_tar(path, Some(&app))
+                    })
             }),
         ArchiveFormat::SevenZip => test_7z_archive(path, pwd_opt, Some(&app))
             .or_else(|e| {
-                if e.contains("Password") || e.contains("password") {
+                if should_abort_test_fallback(&e) {
                     return Err(e);
                 }
                 test_with_system_tar(path, Some(&app))
             }),
         ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd => {
             test_tar_archive(path, Some(&app))
-                .or_else(|_| test_with_system_tar(path, Some(&app)))
+                .or_else(|e| {
+                    if should_abort_test_fallback(&e) {
+                        return Err(e);
+                    }
+                    test_with_system_tar(path, Some(&app))
+                })
         }
         ArchiveFormat::Rar | ArchiveFormat::Iso | ArchiveFormat::Cab => {
             test_with_system_tar(path, Some(&app))
         }
         ArchiveFormat::Unknown => {
             test_zip_archive(path, pwd_opt, Some(&app))
-                .or_else(|_| test_7z_archive(path, pwd_opt, Some(&app)))
-                .or_else(|_| test_bay_archive(path, pwd_opt, Some(&app)))
-                .or_else(|_| test_with_system_tar(path, Some(&app)))
-                .or_else(|_| test_tar_archive(path, Some(&app)))
+                .or_else(|e| {
+                    if should_abort_test_fallback(&e) {
+                        return Err(e);
+                    }
+                    test_7z_archive(path, pwd_opt, Some(&app))
+                })
+                .or_else(|e| {
+                    if should_abort_test_fallback(&e) {
+                        return Err(e);
+                    }
+                    test_bay_archive(path, pwd_opt, Some(&app))
+                })
+                .or_else(|e| {
+                    if should_abort_test_fallback(&e) {
+                        return Err(e);
+                    }
+                    test_with_system_tar(path, Some(&app))
+                })
+                .or_else(|e| {
+                    if should_abort_test_fallback(&e) {
+                        return Err(e);
+                    }
+                    test_tar_archive(path, Some(&app))
+                })
         }
     };
 
@@ -756,6 +906,62 @@ mod tests {
             assert!(!is_test_cancelled());
             assert!(!guard2.token().is_cancelled());
         }
+    }
+
+    #[test]
+    fn test_should_abort_test_fallback_blocks_cancel_and_password() {
+        assert!(should_abort_test_fallback("Testing cancelled by user"));
+        assert!(should_abort_test_fallback("Operation Canceled"));
+        assert!(should_abort_test_fallback("Incorrect password: Could not decrypt 7z archive."));
+        assert!(should_abort_test_fallback("Failed to decrypt stream"));
+        assert!(!should_abort_test_fallback("Unknown archive magic bytes"));
+    }
+
+    #[test]
+    fn test_test_bay_stream_detects_missing_eof_marker() {
+        let truncated_stream: Vec<u8> = Vec::new();
+        // Empty after 1-byte header read vs truncated right after entry:
+        let mut partial_entry = Vec::new();
+        partial_entry.push(1u8); // file entry
+        let name = b"file.txt";
+        partial_entry.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        partial_entry.extend_from_slice(name);
+        partial_entry.extend_from_slice(&3u64.to_le_bytes());
+        partial_entry.extend_from_slice(b"abc");
+        // Missing 0u8 EOF marker!
+
+        let (count, bytes, errors) = test_bay_stream(std::io::Cursor::new(partial_entry), 3, None).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(bytes, 3);
+        assert!(!errors.is_empty());
+        assert!(errors[0].error.contains("missing EOF marker"));
+        drop(truncated_stream);
+    }
+
+    #[test]
+    fn test_test_tar_archive_delegates_xz_and_bz2() {
+        let xz_err = test_tar_archive(Path::new("dummy_archive.tar.xz"), None).unwrap_err();
+        assert!(xz_err.contains("Delegate compressed container"));
+        let bz2_err = test_tar_archive(Path::new("dummy_archive.tar.bz2"), None).unwrap_err();
+        assert!(bz2_err.contains("Delegate compressed container"));
+    }
+
+    #[test]
+    fn test_concurrent_test_task_guards_do_not_clobber_tokens() {
+        let g1 = TestTaskGuard::new();
+        let t1 = g1.token();
+        let g2 = TestTaskGuard::new();
+        let t2 = g2.token();
+
+        assert!(!t1.is_cancelled());
+        assert!(!t2.is_cancelled());
+
+        // Dropping g2 must not unregister g1's active token
+        drop(g2);
+        cancel_test_flag();
+        assert!(t1.is_cancelled());
+        assert!(is_test_cancelled());
+        drop(g1);
     }
 }
 

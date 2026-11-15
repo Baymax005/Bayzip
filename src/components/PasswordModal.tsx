@@ -9,6 +9,8 @@ export interface PasswordModalProps {
   showPassword: boolean;
   setShowPassword: (show: boolean) => void;
   isExtracting: boolean;
+  isBusy?: boolean;
+  mode?: "unlock" | "extract" | "preview";
   extractError: string | null;
   onSubmit: () => void;
   archiveName?: string;
@@ -22,10 +24,14 @@ export function PasswordModal({
   showPassword,
   setShowPassword,
   isExtracting,
+  isBusy,
+  mode = "extract",
   extractError,
   onSubmit,
   archiveName,
 }: PasswordModalProps) {
+  const busy = isBusy ?? isExtracting;
+  const isUnlockIntent = mode === "unlock" || mode === "preview";
   const {
     position,
     isDragging,
@@ -48,7 +54,7 @@ export function PasswordModal({
 
   // Close only on explicit Escape key (clicks outside do NOT dismiss to prevent accidental loss)
   useEffect(() => {
-    if (!isOpen || isExtracting) return;
+    if (!isOpen || busy) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -60,7 +66,7 @@ export function PasswordModal({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isExtracting, onClose]);
+  }, [isOpen, busy, onClose]);
 
   if (!isOpen) return null;
 
@@ -107,7 +113,9 @@ export function PasswordModal({
                 )}
               </div>
               <p className="text-[11px] text-[#9CA3AF]">
-                Archive encrypted with AES. Enter decryption password to unlock.
+                {isUnlockIntent
+                  ? "Archive is encrypted. Enter password to unlock and inspect contents."
+                  : "Archive encrypted with AES. Enter decryption password to unlock."}
               </p>
             </div>
           </div>
@@ -141,7 +149,7 @@ export function PasswordModal({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && password.trim() && !isExtracting) {
+                if (e.key === "Enter" && password.trim() && !busy) {
                   e.preventDefault();
                   onSubmit();
                 }
@@ -181,7 +189,7 @@ export function PasswordModal({
         <div className="flex justify-end space-x-2 pt-1">
           <button
             type="button"
-            disabled={isExtracting}
+            disabled={busy}
             onClick={onClose}
             className="px-4 py-2 bg-[#2A2A30] hover:bg-[#34343C] text-[#D1D5DB] text-xs font-medium rounded-lg border border-[#383842] transition-colors cursor-pointer disabled:opacity-50"
           >
@@ -189,20 +197,20 @@ export function PasswordModal({
           </button>
           <button
             type="button"
-            disabled={!password.trim() || isExtracting}
+            disabled={!password.trim() || busy}
             onClick={onSubmit}
             className="px-4 py-2 bg-[#38BDF8] hover:bg-[#0284C7] disabled:opacity-50 disabled:cursor-not-allowed text-black text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center space-x-1.5 shadow-md shadow-sky-500/10"
           >
-            {isExtracting ? (
+            {busy ? (
               <>
                 <svg className="animate-spin h-3.5 w-3.5 text-black" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                <span>Decrypting...</span>
+                <span>{isUnlockIntent ? "Unlocking..." : "Decrypting..."}</span>
               </>
             ) : (
-              <span>Decrypt & Extract</span>
+              <span>{isUnlockIntent ? "Unlock Archive" : "Decrypt & Extract"}</span>
             )}
           </button>
         </div>

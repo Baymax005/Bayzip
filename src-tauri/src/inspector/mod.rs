@@ -317,6 +317,19 @@ pub fn inspect_archive(path: &str, password: Option<&str>) -> Result<ArchiveInfo
         return Err("The selected file is not a supported archive format".into());
     }
 
+    if is_enc {
+        if let Some(pwd) = pwd_clean {
+            if entries.is_empty() {
+                return Err("Incorrect password: Could not decrypt archive contents.".to_string());
+            }
+            if detected == ArchiveFormat::Zip || lower.ends_with(".zip") {
+                zip::verify_zip_password(p, pwd)?;
+            } else if detected == ArchiveFormat::SevenZip || lower.ends_with(".7z") {
+                sevenz::verify_7z_password(p, pwd)?;
+            }
+        }
+    }
+
     Ok(ArchiveInfo {
         path: path.to_string(),
         filename,
@@ -412,5 +425,81 @@ mod tests {
         assert_eq!(sanitize_archive_path("   "), None);
         assert_eq!(sanitize_archive_path("."), None);
         assert_eq!(sanitize_archive_path("./"), None);
+    }
+
+    #[test]
+    fn test_rejects_unencrypted_baytoc_on_bayenc_archive() {
+        let entries = vec![ArchiveEntryItem {
+            name: "secret.txt".to_string(),
+            size: 100,
+            is_dir: false,
+        }];
+        let json_bytes = serde_json::to_vec(&entries).unwrap();
+        let toc_len = json_bytes.len() as u64;
+
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(crate::crypto::BAY_ENC_V3_MAGIC);
+        buffer.extend_from_slice(&[0xAAu8; 32]); // Encrypted body placeholder
+        buffer.extend_from_slice(&json_bytes);
+        buffer.extend_from_slice(&toc_len.to_le_bytes());
+        buffer.extend_from_slice(b"BAYTOC\x02\x00");
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = std::io::Cursor::new(buffer);
+        let result = bay::read_bay_trailer_stream(&mut cursor, file_len, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Security violation"));
+    }
+
+    #[test]
+    fn test_inspect_encrypted_bay_wrong_password_returns_err() {
+        use std::io::Write;
+        use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Key, Nonce};
+
+        let test_dir = std::env::current_dir().unwrap().join("target").join("test_inspect_enc_bay");
+        let _ = std::fs::create_dir_all(&test_dir);
+        let bay_path = test_dir.join("locked_test.bay");
+
+        {
+            let file = std::fs::File::create(&bay_path).unwrap();
+            let mut enc_writer = crate::crypto::ChunkedAesWriter::new(file, "correct_pass").unwrap();
+            enc_writer.write_all(b"BAYZIP\x02\x00").unwrap();
+            let mut zstd_enc = zstd::stream::Encoder::new(enc_writer, 1).unwrap();
+            zstd_enc.write_all(&[0u8]).unwrap(); // EOF entry
+            let enc_writer = zstd_enc.finish().unwrap();
+            let mut raw_file = enc_writer.finish().unwrap();
+
+            // Write BAYETOC\x03 trailer
+            let toc = serde_json::to_vec(&vec![ArchiveEntryItem {
+                name: "secret.txt".to_string(),
+                size: 42,
+                is_dir: false,
+            }]).unwrap();
+            let salt = [0x33u8; 16];
+            let nonce_bytes = [0x44u8; 12];
+            let key_bytes = crate::crypto::derive_bay_key("correct_pass", &salt);
+            let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+            let enc_toc = cipher.encrypt(Nonce::from_slice(&nonce_bytes), toc.as_ref()).unwrap();
+            raw_file.write_all(&enc_toc).unwrap();
+            raw_file.write_all(&(enc_toc.len() as u64).to_le_bytes()).unwrap();
+            raw_file.write_all(&salt).unwrap();
+            raw_file.write_all(&nonce_bytes).unwrap();
+            raw_file.write_all(b"BAYETOC\x03").unwrap();
+        }
+
+        let res_no_pwd = inspect_archive(&bay_path.to_string_lossy(), None).unwrap();
+        assert!(res_no_pwd.is_encrypted);
+        assert!(res_no_pwd.entries.is_empty());
+
+        let res_wrong = inspect_archive(&bay_path.to_string_lossy(), Some("wrong_pass"));
+        assert!(res_wrong.is_err());
+        assert!(res_wrong.unwrap_err().contains("Incorrect password"));
+
+        let res_ok = inspect_archive(&bay_path.to_string_lossy(), Some("correct_pass")).unwrap();
+        assert!(res_ok.is_encrypted);
+        assert_eq!(res_ok.entries.len(), 1);
+        assert_eq!(res_ok.entries[0].name, "secret.txt");
+
+        let _ = std::fs::remove_dir_all(&test_dir);
     }
 }

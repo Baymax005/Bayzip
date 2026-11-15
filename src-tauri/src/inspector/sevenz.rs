@@ -64,3 +64,27 @@ pub fn preview_7z_entry_bytes(path: &Path, entry_name: &str, password: Option<&s
         None => Err(format!("Entry '{}' not found in 7z archive", entry_name)),
     }
 }
+
+pub fn verify_7z_password(path: &Path, password: &str) -> Result<(), String> {
+    let file = File::open(path).map_err(|e| format!("Failed to open 7z archive: {}", e))?;
+    let mut sz = sevenz_rust2::ArchiveReader::new(file, Password::from(password))
+        .map_err(|_| "Incorrect password: Could not decrypt 7z archive.".to_string())?;
+
+    let mut tested_file = false;
+    sz.for_each_entries(|entry, reader| {
+        if entry.is_directory() || entry.size() == 0 {
+            return Ok(true);
+        }
+        let mut buf = [0u8; 64];
+        reader.read(&mut buf).map_err(sevenz_rust2::Error::from)?;
+        tested_file = true;
+        Ok(false)
+    })
+    .map_err(|_| "Incorrect password: Could not decrypt 7z archive.".to_string())?;
+
+    if !tested_file && sz.archive().files.is_empty() {
+        return Err("Incorrect password: Could not decrypt 7z archive.".to_string());
+    }
+
+    Ok(())
+}

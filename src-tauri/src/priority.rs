@@ -1,4 +1,6 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
 
 #[cfg(target_os = "windows")]
 extern "system" {
@@ -22,9 +24,16 @@ pub const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 pub const NORMAL_PRIORITY_CLASS: u32 = 0x00000020;
 
 #[cfg(target_os = "windows")]
-static ACTIVE_PROCESS_PRIORITY_GUARDS: AtomicUsize = AtomicUsize::new(0);
+struct ProcessPriorityState {
+    active_guards: usize,
+    original_class: u32,
+}
+
 #[cfg(target_os = "windows")]
-static ORIGINAL_PROCESS_PRIORITY_CLASS: AtomicU32 = AtomicU32::new(NORMAL_PRIORITY_CLASS);
+static PROCESS_PRIORITY_STATE: Mutex<ProcessPriorityState> = Mutex::new(ProcessPriorityState {
+    active_guards: 0,
+    original_class: NORMAL_PRIORITY_CLASS,
+});
 
 /// Global toggle for Background Priority Shield (Smooth System Responsiveness).
 /// When true (default): Bayzip runs at BELOW_NORMAL so games/apps stay smooth.
@@ -34,11 +43,20 @@ pub static BACKGROUND_SHIELD_ENABLED: AtomicBool = AtomicBool::new(true);
 pub fn set_background_shield(enabled: bool) {
     BACKGROUND_SHIELD_ENABLED.store(enabled, Ordering::SeqCst);
     #[cfg(target_os = "windows")]
-    if !enabled {
-        // If disabled mid-flight, immediately restore normal priority on the current thread and process
-        unsafe {
-            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
-            SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+    if let Ok(state) = PROCESS_PRIORITY_STATE.lock() {
+        if state.active_guards > 0 {
+            unsafe {
+                let proc = GetCurrentProcess();
+                let target_class = if enabled {
+                    BELOW_NORMAL_PRIORITY_CLASS
+                } else {
+                    state.original_class
+                };
+                SetPriorityClass(proc, target_class);
+                if !enabled {
+                    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+                }
+            }
         }
     }
 }
@@ -69,47 +87,45 @@ pub struct ScopedPriorityGuard {
     #[cfg(target_os = "windows")]
     previous_priority: Option<i32>,
     #[cfg(target_os = "windows")]
-    process_depressed: bool,
+    registered: bool,
 }
 
 impl ScopedPriorityGuard {
     pub fn new() -> Self {
         #[cfg(target_os = "windows")]
         {
-            if is_background_shield_enabled() {
+            let mut registered = false;
+            if let Ok(mut state) = PROCESS_PRIORITY_STATE.lock() {
                 unsafe {
-                    // 1. Depress process priority class so that internal libzstd / 7z worker thread pools
-                    // are governed by BELOW_NORMAL_PRIORITY_CLASS (CRITICAL-05)
-                    if ACTIVE_PROCESS_PRIORITY_GUARDS.fetch_add(1, Ordering::SeqCst) == 0 {
-                        let proc = GetCurrentProcess();
-                        let current_class = GetPriorityClass(proc);
-                        if current_class != 0 {
-                            ORIGINAL_PROCESS_PRIORITY_CLASS.store(current_class, Ordering::SeqCst);
-                        }
+                    let proc = GetCurrentProcess();
+                    if state.active_guards == 0 {
+                        let orig = GetPriorityClass(proc);
+                        state.original_class = if orig != 0 { orig } else { NORMAL_PRIORITY_CLASS };
+                    }
+                    state.active_guards += 1;
+                    registered = true;
+                    if is_background_shield_enabled() {
                         SetPriorityClass(proc, BELOW_NORMAL_PRIORITY_CLASS);
                     }
-
-                    // 2. Depress the calling thread's own priority
-                    let thread = GetCurrentThread();
-                    let current_priority = GetThreadPriority(thread);
-                    if current_priority != THREAD_PRIORITY_ERROR_RETURN {
-                        let success = SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL);
-                        if success != 0 {
-                            return Self {
-                                previous_priority: Some(current_priority),
-                                process_depressed: true,
-                            };
-                        }
-                    }
-                    return Self {
-                        previous_priority: None,
-                        process_depressed: true,
-                    };
                 }
             }
+
+            let mut previous_priority = None;
+            if is_background_shield_enabled() {
+                unsafe {
+                    let thread = GetCurrentThread();
+                    let current_priority = GetThreadPriority(thread);
+                    if current_priority != THREAD_PRIORITY_ERROR_RETURN
+                        && SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL) != 0
+                    {
+                        previous_priority = Some(current_priority);
+                    }
+                }
+            }
+
             Self {
-                previous_priority: None,
-                process_depressed: false,
+                previous_priority,
+                registered,
             }
         }
         #[cfg(not(target_os = "windows"))]
@@ -140,13 +156,15 @@ impl Drop for ScopedPriorityGuard {
                     SetThreadPriority(thread, prev);
                 }
             }
-            if self.process_depressed
-                && ACTIVE_PROCESS_PRIORITY_GUARDS.fetch_sub(1, Ordering::SeqCst) == 1
-            {
-                unsafe {
-                    let proc = GetCurrentProcess();
-                    let orig = ORIGINAL_PROCESS_PRIORITY_CLASS.load(Ordering::SeqCst);
-                    SetPriorityClass(proc, orig);
+            if self.registered {
+                if let Ok(mut state) = PROCESS_PRIORITY_STATE.lock() {
+                    state.active_guards = state.active_guards.saturating_sub(1);
+                    if state.active_guards == 0 {
+                        unsafe {
+                            let proc = GetCurrentProcess();
+                            SetPriorityClass(proc, state.original_class);
+                        }
+                    }
                 }
             }
         }
@@ -257,6 +275,33 @@ mod tests {
 
         for handle in handles {
             handle.join().expect("Worker thread panicked");
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_midflight_background_shield_toggle_syncs_process_priority() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        set_background_shield(true);
+        unsafe {
+            let proc = GetCurrentProcess();
+            SetPriorityClass(proc, NORMAL_PRIORITY_CLASS);
+            assert_eq!(GetPriorityClass(proc), NORMAL_PRIORITY_CLASS);
+
+            {
+                let _guard = ScopedPriorityGuard::new();
+                assert_eq!(GetPriorityClass(proc), BELOW_NORMAL_PRIORITY_CLASS);
+
+                // Disabling mid-flight restores original class immediately
+                set_background_shield(false);
+                assert_eq!(GetPriorityClass(proc), NORMAL_PRIORITY_CLASS);
+
+                // Re-enabling mid-flight re-applies BELOW_NORMAL_PRIORITY_CLASS immediately
+                set_background_shield(true);
+                assert_eq!(GetPriorityClass(proc), BELOW_NORMAL_PRIORITY_CLASS);
+            }
+
+            assert_eq!(GetPriorityClass(proc), NORMAL_PRIORITY_CLASS);
         }
     }
 }

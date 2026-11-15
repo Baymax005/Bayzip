@@ -152,6 +152,13 @@ pub fn read_bay_trailer_stream<R: Read + Seek>(
         .map_err(|e| format!("Failed to read archive trailer magic: {}", e))?;
 
     if &trailer_magic == b"BAYTOC\x02\x00" {
+        reader.seek(std::io::SeekFrom::Start(0))
+            .map_err(|e| format!("Failed to seek archive header: {}", e))?;
+        let mut header_magic = [0u8; 8];
+        if reader.read_exact(&mut header_magic).is_ok() && header_magic.starts_with(b"BAYENC") {
+            return Err("Security violation: unencrypted BAYTOC trailer on encrypted BAYENC archive".to_string());
+        }
+
         reader.seek(std::io::SeekFrom::End(-16))
             .map_err(|e| format!("Failed to seek BAYTOC length: {}", e))?;
         let mut len_bytes = [0u8; 8];
@@ -240,10 +247,12 @@ pub fn read_bay_trailer_stream<R: Read + Seek>(
         key_bytes.zeroize();
         let nonce = Nonce::from_slice(nonce_bytes);
 
-        let decrypted = cipher.decrypt(nonce, enc_bytes.as_ref())
+        let mut decrypted = cipher.decrypt(nonce, enc_bytes.as_ref())
             .map_err(|_| "Incorrect password or corrupted BAYETOC payload".to_string())?;
 
-        let entries: Vec<ArchiveEntryItem> = serde_json::from_slice(&decrypted)
+        let entries_res: Result<Vec<ArchiveEntryItem>, _> = serde_json::from_slice(&decrypted);
+        decrypted.zeroize();
+        let entries = entries_res
             .map_err(|e| format!("Failed to parse decrypted BAYETOC metadata: {}", e))?;
         let count = entries.len();
         let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();

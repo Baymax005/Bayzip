@@ -2,6 +2,28 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.8] - 2026-11-15
+
+### 🔐 Phase 6 Encrypted Workflow UX, Tester Payload Verification, Crypto Zeroization & Priority Hardening
+- **Encrypted Archive Inspector Unlock & Password Validation (`inspector/mod.rs`, `inspector/zip.rs`, `inspector/sevenz.rs`, `src/App.tsx`, `src/components/PasswordModal.tsx`, `src/components/ArchiveTreeInspector.tsx`, `src/components/MiniExtractWindow.tsx`) (`HIGH-01`, `MED-05`)**:
+  - Updated `inspect_archive` to fail cleanly with an explicit wrong-password error when an encrypted `.bay`, `.zip`, or `.7z` archive fails verification (adding `verify_zip_password` and `verify_7z_password` checks).
+  - Added `passwordPromptIntent` (`"unlock" | "extract" | "preview"`), `handlePasswordSubmit`, and an explicit `"Unlock Directory Inspector"` trigger via `onUnlockPreview` while resetting stale password state whenever an archive is switched or cleared.
+- **Fallback Extractor Guards & Cancellation UX (`extractor.rs`, `src/App.tsx`, `src/components/MiniExtractWindow.tsx`) (`HIGH-02`)**:
+  - Added `should_abort_fallback` across `.or_else(...)` chains in `universal_extract` alongside password/cancellation handling in `extract_zip_archive` and `extract_7z_archive` so cancellations and wrong-password errors are never masked by fallback unpackers.
+  - Added `isCancelledError` filtering in the frontend to suppress error banners/alerts on user-initiated cancellations and closed `PasswordModal` cleanly before beginning extraction.
+- **System `tar.exe` Payload Verification, Format Delegation & `.bay` EOF Drain (`tester.rs`, `extractor.rs`) (`HIGH-04`)**:
+  - Upgraded `test_with_system_tar` to stream actual decompressed payloads via `tar.exe -xvf -O` into a 256 KB buffer with cancellation polling rather than relying on header-only listing.
+  - Delegated `.bz2`, `.tbz2`, `.xz`, `.txz`, `.iso`, `.cab`, and non-`.tar.zst` `.zst` archives inside `test_tar_archive`.
+  - Flagged `UnexpectedEof` before `entry_type == 0` and drained `decoder` to `Ok(0)` after `entry_type == 0` across both `extract_bay_stream` and `test_bay_stream`.
+- **Cryptographic Plaintext Buffer Zeroization & `BAYTOC` Spoof Prevention (`crypto.rs`, `inspector/bay.rs`) (`HIGH-05`)**:
+  - Wrapped `ChunkedAesWriter.inner` in `Option<W>`, implemented `Drop` calling `zeroize()` on `buffer` and `base_nonce` for `ChunkedAesWriter` and `ChunkedAesReader`, and zeroized `self.buffer` after each `flush_chunk()`.
+  - Rejected unencrypted `BAYTOC\x02\x00` trailers on `BAYENC`-prefixed archives and zeroized decrypted `BAYETOC\x03` TOC bytes immediately after `serde_json::from_slice`.
+- **Synchronized Process Priority & Multi-Token Cancellation Registries (`priority.rs`, `compressor/mod.rs`, `extractor.rs`, `tester.rs`) (`HIGH-07`)**:
+  - Replaced lock-free atomics with `PROCESS_PRIORITY_STATE: Mutex<ProcessPriorityState>` and synchronized active OS priority mid-flight in `set_background_shield`.
+  - Switched `ACTIVE_COMPRESSION_TOKEN`, `ACTIVE_EXTRACTION_TOKEN`, and `ACTIVE_TEST_TOKEN` to `Mutex<Vec<TaskCancelToken>>` so concurrent operations do not overwrite sibling cancellation tokens.
+- **Test Binary WinSxS Manifest Linking & Expanded Unit Suite (`build.rs`, `lib.rs`, `TESTS.md`)**:
+  - Linked `libresource.a` via `cargo:rustc-link-arg` in `build.rs` and gated `run()` / `AppHandle::emit` under `#[cfg(not(test))]`, resolving `0xc0000139` (`STATUS_ENTRYPOINT_NOT_FOUND` on `comctl32.dll!TaskDialogIndirect`) and expanding the Rust suite to **51/51 passing tests** (+10 new Phase 6 unit tests).
+
 ## [v2.4.7] - 2026-11-13
 
 ### 🛡️ Phase 5 Critical Data Safety, Symlink Hardening & Engine Correctness

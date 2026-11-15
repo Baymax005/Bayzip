@@ -21,7 +21,7 @@ thread_local! {
     static CURRENT_EXTRACTION_TOKEN: RefCell<Option<TaskCancelToken>> = const { RefCell::new(None) };
 }
 
-static ACTIVE_EXTRACTION_TOKEN: Mutex<Option<TaskCancelToken>> = Mutex::new(None);
+static ACTIVE_EXTRACTION_TOKEN: Mutex<Vec<TaskCancelToken>> = Mutex::new(Vec::new());
 
 pub struct ExtractionTaskGuard {
     token: TaskCancelToken,
@@ -34,7 +34,7 @@ impl ExtractionTaskGuard {
             *cell.borrow_mut() = Some(token.clone());
         });
         if let Ok(mut lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
-            *lock = Some(token.clone());
+            lock.push(token.clone());
         }
         Self { token }
     }
@@ -56,18 +56,14 @@ impl Drop for ExtractionTaskGuard {
             *cell.borrow_mut() = None;
         });
         if let Ok(mut lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
-            if let Some(ref current) = *lock {
-                if Arc::ptr_eq(&current.0, &self.token.0) {
-                    *lock = None;
-                }
-            }
+            lock.retain(|t| !Arc::ptr_eq(&t.0, &self.token.0));
         }
     }
 }
 
 pub fn cancel_extraction_flag() {
     if let Ok(lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
-        if let Some(ref token) = *lock {
+        for token in lock.iter() {
             token.cancel();
         }
     }
@@ -81,9 +77,7 @@ pub fn is_extraction_cancelled() -> bool {
         return cancelled;
     }
     if let Ok(lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
-        if let Some(ref token) = *lock {
-            return token.is_cancelled();
-        }
+        return lock.iter().any(|t| t.is_cancelled());
     }
     false
 }
@@ -223,6 +217,33 @@ pub fn drain_bay_entry_bytes<R: Read>(
     Ok(())
 }
 
+fn emit_extract_progress(
+    app: Option<&AppHandle>,
+    last_emit: &mut Instant,
+    current_file: &str,
+    total_extracted: u64,
+    total_expected_bytes: u64,
+) {
+    #[cfg(not(test))]
+    if let Some(app_handle) = app {
+        if last_emit.elapsed().as_millis() >= 50 {
+            *last_emit = Instant::now();
+            let pct = if total_expected_bytes > 0 {
+                ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
+            } else {
+                50.0
+            };
+            let _ = app_handle.emit("extract_progress", ExtractProgress {
+                percent: pct,
+                current_file: current_file.to_string(),
+                bytes_extracted: total_extracted,
+            });
+        }
+    }
+    #[cfg(test)]
+    let _ = (app, last_emit, current_file, total_extracted, total_expected_bytes);
+}
+
 pub fn extract_bay_stream<R: Read>(
     mut decoder: R,
     dest_dir: &Path,
@@ -280,12 +301,26 @@ pub fn extract_bay_stream<R: Read>(
             let mut b = [0u8; 1];
             match decoder.read_exact(&mut b) {
                 Ok(_) => b[0],
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return Err("Malformed or truncated .bay archive (missing EOF marker)".to_string());
+                }
                 Err(e) => return Err(format!("Error reading archive entry: {}", e)),
             }
         };
 
         if entry_type == 0 {
+            loop {
+                match decoder.read(&mut io_buf) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) => {
+                        return Err(format!(
+                            "Archive stream integrity or decryption verification failed at EOF: {}",
+                            e
+                        ));
+                    }
+                }
+            }
             break;
         }
 
@@ -367,21 +402,13 @@ pub fn extract_bay_stream<R: Read>(
                 total_extracted = total_extracted.saturating_add(file_size);
             }
 
-            if let Some(app_handle) = app {
-                if last_emit.elapsed().as_millis() >= 50 {
-                    last_emit = Instant::now();
-                    let pct = if total_expected_bytes > 0 {
-                        ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
-                    } else {
-                        50.0
-                    };
-                    let _ = app_handle.emit("extract_progress", ExtractProgress {
-                        percent: pct,
-                        current_file: safe_rel_path.to_string_lossy().to_string(),
-                        bytes_extracted: total_extracted,
-                    });
-                }
-            }
+            emit_extract_progress(
+                app,
+                &mut last_emit,
+                &safe_rel_path.to_string_lossy(),
+                total_extracted,
+                total_expected_bytes,
+            );
         } else {
             // Atomic extraction via .baypart: prevents leaving corrupted partial files on disk if interrupted
             let part_path = {
@@ -425,21 +452,13 @@ pub fn extract_bay_stream<R: Read>(
                         remaining -= n as u64;
                         total_extracted = total_extracted.saturating_add(n as u64);
 
-                        if let Some(app_handle) = app {
-                            if last_emit.elapsed().as_millis() >= 50 {
-                                last_emit = Instant::now();
-                                let pct = if total_expected_bytes > 0 {
-                                    ((total_extracted as f64 / total_expected_bytes as f64) * 100.0).min(99.0)
-                                } else {
-                                    50.0
-                                };
-                                let _ = app_handle.emit("extract_progress", ExtractProgress {
-                                    percent: pct,
-                                    current_file: safe_rel_path.to_string_lossy().to_string(),
-                                    bytes_extracted: total_extracted,
-                                });
-                            }
-                        }
+                        emit_extract_progress(
+                            app,
+                            &mut last_emit,
+                            &safe_rel_path.to_string_lossy(),
+                            total_extracted,
+                            total_expected_bytes,
+                        );
                     }
                     Err(e) => {
                         write_err = Some(format!("Error reading decompressed stream: {}", e));
@@ -648,6 +667,7 @@ pub fn extract_zip_archive(
     };
 
     let pwd_opt = password.map(|p| p.trim()).filter(|p| !p.is_empty());
+    let is_enc = pwd_opt.is_some() && crate::inspector::is_archive_encrypted(archive_path);
 
     // Single 2 MB reusable buffer outside the zip loop
     let mut io_buf = vec![0u8; 256 * 1024];
@@ -727,10 +747,22 @@ pub fn extract_zip_archive(
             if file_size <= 64 * 1024 && !file_existed {
                 let sz = file_size as usize;
                 if sz > 0 {
-                    file.read_exact(&mut io_buf[..sz]).map_err(|e| format!("Zip read error: {}", e))?;
+                    file.read_exact(&mut io_buf[..sz]).map_err(|e| {
+                        if is_enc {
+                            format!("Incorrect password or corrupted encrypted ZIP entry: {}", e)
+                        } else {
+                            format!("Zip read error: {}", e)
+                        }
+                    })?;
                 }
                 let mut eof_check = [0u8; 1];
-                let extra = file.read(&mut eof_check).map_err(|e| format!("Zip CRC/read error: {}", e))?;
+                let extra = file.read(&mut eof_check).map_err(|e| {
+                    if is_enc {
+                        format!("Incorrect password or corrupted encrypted ZIP entry: {}", e)
+                    } else {
+                        format!("Zip CRC/read error: {}", e)
+                    }
+                })?;
                 if extra != 0 {
                     return Err(format!("Zip entry '{}' exceeded declared size", safe_path.display()));
                 }
@@ -794,7 +826,11 @@ pub fn extract_zip_archive(
                         Err(e) => {
                             drop(writer);
                             let _ = std::fs::remove_file(&part_path);
-                            return Err(format!("Zip read error: {}", e));
+                            return Err(if is_enc {
+                                format!("Incorrect password or corrupted encrypted ZIP entry: {}", e)
+                            } else {
+                                format!("Zip read error: {}", e)
+                            });
                         }
                     }
                 }
@@ -809,7 +845,11 @@ pub fn extract_zip_archive(
                     Err(e) => {
                         drop(writer);
                         let _ = std::fs::remove_file(&part_path);
-                        return Err(format!("Zip CRC/read error: {}", e));
+                        return Err(if is_enc {
+                            format!("Incorrect password or corrupted encrypted ZIP entry: {}", e)
+                        } else {
+                            format!("Zip CRC/read error: {}", e)
+                        });
                     }
                 }
                 if let Err(e) = writer.flush() {
@@ -1095,6 +1135,16 @@ pub fn extract_7z_archive(
             return Err("Password required: This 7z archive is encrypted with AES-256.".into());
         }
         Err(e) => {
+            if is_extraction_cancelled() || e.to_string().to_lowercase().contains("cancelled") {
+                return Err("Extraction cancelled by user".to_string());
+            }
+            if crate::inspector::is_archive_encrypted(archive_path) {
+                return Err(if pwd_opt.is_none() {
+                    "Password required: This 7z archive is encrypted with AES-256.".into()
+                } else {
+                    "Incorrect password: Could not decrypt 7z archive.".into()
+                });
+            }
             return extract_with_system_tar(archive_path, dest_dir, app, excluded)
                 .map_err(|_| format!("7z open error: {}", e));
         }
@@ -1317,8 +1367,15 @@ pub fn extract_7z_archive(
         }
         Err(e) => {
             cleanup_extracted_files(&newly_created);
-            if e.to_string().to_lowercase().contains("password") {
-                Err("Incorrect password: Could not decrypt 7z archive.".into())
+            let err_lower = e.to_string().to_lowercase();
+            if is_extraction_cancelled() || err_lower.contains("cancelled") || err_lower.contains("canceled") {
+                Err("Extraction cancelled by user".into())
+            } else if err_lower.contains("password") || crate::inspector::is_archive_encrypted(archive_path) {
+                if pwd_opt.is_none() {
+                    Err("Password required: This 7z archive is encrypted with AES-256.".into())
+                } else {
+                    Err("Incorrect password: Could not decrypt 7z archive.".into())
+                }
             } else {
                 extract_with_system_tar(archive_path, dest_dir, app, excluded)
                     .map_err(|_| format!("7z extraction error: {}", e))
@@ -1620,6 +1677,15 @@ pub fn extract_with_system_tar(
     Ok(extracted_files)
 }
 
+fn should_abort_fallback(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    is_extraction_cancelled()
+        || lower.contains("cancelled")
+        || lower.contains("canceled")
+        || lower.contains("password")
+        || lower.contains("decrypt")
+}
+
 pub fn universal_extract(
     archive_path: &Path,
     dest_dir: &Path,
@@ -1636,17 +1702,22 @@ pub fn universal_extract(
         ArchiveFormat::Zip => {
             extract_zip_archive(archive_path, dest_dir, password, expected_size, app, excluded)
                 .or_else(|e| {
-                    if e.contains("Password") || e.contains("password") {
+                    if should_abort_fallback(&e) {
                         return Err(e);
                     }
                     extract_bay_archive(archive_path, dest_dir, password, expected_size, app, excluded)
-                        .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app, excluded))
+                        .or_else(|e2| {
+                            if should_abort_fallback(&e2) {
+                                return Err(e2);
+                            }
+                            extract_with_system_tar(archive_path, dest_dir, app, excluded)
+                        })
                 })
         },
         ArchiveFormat::SevenZip => {
             extract_7z_archive(archive_path, dest_dir, password, expected_size, app, excluded)
                 .or_else(|e| {
-                    if e.contains("Password") || e.contains("password") {
+                    if should_abort_fallback(&e) {
                         return Err(e);
                     }
                     extract_with_system_tar(archive_path, dest_dir, app, excluded)
@@ -1654,17 +1725,42 @@ pub fn universal_extract(
         },
         ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd | ArchiveFormat::Iso | ArchiveFormat::Cab => {
             extract_with_system_tar(archive_path, dest_dir, app, excluded)
-                .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app, excluded))
+                .or_else(|e| {
+                    if should_abort_fallback(&e) {
+                        return Err(e);
+                    }
+                    extract_tar_archive(archive_path, dest_dir, expected_size, app, excluded)
+                })
         },
         ArchiveFormat::Rar => {
             extract_with_system_tar(archive_path, dest_dir, app, excluded)
         },
         ArchiveFormat::Unknown => {
             extract_zip_archive(archive_path, dest_dir, password, expected_size, app, excluded)
-                .or_else(|_| extract_7z_archive(archive_path, dest_dir, password, expected_size, app, excluded))
-                .or_else(|_| extract_bay_archive(archive_path, dest_dir, password, expected_size, app, excluded))
-                .or_else(|_| extract_with_system_tar(archive_path, dest_dir, app, excluded))
-                .or_else(|_| extract_tar_archive(archive_path, dest_dir, expected_size, app, excluded))
+                .or_else(|e| {
+                    if should_abort_fallback(&e) {
+                        return Err(e);
+                    }
+                    extract_7z_archive(archive_path, dest_dir, password, expected_size, app, excluded)
+                })
+                .or_else(|e| {
+                    if should_abort_fallback(&e) {
+                        return Err(e);
+                    }
+                    extract_bay_archive(archive_path, dest_dir, password, expected_size, app, excluded)
+                })
+                .or_else(|e| {
+                    if should_abort_fallback(&e) {
+                        return Err(e);
+                    }
+                    extract_with_system_tar(archive_path, dest_dir, app, excluded)
+                })
+                .or_else(|e| {
+                    if should_abort_fallback(&e) {
+                        return Err(e);
+                    }
+                    extract_tar_archive(archive_path, dest_dir, expected_size, app, excluded)
+                })
         }
     }
 }
@@ -1994,6 +2090,60 @@ mod tests {
 
         assert!(!file1.exists());
         assert!(!file2.exists());
+        let _ = std::fs::remove_dir_all(&test_dir);
+    }
+
+    #[test]
+    fn test_should_abort_fallback_on_cancel_and_password() {
+        assert!(should_abort_fallback("Extraction cancelled by user"));
+        assert!(should_abort_fallback("Operation canceled"));
+        assert!(should_abort_fallback("Incorrect password: Could not decrypt file"));
+        assert!(should_abort_fallback("Failed to decrypt 7z header"));
+        assert!(!should_abort_fallback("Invalid zip archive header"));
+    }
+
+    #[test]
+    fn test_extract_bay_stream_eof_drain_and_truncation_detection() {
+        let test_dir = std::env::current_dir().unwrap().join("target").join("test_bay_eof_extract");
+        let _ = std::fs::remove_dir_all(&test_dir);
+        let _ = std::fs::create_dir_all(&test_dir);
+
+        // 1. Missing EOF 0u8 marker after file entry -> Error
+        let mut truncated = Vec::new();
+        truncated.push(1u8);
+        let name = b"hello.txt";
+        truncated.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        truncated.extend_from_slice(name);
+        truncated.extend_from_slice(&5u64.to_le_bytes());
+        truncated.extend_from_slice(b"world");
+        let res = extract_bay_stream(std::io::Cursor::new(truncated), &test_dir, 5, None, None, None);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("missing EOF marker"));
+        assert!(!test_dir.join("hello.txt").exists());
+
+        // 2. Encrypted stream truncated right after entry_type == 0 (missing ChunkedAesReader 0u32 EOF marker)
+        let password = "stream_eof_pass";
+        let mut raw_stream = Vec::new();
+        {
+            let mut writer = crate::crypto::ChunkedAesWriter::new(&mut raw_stream, password).unwrap();
+            writer.write_all(&[1u8]).unwrap();
+            let entry_name = b"ok.txt";
+            writer.write_all(&(entry_name.len() as u32).to_le_bytes()).unwrap();
+            writer.write_all(entry_name).unwrap();
+            writer.write_all(&2u64.to_le_bytes()).unwrap();
+            writer.write_all(b"hi").unwrap();
+            writer.write_all(&[0u8]).unwrap(); // entry_type == 0 present inside stream
+            writer.finish().unwrap();
+        }
+        // Chop off the final 4-byte ChunkedAesWriter 0u32 EOF marker!
+        let chopped = &raw_stream[8..raw_stream.len() - 4];
+        let enc_reader = ChunkedAesReader::new(chopped, password).unwrap();
+        let res_eof = extract_bay_stream(enc_reader, &test_dir, 2, None, None, None);
+        assert!(res_eof.is_err());
+        assert!(res_eof.unwrap_err().contains("verification failed at EOF"));
+        // Partial/rolled-back file must be cleaned up on EOF verification failure
+        assert!(!test_dir.join("ok.txt").exists());
+
         let _ = std::fs::remove_dir_all(&test_dir);
     }
 }

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.4.7-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.4.7" /></a>
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.4.8-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.4.8" /></a>
   <a href="#windows-shell-integration"><img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows 10 | 11" /></a>
   <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2.0" /></a>
   <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021 Edition" /></a>
@@ -20,10 +20,10 @@
 
 <p align="center">
   <a href="src-tauri/src/crypto.rs"><img src="https://img.shields.io/badge/security-AES--256--GCM%20AEAD-10B981?style=flat-square&logo=shield&logoColor=white" alt="AES-256-GCM AEAD Security" /></a>
-  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-41%2F41%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="41/41 Automated Tests Passing" /></a>
+  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-51%2F51%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="51/51 Automated Tests Passing" /></a>
   <a href="src-tauri/src/compressor/mod.rs"><img src="https://img.shields.io/badge/engine-Zstandard%20%7C%20LZ4%20%7C%20Brotli-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Compression Engine" /></a>
   <a href="src-tauri/crates/bayzip_shell/src/lib.rs"><img src="https://img.shields.io/badge/shell-Windows%2011%20COM-6366F1?style=flat-square&logo=windows&logoColor=white" alt="Windows 11 COM Shell Extension" /></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/audit-35%2F35%20remediated-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="35/35 Technical Audit Findings Remediated" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/audit-46%2F46%20remediated-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="46/46 Technical Audit Findings Remediated" /></a>
 </p>
 
 <p align="center">
@@ -58,7 +58,7 @@
 ### 🛡️ In-Place Archive Integrity Tester & CRC-32 Verification (v2.4.0)
 - **High-Throughput Zero-Disk-Write Verification (`src-tauri/src/tester.rs`)**:
   - Validates container parity and entry checksums by streaming decompressed payloads directly into an in-memory discard sink (`std::io::sink()`) with zero disk writes.
-  - Multi-container integrity checking for `.bay`, `.bayg`, `.zip` (rolling CRC-32 vs central directory headers), `.7z` (folder block decoding and CRC validation), `.tar.*` (block header checksums), and system tar fallback for `.rar`, `.iso`, and `.cab`.
+  - Multi-container integrity checking for `.bay`, `.bayg`, `.zip` (rolling CRC-32 vs central directory headers), `.7z` (folder block decoding and CRC validation), `.tar.*` (block header checksums and delegated `.xz`/`.bz2`/`.iso`/`.cab` handling), full `.bay` stream EOF verification, and full payload streaming via `tar.exe -xvf -O` for system `tar.exe` fallback formats.
   - Runs inside `tauri::async_runtime::spawn_blocking` protected by `ScopedPriorityGuard` (`THREAD_PRIORITY_BELOW_NORMAL`) ensuring smooth system and gaming performance.
   - Real-time cancellation (`cancel_test_archive` / `CANCEL_TEST`) and ~40ms throttled progress event emitter (`test_progress`).
 - **In-Place UI Telemetry & Verification Indicators (`ArchiveTreeInspector.tsx`)**:
@@ -143,7 +143,7 @@ flowchart TD
 
 - **In-Place AEAD Streaming**:
   - `ChunkedAesWriter` and `ChunkedAesReader` operate with zero heap allocations per chunk using `AeadInPlace` (`encrypt_in_place` / `decrypt_in_place`).
-  - 4 MB chunk size minimizes AEAD authentication tag overhead while maximizing hardware throughput on AES-NI capable CPUs.
+  - 4 MB chunk size minimizes AEAD authentication tag overhead while maximizing hardware throughput on AES-NI capable CPUs, with deterministic `Drop` and per-chunk zeroization of plaintext buffers and base nonces plus `BAYTOC` spoof protection on encrypted headers.
   - Constant memory footprint (< 100 MB RAM) regardless of archive size, eliminating Out-Of-Memory (OOM) risks on multi-gigabyte encrypted archives.
   - Explicit 4-byte EOF end-of-stream delimiter verifies payload integrity and rejects truncated streams with `UnexpectedEof`.
 - **Key Derivation**: Argon2id / PBKDF2 salt-derived symmetric keys with random 8-byte nonces.

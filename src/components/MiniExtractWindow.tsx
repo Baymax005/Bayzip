@@ -217,7 +217,9 @@ export function MiniExtractWindow() {
     } catch (err) {
       console.error("Mini extract error:", err);
       const errStr = String(err);
-      if (errStr.toLowerCase().includes("password") || errStr.toLowerCase().includes("decrypt")) {
+      if (/cancel+ed/i.test(errStr)) {
+        handleExit();
+      } else if (errStr.toLowerCase().includes("password") || errStr.toLowerCase().includes("decrypt")) {
         setErrorMessage("Incorrect password. Please try again.");
         setPassword("");
         setState("password");

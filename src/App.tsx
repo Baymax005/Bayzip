@@ -104,12 +104,15 @@ export default function App() {
   const [extractPassword, setExtractPassword] = useState<string>("");
   const [showExtractPassword, setShowExtractPassword] = useState<boolean>(false);
   const [isPasswordPromptOpen, setIsPasswordPromptOpen] = useState<boolean>(false);
+  const [passwordPromptIntent, setPasswordPromptIntent] = useState<"unlock" | "extract" | "preview">("unlock");
+  const [pendingPreviewEntry, setPendingPreviewEntry] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [isCancellingExtract, setIsCancellingExtract] = useState<boolean>(false);
   const [extractProgress, setExtractProgress] = useState<ExtractProgress | null>(null);
   const [extractResult, setExtractResult] = useState<ExtractResult | null>(null);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [excludedPaths, setExcludedPaths] = useState<Set<string>>(new Set());
+  const isCancelledError = (msg?: string | null) => Boolean(msg && /cancel+ed/i.test(msg));
 
   // In-Place Archive Testing State
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "verified" | "error">("idle");
@@ -471,8 +474,19 @@ export default function App() {
   };
 
   // Preview Entry
-  const handlePreviewEntry = async (entryName: string) => {
+  const handlePreviewEntry = async (entryName: string, overridePassword?: string) => {
     const isDiskFile = /^[a-zA-Z]:[/\\]/.test(entryName) || !selectedArchive;
+    if (!isDiskFile) {
+      const effectivePwd = overridePassword !== undefined ? overridePassword : extractPassword;
+      if (archiveInfo?.is_encrypted && !effectivePwd.trim()) {
+        setPendingPreviewEntry(entryName);
+        setPasswordPromptIntent("preview");
+        setExtractError(null);
+        setIsPasswordPromptOpen(true);
+        return;
+      }
+    }
+
     setIsPreviewOpen(true);
     setIsPreviewLoading(true);
     setPreviewError(null);
@@ -493,16 +507,27 @@ export default function App() {
 
     const archiveBase = selectedArchive.split(/[/\\]/).pop() || selectedArchive;
     setPreviewTargetDisplayPath(`${archiveBase} ➔ ${entryName}`);
+    const pwdToUse = overridePassword !== undefined ? overridePassword : extractPassword;
 
     try {
       const res = await invoke<ArchiveEntryPreview>("preview_archive_entry", {
         archivePath: selectedArchive,
         entryName,
-        password: extractPassword.trim() ? extractPassword.trim() : null,
+        password: pwdToUse.trim() ? pwdToUse.trim() : null,
       });
       setPreviewData(res);
     } catch (err: unknown) {
-      setPreviewError(typeof err === "string" ? err : String(err));
+      const errStr = typeof err === "string" ? err : String(err);
+      const lower = errStr.toLowerCase();
+      if (lower.includes("password") || lower.includes("decrypt")) {
+        setIsPreviewOpen(false);
+        setPendingPreviewEntry(entryName);
+        setPasswordPromptIntent("preview");
+        setExtractError(errStr);
+        setIsPasswordPromptOpen(true);
+      } else {
+        setPreviewError(errStr);
+      }
     } finally {
       setIsPreviewLoading(false);
     }
@@ -606,9 +631,14 @@ export default function App() {
     setSelectedArchive(filePath);
     setExcludedPaths(new Set());
     setExtractResult(null);
-    setExtractError(null);
     setTestStatus("idle");
     setTestMessage(null);
+
+    if (pwd === undefined) {
+      setExtractPassword("");
+      setExtractError(null);
+      setPendingPreviewEntry(null);
+    }
 
     const parentDir = filePath.replace(/[/\\][^/\\]+$/, "");
     setExtractDest(parentDir || ".");
@@ -630,7 +660,7 @@ export default function App() {
       initialSize = 0;
     }
 
-    setArchiveInfo({
+    const fallbackInfo: ArchiveInfo = {
       path: filePath,
       filename,
       size: initialSize,
@@ -640,37 +670,46 @@ export default function App() {
       file_count: 0,
       total_uncompressed_size: 0,
       entries: [],
-    });
+    };
+    setArchiveInfo(fallbackInfo);
     setIsInspectingArchive(true);
+
+    const suppliedPwd = pwd && pwd.trim() ? pwd.trim() : undefined;
 
     try {
       const info = await invoke<ArchiveInfo>("get_archive_info", {
         path: filePath,
-        password: pwd || (extractPassword.trim() ? extractPassword.trim() : undefined),
+        password: suppliedPwd,
       });
       if (info.size === 0 && initialSize > 0) {
         info.size = initialSize;
       }
       setArchiveInfo(info);
-      if (info.is_encrypted && (!pwd || !pwd.trim())) {
+      if (suppliedPwd) {
+        setIsPasswordPromptOpen(false);
+        setExtractError(null);
+      } else if (info.is_encrypted && (!info.entries || info.entries.length === 0)) {
+        setPasswordPromptIntent("unlock");
+        setExtractError(null);
         setIsPasswordPromptOpen(true);
       }
     } catch (err) {
       console.error("Failed to inspect archive info:", err);
-      const errStr = String(err).toLowerCase();
-      const isEnc = errStr.includes("password") || errStr.includes("encrypt");
-      setArchiveInfo({
-        path: filePath,
-        filename,
-        size: initialSize,
-        format,
-        is_archive: true,
-        is_encrypted: isEnc,
-        file_count: 0,
-        total_uncompressed_size: 0,
-        entries: [],
-      });
-      if (isEnc) setIsPasswordPromptOpen(true);
+      const errStr = String(err);
+      const errLower = errStr.toLowerCase();
+      const isEnc = errLower.includes("password") || errLower.includes("encrypt") || errLower.includes("decrypt");
+      if (suppliedPwd) {
+        setArchiveInfo({ ...fallbackInfo, is_encrypted: true });
+        setExtractError(errStr);
+        setIsPasswordPromptOpen(true);
+      } else {
+        setArchiveInfo({ ...fallbackInfo, is_encrypted: isEnc });
+        if (isEnc) {
+          setPasswordPromptIntent("unlock");
+          setExtractError(null);
+          setIsPasswordPromptOpen(true);
+        }
+      }
     } finally {
       setIsInspectingArchive(false);
     }
@@ -840,6 +879,10 @@ export default function App() {
     setStagedEntries([]);
     setExcludedPaths(new Set());
     setExcludedCompressPaths(new Set());
+    setExtractPassword("");
+    setExtractError(null);
+    setIsPasswordPromptOpen(false);
+    setPendingPreviewEntry(null);
     setTestStatus("idle");
     setTestMessage(null);
     setIsProgressMinimized(false);
@@ -894,9 +937,14 @@ export default function App() {
         password: extractPassword.trim() ? extractPassword.trim() : undefined,
       });
 
-      if (!res.success && res.error && (res.error.toLowerCase().includes("password") || res.error.toLowerCase().includes("encrypt"))) {
+      if (!res.success && isCancelledError(res.error)) {
+        setTestStatus("idle");
+        setTestMessage(null);
+      } else if (!res.success && res.error && (res.error.toLowerCase().includes("password") || res.error.toLowerCase().includes("encrypt") || res.error.toLowerCase().includes("decrypt"))) {
         setTestStatus("error");
         setTestMessage("Password required for encrypted archive");
+        setPasswordPromptIntent("unlock");
+        setExtractError(res.error);
         setIsPasswordPromptOpen(true);
       } else if (res.is_ok) {
         setTestStatus("verified");
@@ -912,9 +960,14 @@ export default function App() {
       }
     } catch (err) {
       const errStr = String(err);
-      if (errStr.toLowerCase().includes("password") || errStr.toLowerCase().includes("encrypt")) {
+      if (isCancelledError(errStr)) {
+        setTestStatus("idle");
+        setTestMessage(null);
+      } else if (errStr.toLowerCase().includes("password") || errStr.toLowerCase().includes("encrypt") || errStr.toLowerCase().includes("decrypt")) {
         setTestStatus("error");
         setTestMessage("Password required for encrypted archive");
+        setPasswordPromptIntent("unlock");
+        setExtractError(errStr);
         setIsPasswordPromptOpen(true);
       } else {
         setTestStatus("error");
@@ -988,10 +1041,12 @@ export default function App() {
             },
           });
           if (!res.success) {
-            setGlobalError({
-              title: "Compression Failed",
-              message: res.error || `Failed to compress ${file}`,
-            });
+            if (!isCancelledError(res.error)) {
+              setGlobalError({
+                title: "Compression Failed",
+                message: res.error || `Failed to compress ${file}`,
+              });
+            }
             break;
           }
           totalOrig += res.original_size;
@@ -1023,8 +1078,9 @@ export default function App() {
             excluded_paths: excludedCompressPaths.size > 0 ? Array.from(excludedCompressPaths) : undefined,
           },
         });
-        setCompressResult(res);
-        if (!res.success) {
+        if (res.success) {
+          setCompressResult(res);
+        } else if (!isCancelledError(res.error)) {
           setGlobalError({
             title: "Compression Failed",
             message: res.error || "An unexpected error occurred during compression.",
@@ -1033,11 +1089,14 @@ export default function App() {
       }
     } catch (err) {
       console.error("Compression execution error:", err);
-      setGlobalError({
-        title: "Compression Failed",
-        message: "Failed to create archive.",
-        details: String(err),
-      });
+      const errStr = String(err);
+      if (!isCancelledError(errStr)) {
+        setGlobalError({
+          title: "Compression Failed",
+          message: "Failed to create archive.",
+          details: errStr,
+        });
+      }
     } finally {
       isCompressingRef.current = false;
       setIsCompressing(false);
@@ -1065,12 +1124,14 @@ export default function App() {
     const effectiveOpenFolder = options?.openFolderOnExtract !== undefined ? options.openFolderOnExtract : openFolderOnExtract;
 
     if (archiveInfo?.is_encrypted && !effectivePassword.trim()) {
+      setPasswordPromptIntent("extract");
       setExtractError("Password required to extract encrypted archive.");
       setIsPasswordPromptOpen(true);
       return;
     }
 
     isExtractingRef.current = true;
+    setIsPasswordPromptOpen(false);
     setIsExtracting(true);
     setIsExtractModalOpen(false);
     setIsProgressMinimized(false);
@@ -1100,24 +1161,40 @@ export default function App() {
         excludedPaths: excludedPaths.size > 0 ? Array.from(excludedPaths) : undefined,
       });
 
-      setExtractResult(res);
-      setIsPasswordPromptOpen(false);
-
       if (!res.success) {
-        setGlobalError({
-          title: "Extraction Failed",
-          message: res.error || "An unexpected error occurred during extraction.",
-        });
-      } else if (effectiveOpenFolder && res.output_directory) {
-        revealItemInDir(res.output_directory).catch(() => {});
+        if (isCancelledError(res.error)) {
+          // User cancelled intentionally; suppress error modal
+        } else if (
+          res.error &&
+          (res.error.toLowerCase().includes("password") || res.error.toLowerCase().includes("decrypt"))
+        ) {
+          setPasswordPromptIntent("extract");
+          setExtractError(res.error);
+          setIsPasswordPromptOpen(true);
+        } else {
+          setGlobalError({
+            title: "Extraction Failed",
+            message: res.error || "An unexpected error occurred during extraction.",
+          });
+        }
+      } else {
+        setExtractResult(res);
+        setIsPasswordPromptOpen(false);
+        if (effectiveOpenFolder && res.output_directory) {
+          revealItemInDir(res.output_directory).catch(() => {});
+        }
       }
     } catch (err) {
       console.error("Extraction execution error:", err);
       const errStr = String(err);
-      setExtractError(errStr);
-      if (errStr.toLowerCase().includes("password")) {
+      if (isCancelledError(errStr)) {
+        // User cancelled intentionally; suppress error modal
+      } else if (errStr.toLowerCase().includes("password") || errStr.toLowerCase().includes("decrypt")) {
+        setExtractError(errStr);
+        setPasswordPromptIntent("extract");
         setIsPasswordPromptOpen(true);
       } else {
+        setExtractError(errStr);
         setGlobalError({
           title: "Extraction Failed",
           message: "Failed to extract archive contents.",
@@ -1132,6 +1209,36 @@ export default function App() {
       setExtractProgress(null);
       setIsProgressMinimized(false);
       invoke("close_progress_window").catch(() => {});
+    }
+  };
+
+  const handlePasswordSubmit = async () => {
+    if (!extractPassword.trim() || !selectedArchive) return;
+    if (passwordPromptIntent === "extract") {
+      setIsPasswordPromptOpen(false);
+      await handleExtract({ password: extractPassword });
+      return;
+    }
+
+    const pwd = extractPassword.trim();
+    setIsInspectingArchive(true);
+    setExtractError(null);
+    try {
+      const info = await invoke<ArchiveInfo>("get_archive_info", {
+        path: selectedArchive,
+        password: pwd,
+      });
+      setArchiveInfo(info);
+      setIsPasswordPromptOpen(false);
+      if (passwordPromptIntent === "preview" && pendingPreviewEntry) {
+        const target = pendingPreviewEntry;
+        setPendingPreviewEntry(null);
+        await handlePreviewEntry(target, pwd);
+      }
+    } catch (err) {
+      setExtractError(String(err));
+    } finally {
+      setIsInspectingArchive(false);
     }
   };
 
@@ -1328,7 +1435,11 @@ export default function App() {
           archiveInfo={currentArchiveInfo}
           selectedArchive={selectedArchive || (selectedFiles[0] || "")}
           isLoading={isInspectingArchive || isInspectingStaged}
-          onUnlockPreview={() => setIsPasswordPromptOpen(true)}
+          onUnlockPreview={() => {
+            setPasswordPromptIntent("unlock");
+            setExtractError(null);
+            setIsPasswordPromptOpen(true);
+          }}
           onPreviewEntry={handlePreviewEntry}
           excludedPaths={selectedArchive ? excludedPaths : excludedCompressPaths}
           onToggleExclude={selectedArchive ? handleToggleExclude : handleToggleCompressExclude}
@@ -1426,14 +1537,19 @@ export default function App() {
         {/* 6. In-Canvas Draggable Password Prompt Modal */}
         <PasswordModal
           isOpen={isPasswordPromptOpen}
-          onClose={() => setIsPasswordPromptOpen(false)}
+          onClose={() => {
+            setIsPasswordPromptOpen(false);
+            setPendingPreviewEntry(null);
+          }}
           password={extractPassword}
           setPassword={setExtractPassword}
           showPassword={showExtractPassword}
           setShowPassword={setShowExtractPassword}
           isExtracting={isExtracting}
+          isBusy={isExtracting || isInspectingArchive}
+          mode={passwordPromptIntent}
           extractError={extractError}
-          onSubmit={handleExtract}
+          onSubmit={handlePasswordSubmit}
           archiveName={archiveInfo?.filename || (selectedArchive ? selectedArchive.split(/[/\\]/).pop() : undefined)}
         />
       </div>

@@ -35,7 +35,7 @@ pub fn derive_bay_key(password: &str, salt: &[u8]) -> [u8; 32] {
 /// on-the-fly with AES-256-GCM in-place using an incremental counter nonce, and writes
 /// the resulting ciphertext to the underlying writer with zero steady-state heap allocations.
 pub struct ChunkedAesWriter<W: Write> {
-    inner: W,
+    inner: Option<W>,
     cipher: Aes256Gcm,
     base_nonce: [u8; 8],
     chunk_index: u32,
@@ -60,7 +60,7 @@ impl<W: Write> ChunkedAesWriter<W> {
         key_bytes.zeroize();
 
         Ok(Self {
-            inner,
+            inner: Some(inner),
             cipher,
             base_nonce,
             chunk_index: 0,
@@ -83,11 +83,13 @@ impl<W: Write> ChunkedAesWriter<W> {
             .map_err(|e| std::io::Error::other(format!("AES-256-GCM encryption error: {}", e)))?;
 
         let chunk_len = self.buffer.len() as u32;
-        self.inner.write_all(&chunk_len.to_le_bytes())?;
-        self.inner.write_all(&self.buffer)?;
+        let inner = self.inner.as_mut().expect("writer inner present");
+        inner.write_all(&chunk_len.to_le_bytes())?;
+        inner.write_all(&self.buffer)?;
 
         self.chunk_index = self.chunk_index.checked_add(1)
             .ok_or_else(|| std::io::Error::other("Archive chunk count exceeded limit"))?;
+        self.buffer.zeroize();
         self.buffer.clear();
         Ok(())
     }
@@ -95,9 +97,19 @@ impl<W: Write> ChunkedAesWriter<W> {
     pub fn finish(mut self) -> std::io::Result<W> {
         self.flush_chunk()?;
         // EOF marker: 4 zero bytes
-        self.inner.write_all(&0u32.to_le_bytes())?;
-        self.inner.flush()?;
-        Ok(self.inner)
+        let inner = self.inner.as_mut().expect("writer inner present");
+        inner.write_all(&0u32.to_le_bytes())?;
+        inner.flush()?;
+        self.buffer.zeroize();
+        self.base_nonce.zeroize();
+        Ok(self.inner.take().expect("writer inner present"))
+    }
+}
+
+impl<W: Write> Drop for ChunkedAesWriter<W> {
+    fn drop(&mut self) {
+        self.buffer.zeroize();
+        self.base_nonce.zeroize();
     }
 }
 
@@ -119,7 +131,7 @@ impl<W: Write> Write for ChunkedAesWriter<W> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.flush_chunk()?;
-        self.inner.flush()
+        self.inner.as_mut().expect("writer inner present").flush()
     }
 }
 
@@ -219,6 +231,13 @@ impl<R: Read> ChunkedAesReader<R> {
     }
 }
 
+impl<R: Read> Drop for ChunkedAesReader<R> {
+    fn drop(&mut self) {
+        self.buffer.zeroize();
+        self.base_nonce.zeroize();
+    }
+}
+
 impl<R: Read> Read for ChunkedAesReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
@@ -303,6 +322,36 @@ mod tests {
         let res = reader.read_to_end(&mut decrypted);
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn test_chunked_aes_drop_and_finish() {
+        let password = "drop_test_password";
+        let secret_payload = b"Super secret un-flushed plaintext chunk data";
+
+        // 1. Early drop before finish() should cleanly drop without panic
+        let mut early_buf = Vec::new();
+        {
+            let mut writer = ChunkedAesWriter::new(&mut early_buf, password).expect("Writer init");
+            writer.write_all(secret_payload).expect("Write buffered plaintext");
+            // Intentionally drop without calling finish()
+        }
+
+        // 2. Normal finish() returns inner writer and permits full decryption & early reader drop
+        let mut completed_buf = Vec::new();
+        {
+            let mut writer = ChunkedAesWriter::new(&mut completed_buf, password).expect("Writer init");
+            writer.write_all(secret_payload).expect("Write data");
+            let returned = writer.finish().expect("Finish writer");
+            assert!(returned.len() > 32);
+        }
+
+        let mut reader = ChunkedAesReader::new(&completed_buf[8..], password).expect("Reader init");
+        let mut partial = [0u8; 10];
+        reader.read_exact(&mut partial).expect("Partial read");
+        assert_eq!(&partial, &secret_payload[..10]);
+        // Drop reader mid-stream with remaining buffered plaintext in self.buffer
+        drop(reader);
     }
 }
 

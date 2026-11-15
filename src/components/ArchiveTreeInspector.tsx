@@ -86,7 +86,6 @@ function fastStringCompare(a: string, b: string): number {
 export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
   archiveInfo,
   selectedArchive,
-  extractPassword = "",
   isLoading = false,
   onUnlockPreview,
   onPreviewEntry,
@@ -440,7 +439,7 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
       <p className="text-xs text-[#888888] max-w-sm mx-auto">
         Enter the archive password below and unlock to inspect directory trees and preview files in memory.
       </p>
-      {extractPassword.trim() && onUnlockPreview && (
+      {onUnlockPreview && (
         <button
           type="button"
           onClick={onUnlockPreview}

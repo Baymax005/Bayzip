@@ -34,7 +34,7 @@ thread_local! {
     static CURRENT_COMPRESSION_TOKEN: RefCell<Option<TaskCancelToken>> = const { RefCell::new(None) };
 }
 
-static ACTIVE_COMPRESSION_TOKEN: Mutex<Option<TaskCancelToken>> = Mutex::new(None);
+static ACTIVE_COMPRESSION_TOKEN: Mutex<Vec<TaskCancelToken>> = Mutex::new(Vec::new());
 
 pub struct CompressionTaskGuard {
     token: TaskCancelToken,
@@ -47,7 +47,7 @@ impl CompressionTaskGuard {
             *cell.borrow_mut() = Some(token.clone());
         });
         if let Ok(mut lock) = ACTIVE_COMPRESSION_TOKEN.lock() {
-            *lock = Some(token.clone());
+            lock.push(token.clone());
         }
         Self { token }
     }
@@ -69,18 +69,14 @@ impl Drop for CompressionTaskGuard {
             *cell.borrow_mut() = None;
         });
         if let Ok(mut lock) = ACTIVE_COMPRESSION_TOKEN.lock() {
-            if let Some(ref current) = *lock {
-                if Arc::ptr_eq(&current.0, &self.token.0) {
-                    *lock = None;
-                }
-            }
+            lock.retain(|t| !Arc::ptr_eq(&t.0, &self.token.0));
         }
     }
 }
 
 pub fn cancel_compression_flag() {
     if let Ok(lock) = ACTIVE_COMPRESSION_TOKEN.lock() {
-        if let Some(ref token) = *lock {
+        for token in lock.iter() {
             token.cancel();
         }
     }
@@ -94,9 +90,7 @@ pub fn is_compression_cancelled() -> bool {
         return cancelled;
     }
     if let Ok(lock) = ACTIVE_COMPRESSION_TOKEN.lock() {
-        if let Some(ref token) = *lock {
-            return token.is_cancelled();
-        }
+        return lock.iter().any(|t| t.is_cancelled());
     }
     false
 }
