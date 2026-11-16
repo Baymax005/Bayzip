@@ -346,9 +346,10 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
     let archive_name = format!("{}{}", base_name, ext);
     let output_path = parent_dir.join(&archive_name);
     
-    let excluded_set: Option<std::collections::HashSet<String>> = payload.excluded_paths.as_ref().map(|paths| {
-        paths.iter().map(|p| p.replace('\\', "/").trim_start_matches('/').to_lowercase()).collect()
-    });
+    let excluded_set: Option<std::collections::HashSet<String>> = payload
+        .excluded_paths
+        .as_deref()
+        .and_then(crate::inspector::build_excluded_set);
     let excluded_ref = excluded_set.as_ref();
 
     // Calculate total original size across files & folders (accounting for excluded paths)

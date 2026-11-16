@@ -91,6 +91,67 @@ pub fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
     Some(normalized)
 }
 
+/// Normalizes an exclusion rule or entry path to lowercase forward-slash format,
+/// collapsing empty and `.` segments so `/./` and `//` variants match canonical paths.
+pub fn normalize_excluded_path(raw: &str) -> String {
+    let clean = raw.replace('\\', "/");
+    let mut parts = Vec::new();
+    for seg in clean.trim().split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        parts.push(seg);
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        parts.join("/").to_lowercase()
+    }
+}
+
+/// Builds a normalized exclusion `HashSet<String>` suitable for O(depth) `is_path_excluded` lookups.
+pub fn build_excluded_set<I, S>(paths: I) -> Option<std::collections::HashSet<String>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let set: std::collections::HashSet<String> = paths
+        .into_iter()
+        .map(|p| normalize_excluded_path(p.as_ref()))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if set.is_empty() {
+        None
+    } else {
+        Some(set)
+    }
+}
+
+/// Checks whether `raw_path` or any of its ancestor folders is present in `excluded` in O(depth).
+pub fn is_path_excluded(raw_path: &str, excluded: Option<&std::collections::HashSet<String>>) -> bool {
+    let Some(set) = excluded else {
+        return false;
+    };
+    if set.is_empty() {
+        return false;
+    }
+    let clean = normalize_excluded_path(raw_path);
+    if clean.is_empty() {
+        return false;
+    }
+    if set.contains(&clean) {
+        return true;
+    }
+    let mut search_end = clean.len();
+    while let Some(pos) = clean[..search_end].rfind('/') {
+        if set.contains(&clean[..pos]) {
+            return true;
+        }
+        search_end = pos;
+    }
+    false
+}
+
 pub fn archive_stem_name(p: &Path) -> String {
     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or("extracted");
     let lower = filename.to_lowercase();
@@ -501,5 +562,29 @@ mod tests {
         assert_eq!(res_ok.entries[0].name, "secret.txt");
 
         let _ = std::fs::remove_dir_all(&test_dir);
+    }
+
+    #[test]
+    fn test_build_excluded_set_and_prefix_matching() {
+        let excluded = build_excluded_set([
+            "/Assets\\./Audio/",
+            "./Assets//Textures/UI.png",
+            "docs/readme.md",
+            ".",
+            "/",
+            "",
+        ])
+        .unwrap();
+
+        assert!(is_path_excluded("assets/audio/music/theme.ogg", Some(&excluded)));
+        assert!(is_path_excluded("assets/./audio/payload.exe", Some(&excluded)));
+        assert!(is_path_excluded("assets//audio/payload.exe", Some(&excluded)));
+        assert!(is_path_excluded("./Assets/Audio/", Some(&excluded)));
+        assert!(is_path_excluded("assets\\textures\\ui.png", Some(&excluded)));
+        assert!(is_path_excluded("././DOCS//README.MD", Some(&excluded)));
+        assert!(!is_path_excluded("assets/audio_extra/sfx.wav", Some(&excluded)));
+        assert!(!is_path_excluded("assets/textures/hud.png", Some(&excluded)));
+        assert!(!is_path_excluded("", Some(&excluded)));
+        assert!(!is_path_excluded(".", Some(&excluded)));
     }
 }

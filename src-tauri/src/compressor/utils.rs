@@ -116,27 +116,7 @@ pub fn is_precompressed_file(path: &Path) -> bool {
     false
 }
 
-pub fn is_path_excluded(clean_rel: &str, excluded: Option<&std::collections::HashSet<String>>) -> bool {
-    if let Some(set) = excluded {
-        let replaced = clean_rel.replace('\\', "/");
-        let clean = replaced
-            .trim_start_matches('/')
-            .trim_start_matches("./")
-            .trim_start_matches('/')
-            .trim_end_matches('/')
-            .to_lowercase();
-        if set.contains(&clean) {
-            return true;
-        }
-        for exc in set {
-            let exc_clean = exc.trim_end_matches('/');
-            if clean.starts_with(&format!("{}/", exc_clean)) || clean == exc_clean {
-                return true;
-            }
-        }
-    }
-    false
-}
+pub use crate::inspector::is_path_excluded;
 
 /// Returns `true` if `path` is a Bayzip temporary artifact (`.baytmp`, `.baypart`)
 /// or matches `output_path` / `temp_path` to prevent archive self-inclusion.

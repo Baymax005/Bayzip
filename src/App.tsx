@@ -1,5 +1,5 @@
 import { formatBytes } from "./utils/format";
-import { getArchiveStemName, isArchiveFile, resolveStagedDiskPath, togglePathExclusion } from "./utils/archive";
+import { computeExcludedBytes, getArchiveStemName, isArchiveFile, resolveStagedDiskPath, togglePathExclusion } from "./utils/archive";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -17,7 +17,7 @@ import { ResultModals } from "./components/ResultModals";
 import { CompressModal } from "./components/CompressModal";
 import { ExtractModal } from "./components/ExtractModal";
 import { UnifiedDropHub } from "./components/UnifiedDropHub";
-import { ArchiveTreeInspector, normalizeArchiveEntryPath, StreamProgressTelemetry } from "./components/ArchiveTreeInspector";
+import { ArchiveTreeInspector, StreamProgressTelemetry } from "./components/ArchiveTreeInspector";
 import { FilePreviewModal } from "./components/FilePreviewModal";
 import { AbortConfirmationModal } from "./components/AbortConfirmationModal";
 import { ErrorModal } from "./components/ErrorModal";
@@ -161,23 +161,20 @@ export default function App() {
     return selectedFiles.reduce((acc, f) => acc + (itemsInfo[f]?.size || 0), 0);
   }, [selectedFiles, itemsInfo]);
 
+  const baseStagedSize = useMemo(() => {
+    if (stagedEntries.length === 0) return totalSelectedSize;
+    let sum = 0;
+    for (const e of stagedEntries) {
+      if (!e.is_dir) sum += e.size;
+    }
+    return sum;
+  }, [stagedEntries, totalSelectedSize]);
+
   const effectiveTotalSize = useMemo(() => {
     if (stagedEntries.length === 0) return totalSelectedSize;
-    if (excludedCompressPaths.size === 0) {
-      return stagedEntries.reduce((acc, e) => acc + (e.is_dir ? 0 : e.size), 0);
-    }
-    const excludedArray = Array.from(excludedCompressPaths);
-    return stagedEntries.reduce((acc, e) => {
-      if (e.is_dir) return acc;
-      const norm = normalizeArchiveEntryPath(e.name);
-      const isExcluded = excludedArray.some((ex) => {
-        if (norm === ex) return true;
-        const prefix = ex.endsWith("/") ? ex : ex + "/";
-        return norm.startsWith(prefix);
-      });
-      return isExcluded ? acc : acc + e.size;
-    }, 0);
-  }, [stagedEntries, excludedCompressPaths, totalSelectedSize]);
+    if (excludedCompressPaths.size === 0) return baseStagedSize;
+    return Math.max(0, baseStagedSize - computeExcludedBytes(excludedCompressPaths, stagedEntries));
+  }, [stagedEntries, excludedCompressPaths, totalSelectedSize, baseStagedSize]);
 
   const totalStagedFilesCount = useMemo(() => {
     return stagedEntries.filter((e) => !e.is_dir).length;
@@ -415,7 +412,7 @@ export default function App() {
 
   // Preview Entry
   const handlePreviewEntry = async (entryName: string, overridePassword?: string) => {
-    const isDiskFile = /^[a-zA-Z]:[/\\]/.test(entryName) || !selectedArchive;
+    const isDiskFile = !selectedArchive;
     if (!isDiskFile) {
       const effectivePwd = overridePassword !== undefined ? overridePassword : extractPassword;
       if (archiveInfo?.is_encrypted && !effectivePwd.trim()) {

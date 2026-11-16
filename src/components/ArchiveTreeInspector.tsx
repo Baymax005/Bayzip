@@ -1,7 +1,14 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { VirtualScrollList } from "./VirtualScrollList";
 import { formatBytes } from "../utils/format";
-import { normalizeArchiveEntryPath } from "../utils/archive";
+import {
+  cleanArchiveDisplayPath,
+  computeExcludedBytes,
+  isNormalizedPathExcluded,
+  normalizeArchiveEntryPath,
+  normalizeExcludedSet,
+  normalizeExclusionKey,
+} from "../utils/archive";
 import { ArchiveInfo, ArchiveEntryItem, OperationProgressInfo } from "../types";
 import { FileFormatIcon, prefetchFileIcons } from "./FileFormatIcon";
 
@@ -83,13 +90,15 @@ function fastStringCompare(a: string, b: string): number {
   return collator.compare(a, b);
 }
 
+const EMPTY_EXCLUDED_PATHS: ReadonlySet<string> = new Set();
+
 export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
   archiveInfo,
   selectedArchive,
   isLoading = false,
   onUnlockPreview,
   onPreviewEntry,
-  excludedPaths = new Set(),
+  excludedPaths = EMPTY_EXCLUDED_PATHS,
   onToggleExclude,
   onIncludeAll,
   inspectorTitle,
@@ -135,38 +144,25 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
     }
   }, [localEntries]);
 
-  // Exclusion check helpers
+  const normalizedExcluded = useMemo(() => normalizeExcludedSet(excludedPaths), [excludedPaths]);
+
+  // O(depth) exclusion check helpers
   const isFileExcluded = (filePath: string): boolean => {
-    if (!excludedPaths || excludedPaths.size === 0) return false;
-    const clean = normalizeArchiveEntryPath(filePath).replace(/\/+$/, "");
-    if (excludedPaths.has(clean)) return true;
-    for (const exc of excludedPaths) {
-      const excClean = exc.replace(/\/+$/, "");
-      if (clean.startsWith(excClean + "/")) return true;
-    }
-    return false;
+    if (normalizedExcluded.size === 0) return false;
+    return isNormalizedPathExcluded(normalizeExclusionKey(filePath), normalizedExcluded);
   };
 
   const isDirExcluded = (dirPath: string): boolean => {
-    if (!excludedPaths || excludedPaths.size === 0) return false;
-    const cleanDir = normalizeArchiveEntryPath(dirPath).replace(/\/+$/, "");
-    if (excludedPaths.has(cleanDir)) return true;
-    for (const exc of excludedPaths) {
-      const excClean = exc.replace(/\/+$/, "");
-      if (cleanDir.startsWith(excClean + "/")) return true;
-    }
-    return false;
+    if (normalizedExcluded.size === 0) return false;
+    return isNormalizedPathExcluded(normalizeExclusionKey(dirPath), normalizedExcluded);
   };
 
   const excludedCount =
-    mode === "compress" && (!stagedItems || stagedItems.length === 0) ? 0 : excludedPaths.size;
+    mode === "compress" && (!stagedItems || stagedItems.length === 0) ? 0 : normalizedExcluded.size;
 
   const excludedBytes = useMemo(() => {
-    if (!localEntries || excludedPaths.size === 0) return 0;
-    return localEntries
-      .filter((e) => !e.is_dir && isFileExcluded(e.name))
-      .reduce((acc, curr) => acc + (curr.size || 0), 0);
-  }, [localEntries, excludedPaths]);
+    return computeExcludedBytes(normalizedExcluded, localEntries);
+  }, [localEntries, normalizedExcluded]);
 
   // Build hierarchical folder tree
   const treeRoot = useMemo<TreeNode>(() => {
@@ -193,45 +189,48 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
 
     const dirMap = new Map<string, TreeNode>();
     dirMap.set("", root);
+    const allNodes: TreeNode[] = [root];
 
-    const ensureFolder = (folderPath: string): TreeNode => {
-      if (dirMap.has(folderPath)) {
-        return dirMap.get(folderPath)!;
+    const ensureFolderChain = (segments: string[], depthCount: number): TreeNode => {
+      let curNode = root;
+      let curPath = "";
+      for (let i = 0; i < depthCount; i++) {
+        const folderName = segments[i];
+        curPath = curPath ? `${curPath}/${folderName}` : folderName;
+        let existing = dirMap.get(curPath);
+        if (!existing) {
+          existing = {
+            path: curPath,
+            name: folderName,
+            isDir: true,
+            size: 0,
+            directFileCount: 0,
+            totalItemCount: 0,
+            subfolders: [],
+            files: [],
+          };
+          curNode.subfolders.push(existing);
+          dirMap.set(curPath, existing);
+          allNodes.push(existing);
+        }
+        curNode = existing;
       }
-      const parts = folderPath.split("/");
-      const folderName = parts[parts.length - 1];
-      const parentPath = parts.slice(0, -1).join("/");
-      const parentNode = ensureFolder(parentPath);
-
-      const newNode: TreeNode = {
-        path: folderPath,
-        name: folderName,
-        isDir: true,
-        size: 0,
-        directFileCount: 0,
-        totalItemCount: 0,
-        subfolders: [],
-        files: [],
-      };
-      parentNode.subfolders.push(newNode);
-      dirMap.set(folderPath, newNode);
-      return newNode;
+      return curNode;
     };
 
     for (const entry of localEntries) {
-      const clean = entry.name.replace(/\\/g, "/").trim().replace(/^\.?\/+/, "");
-      if (!clean || clean === ".") continue;
+      const trimmed = entry.name.trim();
+      const clean = cleanArchiveDisplayPath(trimmed);
+      if (!clean) continue;
 
-      if (entry.is_dir || clean.endsWith("/")) {
-        const folderPath = clean.replace(/\/+$/, "");
-        if (folderPath) {
-          ensureFolder(folderPath);
-        }
+      const isDirEntry = Boolean(entry.is_dir) || trimmed.endsWith("/") || trimmed.endsWith("\\");
+      const parts = clean.split("/");
+
+      if (isDirEntry) {
+        ensureFolderChain(parts, parts.length);
       } else {
-        const lastSlash = clean.lastIndexOf("/");
-        const parentPath = lastSlash === -1 ? "" : clean.substring(0, lastSlash);
-        const leaf = lastSlash === -1 ? clean : clean.substring(lastSlash + 1);
-        const parentNode = ensureFolder(parentPath);
+        const leaf = parts[parts.length - 1];
+        const parentNode = ensureFolderChain(parts, parts.length - 1);
         parentNode.files.push({
           ...entry,
           name: clean,
@@ -241,25 +240,27 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
       }
     }
 
-    const computeStats = (node: TreeNode): { size: number; totalCount: number } => {
+    // Iterative post-order accumulation (bottom-up) prevents call-stack overflow on deep trees
+    for (let i = allNodes.length - 1; i >= 0; i--) {
+      const node = allNodes[i];
       node.subfolders.sort((a, b) => fastStringCompare(a.name, b.name));
       node.files.sort((a, b) => fastStringCompare(a.leafName || a.name, b.leafName || b.name));
 
-      let totalSize = node.files.reduce((acc, f) => acc + (f.size || 0), 0);
+      let totalSize = 0;
+      for (const f of node.files) {
+        totalSize += f.size || 0;
+      }
       let count = node.files.length;
 
       for (const sub of node.subfolders) {
-        const subStat = computeStats(sub);
-        totalSize += subStat.size;
-        count += subStat.totalCount;
+        totalSize += sub.size;
+        count += sub.totalItemCount;
       }
 
       node.size = totalSize;
       node.totalItemCount = count;
-      return { size: totalSize, totalCount: count };
-    };
+    }
 
-    computeStats(root);
     return root;
   }, [archiveInfo.filename, localEntries, mode]);
 
@@ -927,7 +928,11 @@ export const ArchiveTreeInspector: React.FC<ArchiveTreeInspectorProps> = ({
             <span className="text-[#F4F4F6]">
               {isLoading
                 ? "Indexing tree..."
-                : `Uncompressed: ${formatBytes(archiveInfo.total_uncompressed_size || treeRoot.size || 0)}`}
+                : `Uncompressed: ${formatBytes(
+                    mode === "compress"
+                      ? (archiveInfo.total_uncompressed_size ?? 0)
+                      : (archiveInfo.total_uncompressed_size || treeRoot.size || 0)
+                  )}`}
             </span>
           </div>
         </div>

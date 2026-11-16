@@ -2,6 +2,21 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.10] - 2026-11-17
+### Performance & Security — Instant `O(depth)` Exclusions & Staging Hardening
+- **Prefix-Minimal Folder Exclusions & Cached Tree Index (`src/utils/archive.ts`)**:
+  - Updated `togglePathExclusion` so excluding a directory stores only the collapsed directory path and prunes subsumed descendants, rather than expanding thousands of descendant file paths into `excludedPaths`.
+  - Re-including a nested child inside an excluded ancestor walks only the affected ancestor chain via `getEntryExclusionIndex` (`WeakMap`-cached `directChildren`, `dirSizeMap`, `fileSizeMap`, `knownDirs`) and adds only direct siblings along that path (`O(depth + direct siblings)`).
+  - Added `cleanArchiveDisplayPath`, `normalizeExclusionKey`, `WeakMap`-cached `normalizeExcludedSet`, `isNormalizedPathExcluded`, `isPathExcluded`, and `computeExcludedBytes` to collapse `/./` and `//` path segments cleanly while computing `O(depth)` lookups and `O(|excluded| × depth)` skipped byte totals.
+- **UI Main-Thread Unblocking, Iterative Tree Builder & Preview Guard (`ArchiveTreeInspector.tsx`, `App.tsx`)**:
+  - Replaced quadratic `O(N × |excludedPaths|)` loops in `ArchiveTreeInspector.tsx` (`isFileExcluded`, `isDirExcluded`, `excludedBytes`) and `App.tsx` (`effectiveTotalSize`, `baseStagedSize`) with cached `computeExcludedBytes` and `O(depth)` lookups, eliminating 2–3s freezes when rapidly toggling files or large directories.
+  - Replaced recursive `ensureFolder` and `computeStats` in `ArchiveTreeInspector.tsx` with iterative linear builders (`ensureFolderChain` + reverse bottom-up pass), preventing stack overflow on deeply nested archives, and guarded Compress footer totals (`??`).
+  - Restricted `handlePreviewEntry` disk-path routing in `App.tsx` strictly to `!selectedArchive`.
+- **Unified Backend `O(depth)` Exclusions & Staged `tar.exe` Isolation (`inspector/mod.rs`, `compressor/`, `extractor.rs`)**:
+  - Consolidated `normalize_excluded_path` (collapsing empty/`.` segments while preserving `..` rejection boundaries), `build_excluded_set`, and `is_path_excluded` into `inspector/mod.rs` (re-exported by `compressor/utils.rs` and `extractor.rs`).
+  - Hardened `extract_with_system_tar` in `extractor.rs` with fail-closed `-tvf` link inspection and `StagingDirGuard` + `finalize_staged_extraction` isolation whenever exclusions are active, preventing `bsdtar` case/glob/unanchored bypasses and preexisting destination overwrites.
+  - Verified **57/57 unit tests passing** (`cargo test`), adding `test_build_excluded_set_and_prefix_matching` and `test_finalize_staged_extraction_preserves_preexisting_and_filters_case_glob_segments`, alongside `npx tsc --noEmit` (`0` errors), `npm run build`, `cargo clippy --all-targets -- -D warnings` (`0` code warnings), and a 300-step oracle + 15k-depth + 50k-entry frontend verification (`486.85 ms`).
+
 ## [v2.4.9] - 2026-11-15
 ### Windows Shell Integration & Startup Caching (`HIGH-06`, `HIGH-08`, `MED-03`)
 - **Multi-Location Companion Shell DLL Discovery (`build.rs`, `registry.rs`)**:

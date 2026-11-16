@@ -158,29 +158,7 @@ pub fn resolve_unique_folder_name(target_dir: &Path) -> PathBuf {
     }
 }
 
-pub fn is_path_excluded(raw_path: &str, excluded: Option<&std::collections::HashSet<String>>) -> bool {
-    if let Some(set) = excluded {
-        let clean = raw_path.replace('\\', "/");
-        let trimmed = clean
-            .trim_start_matches('/')
-            .trim_start_matches("./")
-            .trim_start_matches('/');
-        let lower = trimmed.to_lowercase();
-        if set.contains(trimmed) || set.contains(&lower) {
-            return true;
-        }
-        for exc in set.iter() {
-            let exc_clean = exc.trim_end_matches('/');
-            let exc_lower = exc_clean.to_lowercase();
-            if lower.starts_with(&format!("{}/", exc_lower)) || lower == exc_lower {
-                return true;
-            }
-        }
-        false
-    } else {
-        false
-    }
-}
+pub use crate::inspector::is_path_excluded;
 
 /// Strictly drains exactly `bytes_to_drain` uncompressed bytes from the archive decompressor.
 /// If EOF or an I/O error occurs before all bytes are drained, returns an explicit error
@@ -1384,6 +1362,121 @@ pub fn extract_7z_archive(
     }
 }
 
+struct StagingDirGuard(Option<PathBuf>);
+
+impl Drop for StagingDirGuard {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+fn normalize_fs_key(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn create_dir_all_tracked(
+    target_dir: &Path,
+    stop_at: &Path,
+    newly_created: &mut Vec<String>,
+) -> Result<(), String> {
+    if target_dir.exists() {
+        return Ok(());
+    }
+    let mut missing = Vec::new();
+    let mut cur = target_dir;
+    while cur != stop_at && !cur.exists() {
+        missing.push(cur.to_path_buf());
+        match cur.parent() {
+            Some(p) => cur = p,
+            None => break,
+        }
+    }
+    std::fs::create_dir_all(target_dir)
+        .map_err(|e| format!("Failed to create destination directory '{}': {}", target_dir.display(), e))?;
+    for dir in missing.into_iter().rev() {
+        newly_created.push(dir.to_string_lossy().to_string());
+    }
+    Ok(())
+}
+
+fn finalize_staged_extraction(
+    stage_root: &Path,
+    dest_dir: &Path,
+    excluded: Option<&std::collections::HashSet<String>>,
+    preexisting_paths: &std::collections::HashSet<String>,
+    newly_created: &mut Vec<String>,
+    extracted_files: &mut Vec<String>,
+) -> Result<(), String> {
+    let mut dir_stack = vec![PathBuf::new()];
+    while let Some(rel_dir) = dir_stack.pop() {
+        if is_extraction_cancelled() {
+            return Err("Extraction cancelled by user".into());
+        }
+        let current_stage = stage_root.join(&rel_dir);
+        let entries = std::fs::read_dir(&current_stage)
+            .map_err(|e| format!("Failed to inspect staged extraction directory: {}", e))?;
+
+        for entry_res in entries {
+            let entry = entry_res.map_err(|e| format!("Failed reading staged entry: {}", e))?;
+            let rel_path = rel_dir.join(entry.file_name());
+            let clean_rel = rel_path.to_string_lossy().replace('\\', "/");
+
+            if is_path_excluded(&clean_rel, excluded) {
+                continue;
+            }
+            let Some(safe_rel) = sanitize_archive_path(&clean_rel) else {
+                continue;
+            };
+            let ft = entry
+                .file_type()
+                .map_err(|e| format!("Failed inspecting staged file type: {}", e))?;
+            if ft.is_symlink() {
+                return Err(format!(
+                    "Security violation: staged extraction produced symlink '{}'. Extraction aborted.",
+                    clean_rel
+                ));
+            }
+
+            let target_path = dest_dir.join(&safe_rel);
+            let target_key = normalize_fs_key(&target_path);
+
+            if ft.is_dir() {
+                if !preexisting_paths.contains(&target_key) {
+                    create_dir_all_tracked(&target_path, dest_dir, newly_created)?;
+                } else {
+                    std::fs::create_dir_all(&target_path)
+                        .map_err(|e| format!("Failed preparing directory '{}': {}", target_path.display(), e))?;
+                }
+                dir_stack.push(rel_path);
+            } else if ft.is_file() {
+                if let Some(parent) = target_path.parent() {
+                    create_dir_all_tracked(parent, dest_dir, newly_created)?;
+                }
+                let was_preexisting =
+                    preexisting_paths.contains(&target_key) || std::fs::symlink_metadata(&target_path).is_ok();
+                let src_path = entry.path();
+                if std::fs::rename(&src_path, &target_path).is_err() {
+                    std::fs::copy(&src_path, &target_path).map_err(|e| {
+                        format!("Failed moving extracted file '{}': {}", target_path.display(), e)
+                    })?;
+                    let _ = std::fs::remove_file(&src_path);
+                }
+                let target_str = target_path.to_string_lossy().to_string();
+                if !was_preexisting {
+                    newly_created.push(target_str.clone());
+                }
+                extracted_files.push(target_str);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn extract_with_system_tar(
     archive_path: &Path,
     dest_dir: &Path,
@@ -1413,6 +1506,8 @@ pub fn extract_with_system_tar(
     }
 
     let mut preexisting_paths = std::collections::HashSet::new();
+    let mut total_entries: usize = 0;
+    let mut included_entries: usize = 0;
     let stdout_str = String::from_utf8_lossy(&output.stdout);
     for raw_line in stdout_str.lines() {
         let trimmed = raw_line.trim_end_matches(['\r', '\n']);
@@ -1429,18 +1524,17 @@ pub fn extract_with_system_tar(
                 trimmed
             ));
         };
+        total_entries += 1;
+        if !is_path_excluded(&clean, excluded) {
+            included_entries += 1;
+        }
         let candidate = dest_dir.join(&safe_path);
         if std::fs::symlink_metadata(&candidate).is_ok() {
-            let norm = candidate
-                .to_string_lossy()
-                .replace('\\', "/")
-                .trim_end_matches('/')
-                .to_ascii_lowercase();
-            preexisting_paths.insert(norm);
+            preexisting_paths.insert(normalize_fs_key(&candidate));
         }
     }
 
-    // Secondary inspection with -tvf to block symlinks and hardlinks before extraction
+    // Secondary fail-closed inspection with -tvf to block symlinks and hardlinks before extraction
     let mut tvf_cmd = Command::new(crate::inspector::get_system32_exe("tar.exe"));
     tvf_cmd.args(["-tvf", &archive_path.to_string_lossy()]);
     #[cfg(target_os = "windows")]
@@ -1448,26 +1542,34 @@ pub fn extract_with_system_tar(
     tvf_cmd.stdout(Stdio::piped());
     tvf_cmd.stderr(Stdio::piped());
 
-    if let Ok(tvf_output) = tvf_cmd.output() {
-        if tvf_output.status.success() {
-            let tvf_str = String::from_utf8_lossy(&tvf_output.stdout);
-            for line in tvf_str.lines() {
-                let l = line.trim_start();
-                if l.is_empty() {
-                    continue;
-                }
-                if l.starts_with('l') || l.starts_with('h') || l.contains(" -> ") || l.contains(" link to ") {
-                    return Err(format!(
-                        "Security violation: archive contains symlink or hardlink entry '{}'. Extraction aborted.",
-                        l.trim()
-                    ));
-                }
-            }
+    let tvf_output = tvf_cmd
+        .output()
+        .map_err(|e| format!("Failed to verify archive entry links with system tar: {}", e))?;
+    if !tvf_output.status.success() {
+        let err_text = String::from_utf8_lossy(&tvf_output.stderr);
+        return Err(format!("System tar link inspection failed: {}", err_text.trim()));
+    }
+    let tvf_str = String::from_utf8_lossy(&tvf_output.stdout);
+    for line in tvf_str.lines() {
+        let l = line.trim_start();
+        if l.is_empty() {
+            continue;
+        }
+        if l.starts_with('l') || l.starts_with('h') || l.contains(" -> ") || l.contains(" link to ") {
+            return Err(format!(
+                "Security violation: archive contains symlink or hardlink entry '{}'. Extraction aborted.",
+                l.trim()
+            ));
         }
     }
 
+    let has_exclusions = excluded.is_some_and(|set| !set.is_empty());
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("Failed to create destination directory: {}", e))?;
+
+    if has_exclusions && total_entries > 0 && included_entries == 0 {
+        return Ok(Vec::new());
+    }
 
     // Determine estimated uncompressed size or archive file size on disk
     let archive_size = std::fs::metadata(archive_path).map(|m| m.len()).unwrap_or(0);
@@ -1479,20 +1581,39 @@ pub fn extract_with_system_tar(
         total_expected_bytes = uncompressed_size;
     }
 
+    // Isolate excluded extractions in a same-volume staging folder so bsdtar case/glob
+    // differences can never overwrite preexisting destination files or leak excluded paths.
+    let mut staging_guard = StagingDirGuard(None);
+    let extract_target: PathBuf = if has_exclusions {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut idx = 0u32;
+        let stage_path = loop {
+            let candidate = dest_dir.join(format!(".bayzip_tar_stage_{}_{}_{}", std::process::id(), stamp, idx));
+            if !candidate.exists() {
+                break candidate;
+            }
+            idx = idx.saturating_add(1);
+        };
+        std::fs::create_dir_all(&stage_path)
+            .map_err(|e| format!("Failed to create staging directory: {}", e))?;
+        staging_guard = StagingDirGuard(Some(stage_path.clone()));
+        stage_path
+    } else {
+        dest_dir.to_path_buf()
+    };
+
     let mut cmd = Command::new(crate::inspector::get_system32_exe("tar.exe"));
-    let mut args: Vec<String> = vec![
+    let args: Vec<String> = vec![
         "-xvf".into(),
         archive_path.to_string_lossy().to_string(),
         "-C".into(),
-        dest_dir.to_string_lossy().to_string(),
+        extract_target.to_string_lossy().to_string(),
         "--no-same-permissions".into(),
         "--no-same-owner".into(),
     ];
-    if let Some(set) = excluded {
-        for exc in set.iter() {
-            args.push(format!("--exclude={}", exc));
-        }
-    }
     cmd.args(&args);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(crate::priority::get_child_process_creation_flags());
@@ -1520,6 +1641,37 @@ pub fn extract_with_system_tar(
     let mut last_emit = Instant::now();
     let mut error_lines = Vec::new();
 
+    let record_direct_entry = |rel_path: &str,
+                               current_path_slot: &mut Option<PathBuf>,
+                               current_name_slot: &mut String,
+                               completed_total: &mut u64,
+                               newly: &mut Vec<String>,
+                               extracted: &mut Vec<String>| {
+        let clean_rel = rel_path.replace('\\', "/");
+        if let Some(prev_path) = current_path_slot.take() {
+            if let Ok(m) = std::fs::metadata(&prev_path) {
+                *completed_total += m.len();
+            }
+        }
+        let Some(safe_path) = sanitize_archive_path(&clean_rel) else {
+            *current_name_slot = clean_rel;
+            return;
+        };
+        let out_path = extract_target.join(&safe_path);
+        *current_name_slot = safe_path.to_string_lossy().to_string();
+        *current_path_slot = Some(out_path.clone());
+
+        if !has_exclusions {
+            let norm_key = normalize_fs_key(&out_path);
+            let was_preexisting = preexisting_paths.contains(&norm_key);
+            let out_str = out_path.to_string_lossy().to_string();
+            if !was_preexisting {
+                newly.push(out_str.clone());
+            }
+            extracted.push(out_str);
+        }
+    };
+
     loop {
         if is_extraction_cancelled() {
             let _ = child.kill();
@@ -1536,43 +1688,14 @@ pub fn extract_with_system_tar(
             }
 
             if let Some(rel_path) = trimmed.trim_start().strip_prefix("x ") {
-                let clean_rel = rel_path.replace('\\', "/");
-                let safe = sanitize_archive_path(&clean_rel);
-
-                if let Some(prev_path) = current_file_path.take() {
-                    if let Ok(m) = std::fs::metadata(&prev_path) {
-                        completed_bytes += m.len();
-                    }
-                }
-
-                if let Some(safe_path) = safe {
-                    let out_path = dest_dir.join(&safe_path);
-                    let norm_key = out_path
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                        .trim_end_matches('/')
-                        .to_ascii_lowercase();
-                    let was_preexisting = preexisting_paths.contains(&norm_key);
-                    if is_path_excluded(&clean_rel, excluded) {
-                        if !was_preexisting {
-                            if out_path.is_file() {
-                                let _ = std::fs::remove_file(&out_path);
-                            } else if out_path.is_dir() {
-                                let _ = std::fs::remove_dir(&out_path);
-                            }
-                        }
-                    } else {
-                        current_file_name = safe_path.to_string_lossy().to_string();
-                        current_file_path = Some(out_path.clone());
-                        let out_str = out_path.to_string_lossy().to_string();
-                        if !was_preexisting {
-                            newly_created.push(out_str.clone());
-                        }
-                        extracted_files.push(out_str);
-                    }
-                } else {
-                    current_file_name = clean_rel;
-                }
+                record_direct_entry(
+                    rel_path,
+                    &mut current_file_path,
+                    &mut current_file_name,
+                    &mut completed_bytes,
+                    &mut newly_created,
+                    &mut extracted_files,
+                );
             } else if trimmed.to_lowercase().contains("error") || trimmed.to_lowercase().contains("fatal") {
                 error_lines.push(trimmed.trim().to_string());
             }
@@ -1585,31 +1708,14 @@ pub fn extract_with_system_tar(
                 while let Ok(line) = rx.try_recv() {
                     let trimmed = line.trim_end_matches(['\r', '\n']);
                     if let Some(rel_path) = trimmed.trim_start().strip_prefix("x ") {
-                        let clean_rel = rel_path.replace('\\', "/");
-                        if let Some(safe_path) = sanitize_archive_path(&clean_rel) {
-                            let out_path = dest_dir.join(&safe_path);
-                            let norm_key = out_path
-                                .to_string_lossy()
-                                .replace('\\', "/")
-                                .trim_end_matches('/')
-                                .to_ascii_lowercase();
-                            let was_preexisting = preexisting_paths.contains(&norm_key);
-                            if is_path_excluded(&clean_rel, excluded) {
-                                if !was_preexisting {
-                                    if out_path.is_file() {
-                                        let _ = std::fs::remove_file(&out_path);
-                                    } else if out_path.is_dir() {
-                                        let _ = std::fs::remove_dir(&out_path);
-                                    }
-                                }
-                            } else {
-                                let out_str = out_path.to_string_lossy().to_string();
-                                if !was_preexisting {
-                                    newly_created.push(out_str.clone());
-                                }
-                                extracted_files.push(out_str);
-                            }
-                        }
+                        record_direct_entry(
+                            rel_path,
+                            &mut current_file_path,
+                            &mut current_file_name,
+                            &mut completed_bytes,
+                            &mut newly_created,
+                            &mut extracted_files,
+                        );
                     } else if trimmed.to_lowercase().contains("error") || trimmed.to_lowercase().contains("fatal") {
                         error_lines.push(trimmed.trim().to_string());
                     }
@@ -1663,15 +1769,30 @@ pub fn extract_with_system_tar(
         }
     }
 
-    if extracted_files.is_empty() {
-        if let Ok(entries) = std::fs::read_dir(dest_dir) {
-            for entry in entries.flatten() {
-                extracted_files.push(entry.path().to_string_lossy().to_string());
+    if has_exclusions {
+        if let Err(err) = finalize_staged_extraction(
+            &extract_target,
+            dest_dir,
+            excluded,
+            &preexisting_paths,
+            &mut newly_created,
+            &mut extracted_files,
+        ) {
+            cleanup_extracted_files(&newly_created);
+            return Err(err);
+        }
+        drop(staging_guard);
+    } else {
+        if extracted_files.is_empty() {
+            if let Ok(entries) = std::fs::read_dir(dest_dir) {
+                for entry in entries.flatten() {
+                    extracted_files.push(entry.path().to_string_lossy().to_string());
+                }
             }
         }
-    }
-    if extracted_files.is_empty() {
-        extracted_files.push(dest_dir.to_string_lossy().to_string());
+        if extracted_files.is_empty() {
+            extracted_files.push(dest_dir.to_string_lossy().to_string());
+        }
     }
 
     Ok(extracted_files)
@@ -1848,15 +1969,8 @@ pub fn extract_archive_sync(
     let target_folder_existed_before = target_folder.exists();
     let pwd_ref = password.as_deref();
 
-    let excluded_set: Option<std::collections::HashSet<String>> = excluded_paths.filter(|p| !p.is_empty()).map(|paths| {
-        paths.into_iter()
-            .flat_map(|p| {
-                let clean = p.replace('\\', "/").trim_start_matches('/').to_string();
-                let lower = clean.to_lowercase();
-                vec![clean, lower]
-            })
-            .collect()
-    });
+    let excluded_set: Option<std::collections::HashSet<String>> =
+        excluded_paths.and_then(crate::inspector::build_excluded_set);
 
     let res = universal_extract(path, &dest_dir, pwd_ref, expected_size, Some(&app), excluded_set.as_ref());
 
@@ -2145,5 +2259,63 @@ mod tests {
         assert!(!test_dir.join("ok.txt").exists());
 
         let _ = std::fs::remove_dir_all(&test_dir);
+    }
+
+    #[test]
+    fn test_finalize_staged_extraction_preserves_preexisting_and_filters_case_glob_segments() {
+        let base_dir = std::env::current_dir().unwrap().join("target").join("test_staged_tar_filter");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        let stage_dir = base_dir.join("stage");
+        let dest_dir = base_dir.join("dest");
+        std::fs::create_dir_all(stage_dir.join("Assets/Audio")).unwrap();
+        std::fs::create_dir_all(stage_dir.join("dir[1]")).unwrap();
+        std::fs::create_dir_all(stage_dir.join("other/sub")).unwrap();
+        std::fs::create_dir_all(dest_dir.join("Assets")).unwrap();
+
+        // Preexisting file that must NOT be clobbered by excluded entry even on case mismatch
+        std::fs::write(dest_dir.join("Assets/Secret.txt"), b"preexisting-user-data").unwrap();
+        std::fs::write(stage_dir.join("Assets/Secret.txt"), b"excluded-archive-data").unwrap();
+        std::fs::write(stage_dir.join("Assets/Audio/theme.ogg"), b"excluded-audio").unwrap();
+        std::fs::write(stage_dir.join("dir[1]/blocked.bin"), b"excluded-glob").unwrap();
+        std::fs::write(stage_dir.join("other/sub/keep.txt"), b"kept-sub-component").unwrap();
+
+        let excluded = crate::inspector::build_excluded_set([
+            "assets/secret.txt",
+            "assets/audio",
+            "dir[1]",
+            "sub",
+        ]);
+        let mut preexisting = std::collections::HashSet::new();
+        preexisting.insert(normalize_fs_key(&dest_dir.join("Assets")));
+        preexisting.insert(normalize_fs_key(&dest_dir.join("Assets/Secret.txt")));
+
+        let mut newly_created = Vec::new();
+        let mut extracted_files = Vec::new();
+        let _guard = StagingDirGuard(Some(stage_dir.clone()));
+
+        finalize_staged_extraction(
+            &stage_dir,
+            &dest_dir,
+            excluded.as_ref(),
+            &preexisting,
+            &mut newly_created,
+            &mut extracted_files,
+        )
+        .unwrap();
+        drop(_guard);
+
+        assert_eq!(
+            std::fs::read_to_string(dest_dir.join("Assets/Secret.txt")).unwrap(),
+            "preexisting-user-data"
+        );
+        assert!(!dest_dir.join("Assets/Audio").exists());
+        assert!(!dest_dir.join("dir[1]").exists());
+        assert_eq!(
+            std::fs::read_to_string(dest_dir.join("other/sub/keep.txt")).unwrap(),
+            "kept-sub-component"
+        );
+        assert!(!stage_dir.exists());
+
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }
