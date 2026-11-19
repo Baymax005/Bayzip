@@ -97,7 +97,8 @@ impl PipedAesBufReader {
 
                 if filled > 0 {
                     buf.truncate(filled);
-                    if data_tx.send(Ok(buf)).is_err() {
+                    if let Err(mpsc::SendError(Ok(mut b))) = data_tx.send(Ok(buf)) {
+                        b.zeroize();
                         break;
                     }
                 } else {
@@ -201,8 +202,10 @@ impl Drop for PipedAesBufReader {
         self.current_buf.zeroize();
         self.current_buf.clear();
         if let Some(rx) = self.data_rx.take() {
-            while let Ok(Ok(mut b)) = rx.try_recv() {
-                b.zeroize();
+            while let Ok(item) = rx.try_recv() {
+                if let Ok(mut b) = item {
+                    b.zeroize();
+                }
             }
             drop(rx);
         }
@@ -464,7 +467,7 @@ pub fn extract_bay_stream<R: Read>(
 
                 let out_file = match create_output_file_fast(&target_write_path, file_size) {
                     Ok(f) => f,
-                    Err(e) if !effective_existed && e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                         clear_readonly(&target_write_path);
                         create_output_file_fast(&target_write_path, file_size).map_err(|e2| {
                             format!("Failed to create output file {:?}: {}", target_write_path, e2)
@@ -719,7 +722,8 @@ pub fn extract_bay_archive(
         file.seek(std::io::SeekFrom::Start(offset))
             .map_err(|e| e.to_string())?;
         let decoder = zstd::stream::Decoder::with_buffer(file)
-            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
+            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?
+            .single_frame();
         extract_bay_stream(
             decoder,
             dest_dir,
@@ -746,7 +750,8 @@ pub fn extract_bay_archive(
         file.seek(std::io::SeekFrom::Start(0))
             .map_err(|e| e.to_string())?;
         let decoder = zstd::stream::Decoder::with_buffer(file)
-            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
+            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?
+            .single_frame();
         extract_bay_stream(
             decoder,
             dest_dir,
@@ -1035,6 +1040,127 @@ mod tests {
             large_incompressible
         );
         assert!(guard.bytes_extracted() > large_incompressible.len() as u64);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_extract_bay_roundtrip_with_real_baytoc_and_bayetoc_trailers() {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test_bay_trailers");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // A. Real Zstd (.bay) created by headless_quick_compress_bay_items (includes BAYTOC\x02\x00)
+        let src_dir = base.join("src_proj");
+        std::fs::create_dir_all(src_dir.join("nested")).unwrap();
+        std::fs::write(src_dir.join("nested/info.txt"), b"real-baytoc-zstd").unwrap();
+        std::fs::write(src_dir.join("empty.txt"), b"").unwrap();
+        let blob: Vec<u8> = (0..(300 * 1024)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(src_dir.join("blob.bin"), &blob).unwrap();
+
+        let zstd_bay = base.join("real_zstd.bay");
+        crate::compressor::bay::headless_quick_compress_bay_items(
+            &[src_dir.as_path()],
+            &zstd_bay,
+            false,
+        )
+        .unwrap();
+        assert!(crate::inspector::has_instant_bay_toc(&zstd_bay));
+
+        let out_zstd = base.join("out_zstd");
+        let files_zstd = extract_bay_archive(&zstd_bay, &out_zstd, None, None, None, None).unwrap();
+        assert_eq!(files_zstd.len(), 5); // 2 dirs + 3 files
+        assert_eq!(
+            std::fs::read_to_string(out_zstd.join("src_proj/nested/info.txt")).unwrap(),
+            "real-baytoc-zstd"
+        );
+        assert_eq!(std::fs::read(out_zstd.join("src_proj/empty.txt")).unwrap(), b"");
+        assert_eq!(std::fs::read(out_zstd.join("src_proj/blob.bin")).unwrap(), blob);
+
+        let (tested_count, tested_bytes, test_errors) =
+            crate::tester::test_bay_archive(&zstd_bay, None, None).unwrap();
+        assert!(test_errors.is_empty(), "Unexpected test errors: {:?}", test_errors);
+        assert_eq!(tested_count, 5); // 2 dirs + 3 files
+        assert!(tested_bytes >= blob.len() as u64);
+
+        // B. LZ4 + BAYTOC\x02\x00 trailer
+        let lz4_bay = base.join("lz4_toc.bay");
+        {
+            let mut raw = File::create(&lz4_bay).unwrap();
+            raw.write_all(b"BAYLZ4\x02\x00").unwrap();
+            let mut enc = lz4_flex::frame::FrameEncoder::new(raw);
+            write_bay_file_entry(&mut enc, "a.txt", b"lz4-baytoc-ok");
+            enc.write_all(&[0u8]).unwrap();
+            let mut raw = enc.finish().unwrap();
+            let toc = vec![crate::types::ArchiveEntryItem {
+                name: "a.txt".to_string(),
+                size: 13,
+                is_dir: false,
+            }];
+            crate::compressor::bay::write_bay_toc_trailer(&mut raw, &toc, None).unwrap();
+        }
+        assert!(crate::inspector::has_instant_bay_toc(&lz4_bay));
+        let out_lz4 = base.join("out_lz4");
+        let files_lz4 = extract_bay_archive(&lz4_bay, &out_lz4, None, None, None, None).unwrap();
+        assert_eq!(files_lz4.len(), 1);
+        assert_eq!(std::fs::read_to_string(out_lz4.join("a.txt")).unwrap(), "lz4-baytoc-ok");
+
+        // C. Brotli + BAYTOC\x02\x00 trailer
+        let bro_bay = base.join("bro_toc.bay");
+        {
+            let mut raw = File::create(&bro_bay).unwrap();
+            raw.write_all(b"BAYBRO\x02\x00").unwrap();
+            let mut enc = brotli::CompressorWriter::new(raw, 4096, 1, 20);
+            write_bay_file_entry(&mut enc, "b.txt", b"brotli-baytoc-ok");
+            enc.write_all(&[0u8]).unwrap();
+            let mut raw = enc.into_inner();
+            let toc = vec![crate::types::ArchiveEntryItem {
+                name: "b.txt".to_string(),
+                size: 16,
+                is_dir: false,
+            }];
+            crate::compressor::bay::write_bay_toc_trailer(&mut raw, &toc, None).unwrap();
+        }
+        assert!(crate::inspector::has_instant_bay_toc(&bro_bay));
+        let out_bro = base.join("out_bro");
+        let files_bro = extract_bay_archive(&bro_bay, &out_bro, None, None, None, None).unwrap();
+        assert_eq!(files_bro.len(), 1);
+        assert_eq!(std::fs::read_to_string(out_bro.join("b.txt")).unwrap(), "brotli-baytoc-ok");
+
+        // D. Encrypted BAYENC\x03 + BAYZIP\x02\x00 + BAYETOC\x03 trailer
+        let enc_bay = base.join("enc_etoc.bay");
+        let pwd = "trailer_enc_password";
+        {
+            let raw = File::create(&enc_bay).unwrap();
+            let mut enc_writer = crate::crypto::ChunkedAesWriter::new(raw, pwd).unwrap();
+            enc_writer.write_all(b"BAYZIP\x02\x00").unwrap();
+            let mut zstd_enc = zstd::stream::Encoder::new(enc_writer, 1).unwrap();
+            write_bay_file_entry(&mut zstd_enc, "sec/key.txt", b"encrypted-bayetoc-ok");
+            zstd_enc.write_all(&[0u8]).unwrap();
+            let enc_writer = zstd_enc.finish().unwrap();
+            let mut raw = enc_writer.finish().unwrap();
+            let toc = vec![crate::types::ArchiveEntryItem {
+                name: "sec/key.txt".to_string(),
+                size: 20,
+                is_dir: false,
+            }];
+            crate::compressor::bay::write_bay_toc_trailer(&mut raw, &toc, Some(pwd)).unwrap();
+        }
+        assert!(crate::inspector::has_instant_bay_toc(&enc_bay));
+        let out_enc = base.join("out_enc");
+        let files_enc =
+            extract_bay_archive(&enc_bay, &out_enc, Some(pwd), None, None, None).unwrap();
+        assert_eq!(files_enc.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(out_enc.join("sec/key.txt")).unwrap(),
+            "encrypted-bayetoc-ok"
+        );
+        let (_, _, enc_test_errors) =
+            crate::tester::test_bay_archive(&enc_bay, Some(pwd), None).unwrap();
+        assert!(enc_test_errors.is_empty(), "Unexpected enc test errors: {:?}", enc_test_errors);
 
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -344,8 +344,9 @@ pub fn test_bay_archive(
     } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
         file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
-        let decoder = zstd::stream::Decoder::new(file)
-            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
+        let decoder = zstd::stream::Decoder::with_buffer(file)
+            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?
+            .single_frame();
         test_bay_stream(decoder, total_expected_bytes, app)
     } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
         file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
@@ -353,8 +354,9 @@ pub fn test_bay_archive(
         test_bay_stream(decoder, total_expected_bytes, app)
     } else {
         file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-        let decoder = zstd::stream::Decoder::new(file)
-            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
+        let decoder = zstd::stream::Decoder::with_buffer(file)
+            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?
+            .single_frame();
         test_bay_stream(decoder, total_expected_bytes, app)
     }
 }
