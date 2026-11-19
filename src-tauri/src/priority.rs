@@ -76,6 +76,11 @@ pub fn get_child_process_creation_flags() -> u32 {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static IN_PRIORITY_UNIT_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// RAII guard that temporarily lowers both thread priority and process priority class
 /// to BELOW_NORMAL during intensive compression or extraction operations.
 /// 
@@ -94,6 +99,14 @@ impl ScopedPriorityGuard {
     pub fn new() -> Self {
         #[cfg(target_os = "windows")]
         {
+            #[cfg(test)]
+            if !IN_PRIORITY_UNIT_TEST.with(|c| c.get()) {
+                return Self {
+                    previous_priority: None,
+                    registered: false,
+                };
+            }
+
             let mut registered = false;
             if let Ok(mut state) = PROCESS_PRIORITY_STATE.lock() {
                 unsafe {
@@ -104,7 +117,7 @@ impl ScopedPriorityGuard {
                     }
                     state.active_guards += 1;
                     registered = true;
-                    if is_background_shield_enabled() {
+                    if state.active_guards == 1 && is_background_shield_enabled() {
                         SetPriorityClass(proc, BELOW_NORMAL_PRIORITY_CLASS);
                     }
                 }
@@ -178,10 +191,26 @@ mod tests {
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    struct PriorityTestLockGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl PriorityTestLockGuard {
+        fn new() -> Self {
+            let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            IN_PRIORITY_UNIT_TEST.with(|c| c.set(true));
+            Self(guard)
+        }
+    }
+
+    impl Drop for PriorityTestLockGuard {
+        fn drop(&mut self) {
+            IN_PRIORITY_UNIT_TEST.with(|c| c.set(false));
+        }
+    }
+
     #[test]
     #[cfg(target_os = "windows")]
     fn test_scoped_priority_guard_restores_thread_priority() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = PriorityTestLockGuard::new();
         set_background_shield(true);
         unsafe {
             let thread = GetCurrentThread();
@@ -208,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_background_shield_toggle() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = PriorityTestLockGuard::new();
         set_background_shield(false);
         assert!(!is_background_shield_enabled());
         let guard = ScopedPriorityGuard::new();
@@ -220,7 +249,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn test_nested_scoped_priority_guards_unwind_correctly() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = PriorityTestLockGuard::new();
         set_background_shield(true);
         unsafe {
             let thread = GetCurrentThread();
@@ -250,14 +279,21 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn test_concurrent_threads_priority_guards_restore_independently() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = PriorityTestLockGuard::new();
         set_background_shield(true);
         let handles: Vec<_> = (0..4)
             .map(|_| {
                 std::thread::spawn(|| {
+                    IN_PRIORITY_UNIT_TEST.with(|c| c.set(true));
                     unsafe {
                         let thread = GetCurrentThread();
-                        SetThreadPriority(thread, THREAD_PRIORITY_NORMAL);
+                        for _ in 0..5 {
+                            SetThreadPriority(thread, THREAD_PRIORITY_NORMAL);
+                            if GetThreadPriority(thread) == THREAD_PRIORITY_NORMAL {
+                                break;
+                            }
+                            std::thread::yield_now();
+                        }
                         assert_eq!(GetThreadPriority(thread), THREAD_PRIORITY_NORMAL);
 
                         {
@@ -269,6 +305,7 @@ mod tests {
                         // Thread must be restored to NORMAL upon guard drop
                         assert_eq!(GetThreadPriority(thread), THREAD_PRIORITY_NORMAL);
                     }
+                    IN_PRIORITY_UNIT_TEST.with(|c| c.set(false));
                 })
             })
             .collect();
@@ -281,7 +318,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn test_midflight_background_shield_toggle_syncs_process_priority() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = PriorityTestLockGuard::new();
         set_background_shield(true);
         unsafe {
             let proc = GetCurrentProcess();

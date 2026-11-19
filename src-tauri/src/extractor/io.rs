@@ -199,6 +199,60 @@ impl DirectoryCache {
     pub fn contains(&self, dir: &Path) -> bool {
         self.created.contains(dir)
     }
+
+    pub fn ensure_dir_tracked(
+        &mut self,
+        dir: &Path,
+        dest_dir: &Path,
+        dest_was_empty: bool,
+        newly_created: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if dir == dest_dir || dir.as_os_str().is_empty() || self.created.contains(dir) {
+            return Ok(());
+        }
+
+        let mut missing = Vec::new();
+        let mut cur = dir;
+        while cur != dest_dir && cur.starts_with(dest_dir) {
+            if self.created.contains(cur) {
+                break;
+            }
+            let already_exists = if dest_was_empty {
+                false
+            } else {
+                std::fs::symlink_metadata(cur).is_ok()
+            };
+            if already_exists {
+                break;
+            }
+            missing.push(cur.to_path_buf());
+            match cur.parent() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+
+        self.ensure_dir(dir)
+            .map_err(|e| format!("Failed to create directory {:?}: {}", dir, e))?;
+
+        for created_dir in missing.into_iter().rev() {
+            newly_created.push(created_dir.to_string_lossy().to_string());
+        }
+        Ok(())
+    }
+
+    pub fn ensure_parent_tracked(
+        &mut self,
+        file_path: &Path,
+        dest_dir: &Path,
+        dest_was_empty: bool,
+        newly_created: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if let Some(parent) = file_path.parent() {
+            self.ensure_dir_tracked(parent, dest_dir, dest_was_empty, newly_created)?;
+        }
+        Ok(())
+    }
 }
 
 struct PendingFileWrite {

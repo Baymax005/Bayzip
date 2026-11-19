@@ -80,48 +80,6 @@ fn is_zip_aborted(aborted: &AtomicBool, cancel_token: Option<&TaskCancelToken>) 
     aborted.load(Ordering::Acquire) || is_external_cancel(cancel_token)
 }
 
-fn ensure_dir_tracked(
-    dir: &Path,
-    dest_dir: &Path,
-    dir_cache: &mut DirectoryCache,
-    dest_was_empty: bool,
-    newly_created: &mut Vec<String>,
-) -> Result<(), String> {
-    if dir == dest_dir || dir.as_os_str().is_empty() || dir_cache.contains(dir) {
-        return Ok(());
-    }
-
-    let mut missing = Vec::new();
-    let mut cur = dir;
-    while cur != dest_dir && cur.starts_with(dest_dir) {
-        if dir_cache.contains(cur) {
-            break;
-        }
-        let already_exists = if dest_was_empty {
-            false
-        } else {
-            std::fs::symlink_metadata(cur).is_ok()
-        };
-        if already_exists {
-            break;
-        }
-        missing.push(cur.to_path_buf());
-        match cur.parent() {
-            Some(p) => cur = p,
-            None => break,
-        }
-    }
-
-    dir_cache
-        .ensure_dir(dir)
-        .map_err(|e| format!("Failed to create directory {:?}: {}", dir, e))?;
-
-    for created_dir in missing.into_iter().rev() {
-        newly_created.push(created_dir.to_string_lossy().to_string());
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn maybe_emit_zip_progress(
     app: Option<&AppHandle>,
@@ -564,23 +522,19 @@ pub(crate) fn extract_zip_archive_with_workers(
             let clean = raw_name.replace('\\', "/");
 
             if clean.ends_with('/') {
-                ensure_dir_tracked(
+                dir_cache.ensure_dir_tracked(
                     &outpath,
                     dest_dir,
-                    &mut dir_cache,
                     dest_was_empty,
                     &mut newly_created,
                 )?;
             } else {
-                if let Some(parent) = outpath.parent() {
-                    ensure_dir_tracked(
-                        parent,
-                        dest_dir,
-                        &mut dir_cache,
-                        dest_was_empty,
-                        &mut newly_created,
-                    )?;
-                }
+                dir_cache.ensure_parent_tracked(
+                    &outpath,
+                    dest_dir,
+                    dest_was_empty,
+                    &mut newly_created,
+                )?;
 
                 let dedup_key = outpath
                     .to_string_lossy()
