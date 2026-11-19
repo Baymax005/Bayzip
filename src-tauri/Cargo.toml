@@ -34,9 +34,9 @@ zstd = { version = "0.13", features = ["zstdmt"] }
 aes-gcm = "0.10"
 rand = "0.8"
 sha2 = "0.10"
-zip = { version = "2.1", default-features = false, features = ["deflate", "bzip2", "aes-crypto"] }
+zip = { version = "2.1", default-features = false, features = ["deflate-flate2", "flate2", "bzip2", "aes-crypto"] }
 tar = "0.4"
-flate2 = "1.0"
+flate2 = { version = "1.0", default-features = false, features = ["zlib-rs"] }
 sevenz-rust2 = { version = "0.23.0", features = ["compress", "aes256"] }
 brotli = "9.0"
 lz4_flex = "0.11"

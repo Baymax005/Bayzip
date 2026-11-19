@@ -195,6 +195,10 @@ impl DirectoryCache {
     pub fn cached_len(&self) -> usize {
         self.created.len()
     }
+
+    pub fn contains(&self, dir: &Path) -> bool {
+        self.created.contains(dir)
+    }
 }
 
 struct PendingFileWrite {
