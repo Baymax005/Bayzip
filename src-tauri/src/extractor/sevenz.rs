@@ -263,7 +263,10 @@ pub fn extract_7z_archive(
     });
 
     match res {
-        Ok(_) => Ok(extracted),
+        Ok(_) => {
+            super::record_extracted_bytes(total_extracted);
+            Ok(extracted)
+        }
         Err(sevenz_rust2::Error::PasswordRequired) => {
             cleanup_extracted_files(&newly_created);
             Err("Password required: This 7z archive is encrypted with AES-256.".into())

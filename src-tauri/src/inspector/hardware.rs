@@ -9,14 +9,14 @@ pub enum DriveBusKind {
     Unknown,      // Network / UNC / Virtual / Unknown
 }
 
-/// Query the physical drive bus kind for a given path.
+/// Query the physical drive bus kind and seek penalty for a given path.
 /// Automatically detects and caches drive letters A through Z via Win32 IOCTL_STORAGE_QUERY_PROPERTY.
 #[cfg(target_os = "windows")]
-pub fn get_drive_bus_kind(path: &Path) -> DriveBusKind {
+fn get_drive_profile(path: &Path) -> (DriveBusKind, bool) {
     use std::sync::atomic::{AtomicU8, Ordering};
 
     // Fast static cache for drive letters A through Z (26 slots)
-    // 0 = unqueried, 1 = UsbRemovable, 2 = Sata, 3 = Nvme, 4 = Unknown
+    // Bus: 0 = unqueried, 1 = UsbRemovable, 2 = Sata, 3 = Nvme, 4 = Unknown
     static DRIVE_BUS_CACHE: [AtomicU8; 26] = [
         AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
         AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
@@ -26,18 +26,29 @@ pub fn get_drive_bus_kind(path: &Path) -> DriveBusKind {
         AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
         AtomicU8::new(0), AtomicU8::new(0),
     ];
+    // Seek penalty: 0 = unqueried, 1 = no seek penalty (SSD/NVMe), 2 = incurs seek penalty (HDD/conservative)
+    static DRIVE_SEEK_PENALTY_CACHE: [AtomicU8; 26] = [
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+        AtomicU8::new(0), AtomicU8::new(0),
+    ];
 
-    let path_str = path.to_string_lossy();
-    let mut drive_letter_opt = None;
-    let chars: Vec<char> = path_str.chars().collect();
-    for i in 0..chars.len() {
-        if chars[i] == ':' && i > 0 && chars[i - 1].is_ascii_alphabetic() {
-            drive_letter_opt = Some(chars[i - 1].to_ascii_uppercase());
-            break;
+    fn find_drive_letter(s: &str) -> Option<char> {
+        let chars: Vec<char> = s.chars().collect();
+        for i in 1..chars.len() {
+            if chars[i] == ':' && chars[i - 1].is_ascii_alphabetic() {
+                return Some(chars[i - 1].to_ascii_uppercase());
+            }
         }
+        None
     }
 
-    let drive_letter = match drive_letter_opt {
+    let path_str = path.to_string_lossy();
+    let drive_letter = match find_drive_letter(&path_str) {
         Some(dl) => dl,
         None => {
             let canon = path.canonicalize()
@@ -50,54 +61,60 @@ pub fn get_drive_bus_kind(path: &Path) -> DriveBusKind {
                 })
                 .or_else(|_| std::env::current_dir());
             if let Ok(canon_path) = canon {
-                let canon_str = canon_path.to_string_lossy();
-                let c_chars: Vec<char> = canon_str.chars().collect();
-                let mut found = None;
-                for i in 0..c_chars.len() {
-                    if c_chars[i] == ':' && i > 0 && c_chars[i - 1].is_ascii_alphabetic() {
-                        found = Some(c_chars[i - 1].to_ascii_uppercase());
-                        break;
-                    }
-                }
-                match found {
+                match find_drive_letter(&canon_path.to_string_lossy()) {
                     Some(dl) => dl,
-                    None => return DriveBusKind::Unknown,
+                    None => return (DriveBusKind::Unknown, true),
                 }
             } else {
-                return DriveBusKind::Unknown;
+                return (DriveBusKind::Unknown, true);
             }
         }
     };
 
     let cache_idx = (drive_letter as u8).saturating_sub(b'A') as usize;
     if cache_idx < 26 {
-        let cached = DRIVE_BUS_CACHE[cache_idx].load(Ordering::Relaxed);
-        match cached {
-            1 => return DriveBusKind::UsbRemovable,
-            2 => return DriveBusKind::Sata,
-            3 => return DriveBusKind::Nvme,
-            4 => return DriveBusKind::Unknown,
-            _ => {}
+        let cached_bus = DRIVE_BUS_CACHE[cache_idx].load(Ordering::Relaxed);
+        let cached_seek = DRIVE_SEEK_PENALTY_CACHE[cache_idx].load(Ordering::Relaxed);
+        if cached_bus != 0 && cached_seek != 0 {
+            let bus = match cached_bus {
+                1 => DriveBusKind::UsbRemovable,
+                2 => DriveBusKind::Sata,
+                3 => DriveBusKind::Nvme,
+                _ => DriveBusKind::Unknown,
+            };
+            return (bus, cached_seek == 2);
         }
     }
 
-    let bus_kind = detect_drive_bus(drive_letter);
+    let (bus_kind, incurs_seek_penalty) = detect_drive_profile(drive_letter);
 
     if cache_idx < 26 {
-        let val = match bus_kind {
+        let bus_val = match bus_kind {
             DriveBusKind::UsbRemovable => 1,
             DriveBusKind::Sata => 2,
             DriveBusKind::Nvme => 3,
             DriveBusKind::Unknown => 4,
         };
-        DRIVE_BUS_CACHE[cache_idx].store(val, Ordering::Relaxed);
+        let seek_val = if incurs_seek_penalty { 2 } else { 1 };
+        DRIVE_BUS_CACHE[cache_idx].store(bus_val, Ordering::Relaxed);
+        DRIVE_SEEK_PENALTY_CACHE[cache_idx].store(seek_val, Ordering::Relaxed);
     }
 
-    bus_kind
+    (bus_kind, incurs_seek_penalty)
 }
 
 #[cfg(target_os = "windows")]
-fn detect_drive_bus(drive_letter: char) -> DriveBusKind {
+pub fn get_drive_bus_kind(path: &Path) -> DriveBusKind {
+    get_drive_profile(path).0
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_drive_seek_penalty(path: &Path) -> bool {
+    get_drive_profile(path).1
+}
+
+#[cfg(target_os = "windows")]
+fn detect_drive_profile(drive_letter: char) -> (DriveBusKind, bool) {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
@@ -137,7 +154,7 @@ fn detect_drive_bus(drive_letter: char) -> DriveBusKind {
     let root_wide = to_wide(&root_path);
     let drive_type = unsafe { GetDriveTypeW(root_wide.as_ptr()) };
     if drive_type == DRIVE_REMOVABLE || drive_type == DRIVE_CDROM {
-        return DriveBusKind::UsbRemovable;
+        return (DriveBusKind::UsbRemovable, true);
     }
 
     let volume_path = format!("\\\\.\\{}:", drive_letter);
@@ -163,7 +180,7 @@ fn detect_drive_bus(drive_letter: char) -> DriveBusKind {
     };
 
     if handle as isize == INVALID_HANDLE_VALUE || handle.is_null() {
-        return DriveBusKind::Unknown;
+        return (DriveBusKind::Unknown, true);
     }
 
     let query: [u8; 12] = [0u8; 12];
@@ -183,10 +200,7 @@ fn detect_drive_bus(drive_letter: char) -> DriveBusKind {
         )
     };
 
-    unsafe {
-        CloseHandle(handle);
-    }
-
+    let mut bus_kind = DriveBusKind::Unknown;
     if ok != 0 && bytes_returned >= 32 {
         let removable_media = out_buf[10] != 0;
         let bus_type = u32::from_le_bytes([
@@ -198,21 +212,115 @@ fn detect_drive_bus(drive_letter: char) -> DriveBusKind {
 
         // BusTypeUsb = 7, BusTypeSd = 12 (0x0C), BusTypeMmc = 13 (0x0D), or marked RemovableMedia
         if bus_type == 7 || bus_type == 12 || bus_type == 13 || removable_media {
-            return DriveBusKind::UsbRemovable;
-        }
-
-        // BusTypeNvme = 17 (0x11), BusTypeScm = 18 (0x12)
-        if bus_type == 17 || bus_type == 18 {
-            return DriveBusKind::Nvme;
-        }
-
-        // BusTypeSata = 11, BusTypeAta = 3, BusTypeAtapi = 2, BusTypeScsi = 1, BusTypeSas = 10, BusTypeRAID = 8
-        if bus_type == 11 || bus_type == 3 || bus_type == 2 || bus_type == 1 || bus_type == 10 || bus_type == 8 {
-            return DriveBusKind::Sata;
+            bus_kind = DriveBusKind::UsbRemovable;
+        } else if bus_type == 17 || bus_type == 18 {
+            // BusTypeNvme = 17 (0x11), BusTypeScm = 18 (0x12)
+            bus_kind = DriveBusKind::Nvme;
+        } else if bus_type == 11 || bus_type == 3 || bus_type == 2 || bus_type == 1 || bus_type == 10 || bus_type == 8 {
+            // BusTypeSata = 11, BusTypeAta = 3, BusTypeAtapi = 2, BusTypeScsi = 1, BusTypeSas = 10, BusTypeRAID = 8
+            bus_kind = DriveBusKind::Sata;
         }
     }
 
-    DriveBusKind::Unknown
+    // Query StorageDeviceSeekPenaltyProperty (PropertyId = 7) to distinguish SSD vs. spinning HDD
+    let mut seek_query: [u8; 12] = [0u8; 12];
+    seek_query[0..4].copy_from_slice(&7u32.to_le_bytes());
+    let mut seek_out: [u8; 16] = [0u8; 16];
+    let mut seek_returned: u32 = 0;
+
+    let seek_ok = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            seek_query.as_ptr() as *const _,
+            seek_query.len() as u32,
+            seek_out.as_mut_ptr() as *mut _,
+            seek_out.len() as u32,
+            &mut seek_returned,
+            std::ptr::null_mut(),
+        )
+    };
+
+    unsafe {
+        CloseHandle(handle);
+    }
+
+    let incurs_seek_penalty = if bus_kind == DriveBusKind::Nvme {
+        false
+    } else if seek_ok != 0 && seek_returned >= 9 {
+        seek_out[8] != 0
+    } else {
+        true
+    };
+
+    (bus_kind, incurs_seek_penalty)
+}
+
+/// Computes optimal concurrent extraction writer threads for a destination drive profile.
+/// Caps threads to avoid NTFS `$MFT` `ERESOURCE` lock convoys on SSDs/NVMe and keeps
+/// spinning HDDs / USB flash drives strictly sequential (`1` writer thread).
+pub fn calculate_extract_writer_threads(
+    bus: DriveBusKind,
+    incurs_seek_penalty: bool,
+    total_cores: usize,
+) -> usize {
+    match bus {
+        DriveBusKind::Nvme => {
+            if total_cores <= 1 {
+                1
+            } else {
+                (total_cores / 2).clamp(2, 6)
+            }
+        }
+        DriveBusKind::Sata if !incurs_seek_penalty => {
+            if total_cores <= 1 {
+                1
+            } else {
+                (total_cores / 2).clamp(2, 4)
+            }
+        }
+        DriveBusKind::Sata | DriveBusKind::UsbRemovable | DriveBusKind::Unknown => 1,
+    }
+}
+
+/// Computes the bounded in-flight memory budget for async extraction file writes.
+pub fn calculate_extract_inflight_budget(bus: DriveBusKind, incurs_seek_penalty: bool) -> usize {
+    match bus {
+        DriveBusKind::Nvme => 48 * 1024 * 1024,
+        DriveBusKind::Sata if !incurs_seek_penalty => 32 * 1024 * 1024,
+        DriveBusKind::Sata | DriveBusKind::UsbRemovable | DriveBusKind::Unknown => 16 * 1024 * 1024,
+    }
+}
+
+/// Computes the Windows Cache Manager (256 KB VACB-aligned) chunk size for sequential extraction streaming.
+pub fn calculate_extract_chunk_size(bus: DriveBusKind) -> usize {
+    match bus {
+        DriveBusKind::Nvme => 1024 * 1024,
+        DriveBusKind::Sata => 512 * 1024,
+        DriveBusKind::UsbRemovable | DriveBusKind::Unknown => 256 * 1024,
+    }
+}
+
+pub fn get_optimal_extract_writer_threads(dest_dir: &Path) -> usize {
+    let total_cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    calculate_extract_writer_threads(
+        get_drive_bus_kind(dest_dir),
+        get_drive_seek_penalty(dest_dir),
+        total_cores,
+    )
+}
+
+pub fn get_optimal_extract_inflight_budget(dest_dir: &Path) -> usize {
+    calculate_extract_inflight_budget(
+        get_drive_bus_kind(dest_dir),
+        get_drive_seek_penalty(dest_dir),
+    )
+}
+
+pub fn get_optimal_extract_chunk_size(dest_dir: &Path) -> usize {
+    calculate_extract_chunk_size(get_drive_bus_kind(dest_dir))
 }
 
 /// Query the optimal sequential read slice size for a given file path based on the underlying physical drive bus.
@@ -259,6 +367,50 @@ pub fn get_optimal_read_slice(_path: &Path) -> usize {
 }
 
 #[cfg(not(target_os = "windows"))]
+pub fn get_drive_seek_penalty(_path: &Path) -> bool {
+    true
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn get_optimal_write_buffer(_output_path: &Path, requested_buffer: usize) -> usize {
     requested_buffer.min(2 * 1024 * 1024).max(64 * 1024)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_extract_writer_threads_by_drive_profile() {
+        // NVMe scales between 2 and 6 writers (1 on single-core)
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Nvme, false, 1), 1);
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Nvme, false, 2), 2);
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Nvme, false, 8), 4);
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Nvme, false, 16), 6);
+
+        // SATA SSD (no seek penalty) scales between 2 and 4 writers
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Sata, false, 1), 1);
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Sata, false, 4), 2);
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Sata, false, 16), 4);
+
+        // Mechanical SATA HDD (incurs seek penalty), USB, and Unknown serialize to 1 writer
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Sata, true, 16), 1);
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::UsbRemovable, true, 16), 1);
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::UsbRemovable, false, 16), 1);
+        assert_eq!(calculate_extract_writer_threads(DriveBusKind::Unknown, true, 16), 1);
+    }
+
+    #[test]
+    fn test_calculate_extract_inflight_budget_and_chunk_size() {
+        assert_eq!(calculate_extract_inflight_budget(DriveBusKind::Nvme, false), 48 * 1024 * 1024);
+        assert_eq!(calculate_extract_inflight_budget(DriveBusKind::Sata, false), 32 * 1024 * 1024);
+        assert_eq!(calculate_extract_inflight_budget(DriveBusKind::Sata, true), 16 * 1024 * 1024);
+        assert_eq!(calculate_extract_inflight_budget(DriveBusKind::UsbRemovable, true), 16 * 1024 * 1024);
+        assert_eq!(calculate_extract_inflight_budget(DriveBusKind::Unknown, false), 16 * 1024 * 1024);
+
+        assert_eq!(calculate_extract_chunk_size(DriveBusKind::Nvme), 1024 * 1024);
+        assert_eq!(calculate_extract_chunk_size(DriveBusKind::Sata), 512 * 1024);
+        assert_eq!(calculate_extract_chunk_size(DriveBusKind::UsbRemovable), 256 * 1024);
+        assert_eq!(calculate_extract_chunk_size(DriveBusKind::Unknown), 256 * 1024);
+    }
 }

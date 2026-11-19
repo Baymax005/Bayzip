@@ -303,5 +303,6 @@ pub fn extract_zip_archive(
         return Err(e);
     }
 
+    super::record_extracted_bytes(total_extracted);
     Ok(extracted)
 }

@@ -312,6 +312,7 @@ pub fn extract_bay_stream<R: Read>(
         return Err(e);
     }
 
+    super::record_extracted_bytes(total_extracted);
     Ok(extracted_files)
 }
 

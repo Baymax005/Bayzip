@@ -54,14 +54,15 @@ fn create_dir_all_tracked(
     Ok(())
 }
 
-pub(crate) fn finalize_staged_extraction(
+fn finalize_staged_extraction_inner(
     stage_root: &Path,
     dest_dir: &Path,
     excluded: Option<&std::collections::HashSet<String>>,
     preexisting_paths: &std::collections::HashSet<String>,
     newly_created: &mut Vec<String>,
     extracted_files: &mut Vec<String>,
-) -> Result<(), String> {
+) -> Result<u64, String> {
+    let mut kept_bytes: u64 = 0;
     let mut dir_stack = vec![PathBuf::new()];
     while let Some(rel_dir) = dir_stack.pop() {
         if is_extraction_cancelled() {
@@ -109,6 +110,7 @@ pub(crate) fn finalize_staged_extraction(
                 }
                 let was_preexisting =
                     preexisting_paths.contains(&target_key) || std::fs::symlink_metadata(&target_path).is_ok();
+                let entry_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 let src_path = entry.path();
                 if std::fs::rename(&src_path, &target_path).is_err() {
                     std::fs::copy(&src_path, &target_path).map_err(|e| {
@@ -116,6 +118,7 @@ pub(crate) fn finalize_staged_extraction(
                     })?;
                     let _ = std::fs::remove_file(&src_path);
                 }
+                kept_bytes = kept_bytes.saturating_add(entry_size);
                 let target_str = target_path.to_string_lossy().to_string();
                 if !was_preexisting {
                     newly_created.push(target_str.clone());
@@ -124,7 +127,27 @@ pub(crate) fn finalize_staged_extraction(
             }
         }
     }
-    Ok(())
+    Ok(kept_bytes)
+}
+
+#[cfg(test)]
+pub(crate) fn finalize_staged_extraction(
+    stage_root: &Path,
+    dest_dir: &Path,
+    excluded: Option<&std::collections::HashSet<String>>,
+    preexisting_paths: &std::collections::HashSet<String>,
+    newly_created: &mut Vec<String>,
+    extracted_files: &mut Vec<String>,
+) -> Result<(), String> {
+    finalize_staged_extraction_inner(
+        stage_root,
+        dest_dir,
+        excluded,
+        preexisting_paths,
+        newly_created,
+        extracted_files,
+    )
+    .map(|_| ())
 }
 
 pub fn extract_with_system_tar(
@@ -420,7 +443,7 @@ pub fn extract_with_system_tar(
     }
 
     if has_exclusions {
-        if let Err(err) = finalize_staged_extraction(
+        match finalize_staged_extraction_inner(
             &extract_target,
             dest_dir,
             excluded,
@@ -428,11 +451,22 @@ pub fn extract_with_system_tar(
             &mut newly_created,
             &mut extracted_files,
         ) {
-            cleanup_extracted_files(&newly_created);
-            return Err(err);
+            Ok(kept_bytes) => {
+                super::record_extracted_bytes(kept_bytes);
+            }
+            Err(err) => {
+                cleanup_extracted_files(&newly_created);
+                return Err(err);
+            }
         }
         drop(staging_guard);
     } else {
+        if let Some(prev_path) = current_file_path.take() {
+            if let Ok(m) = std::fs::metadata(&prev_path) {
+                completed_bytes = completed_bytes.saturating_add(m.len());
+            }
+        }
+        super::record_extracted_bytes(completed_bytes);
         if extracted_files.is_empty() {
             if let Ok(entries) = std::fs::read_dir(dest_dir) {
                 for entry in entries.flatten() {

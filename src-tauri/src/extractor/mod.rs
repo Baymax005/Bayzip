@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
@@ -12,6 +13,7 @@ use tauri::{AppHandle, Emitter};
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub mod utils;
+pub mod io;
 pub mod bay;
 pub mod zip;
 pub mod tar;
@@ -19,6 +21,7 @@ pub mod sevenz;
 pub mod system_tar;
 
 pub use utils::*;
+pub use io::*;
 pub use bay::*;
 pub use zip::*;
 pub use tar::*;
@@ -37,28 +40,41 @@ use crate::inspector::{
 
 thread_local! {
     static CURRENT_EXTRACTION_TOKEN: RefCell<Option<TaskCancelToken>> = const { RefCell::new(None) };
+    static CURRENT_EXTRACTION_BYTES: RefCell<Option<Arc<AtomicU64>>> = const { RefCell::new(None) };
 }
 
 static ACTIVE_EXTRACTION_TOKEN: Mutex<Vec<TaskCancelToken>> = Mutex::new(Vec::new());
 
 pub struct ExtractionTaskGuard {
     token: TaskCancelToken,
+    bytes_extracted: Arc<AtomicU64>,
 }
 
 impl ExtractionTaskGuard {
     pub fn new() -> Self {
         let token = TaskCancelToken::new();
+        let bytes_extracted = Arc::new(AtomicU64::new(0));
         CURRENT_EXTRACTION_TOKEN.with(|cell| {
             *cell.borrow_mut() = Some(token.clone());
+        });
+        CURRENT_EXTRACTION_BYTES.with(|cell| {
+            *cell.borrow_mut() = Some(Arc::clone(&bytes_extracted));
         });
         if let Ok(mut lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
             lock.push(token.clone());
         }
-        Self { token }
+        Self {
+            token,
+            bytes_extracted,
+        }
     }
 
     pub fn token(&self) -> TaskCancelToken {
         self.token.clone()
+    }
+
+    pub fn bytes_extracted(&self) -> u64 {
+        self.bytes_extracted.load(Ordering::Relaxed)
     }
 }
 
@@ -73,10 +89,28 @@ impl Drop for ExtractionTaskGuard {
         CURRENT_EXTRACTION_TOKEN.with(|cell| {
             *cell.borrow_mut() = None;
         });
+        CURRENT_EXTRACTION_BYTES.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
         if let Ok(mut lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
             lock.retain(|t| !Arc::ptr_eq(&t.0, &self.token.0));
         }
     }
+}
+
+pub(crate) fn current_extraction_token() -> Option<TaskCancelToken> {
+    CURRENT_EXTRACTION_TOKEN.with(|cell| cell.borrow().clone())
+}
+
+pub(crate) fn record_extracted_bytes(bytes: u64) {
+    if bytes == 0 {
+        return;
+    }
+    CURRENT_EXTRACTION_BYTES.with(|cell| {
+        if let Some(counter) = cell.borrow().as_ref() {
+            counter.fetch_add(bytes, Ordering::Relaxed);
+        }
+    });
 }
 
 pub fn cancel_extraction_flag() {
@@ -293,11 +327,16 @@ pub fn extract_archive_sync(
         }
     };
 
-    let total_final_bytes: u64 = extracted_files.iter()
-        .filter_map(|p| std::fs::metadata(p).ok())
-        .filter(|m| m.is_file())
-        .map(|m| m.len())
-        .sum();
+    let recorded_bytes = _task_guard.bytes_extracted();
+    let total_final_bytes: u64 = if recorded_bytes > 0 || extracted_files.is_empty() {
+        recorded_bytes
+    } else {
+        extracted_files.iter()
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .filter(|m| m.is_file())
+            .map(|m| m.len())
+            .sum()
+    };
 
     let _ = app.emit("extract_progress", ExtractProgress {
         percent: 100.0,
@@ -414,6 +453,24 @@ mod tests {
             let guard2 = ExtractionTaskGuard::new();
             assert!(!is_extraction_cancelled());
             assert!(!guard2.token().is_cancelled());
+        }
+    }
+
+    #[test]
+    fn test_extraction_task_guard_records_bytes_isolated() {
+        {
+            let guard1 = ExtractionTaskGuard::new();
+            assert_eq!(guard1.bytes_extracted(), 0);
+            assert!(current_extraction_token().is_some());
+            record_extracted_bytes(1024);
+            record_extracted_bytes(2048);
+            assert_eq!(guard1.bytes_extracted(), 3072);
+        }
+        {
+            let guard2 = ExtractionTaskGuard::new();
+            assert_eq!(guard2.bytes_extracted(), 0);
+            record_extracted_bytes(512);
+            assert_eq!(guard2.bytes_extracted(), 512);
         }
     }
 }

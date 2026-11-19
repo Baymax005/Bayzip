@@ -188,6 +188,7 @@ pub(crate) fn extract_tar_entries<R: Read>(
         return Err(e);
     }
 
+    super::record_extracted_bytes(total_extracted);
     Ok(extracted_files)
 }
 
