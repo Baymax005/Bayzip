@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/tests-57%2F57%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="57/57 Automated Tests Passing" />
   <img src="https://img.shields.io/badge/typecheck-0%20errors-0078D6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 0 Errors" />
-  <img src="https://img.shields.io/badge/duration-0.50s-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Execution Time 0.50s" />
+  <img src="https://img.shields.io/badge/duration-0.64s-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Execution Time 0.64s" />
   <img src="https://img.shields.io/badge/coverage-100%25%20Passing-10B981?style=flat-square&logo=shield&logoColor=white" alt="100% Passing" />
   <img src="https://img.shields.io/badge/audit-60%2F60%20verified-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="60/60 Audit Findings Verified" />
 </p>
@@ -38,11 +38,11 @@ Bayzip enforces strict automated regression and security testing across all cont
 | 8 | `inspector` | `test_trailing_period_and_space_evasion` | Blocks Win32 trailing period/space namespace evasion exploits (`evil.exe .`, `folder./file`, `secret.txt.`). | `PASSED` |
 | 9 | `inspector` | `test_empty_and_dot_paths` | Rejects empty strings, whitespace, and bare `.` paths. | `PASSED` |
 | 10 | `inspector` | `test_valid_paths` | Ensures legitimate relative paths and nested directory paths are properly sanitized and preserved. | `PASSED` |
-| 11 | `extractor` | `test_drain_bay_entry_bytes_exact_match` | Verifies exact byte consumption when skipping/excluding entries during streaming `.bay` extraction (`V-SEC-02`). | `PASSED` |
-| 12 | `extractor` | `test_drain_bay_entry_bytes_unaligned_chunking` | Validates stream alignment when draining entries across arbitrary buffer chunk boundaries. | `PASSED` |
-| 13 | `extractor` | `test_drain_bay_entry_bytes_premature_eof` | Traps premature EOF during entry draining, preventing container stream desynchronization. | `PASSED` |
-| 14 | `extractor` | `test_drain_bay_entry_bytes_zero_length` | Handles 0-byte entries without stream stalling. | `PASSED` |
-| 15 | `extractor` | `test_drain_bay_entry_bytes_io_error` | Ensures underlying I/O errors are immediately surfaced during stream draining. | `PASSED` |
+| 11 | `extractor::bay` | `test_drain_bay_entry_bytes_exact_match` | Verifies exact byte consumption when skipping/excluding entries during streaming `.bay` extraction (`V-SEC-02`). | `PASSED` |
+| 12 | `extractor::bay` | `test_drain_bay_entry_bytes_unaligned_chunking` | Validates stream alignment when draining entries across arbitrary buffer chunk boundaries. | `PASSED` |
+| 13 | `extractor::bay` | `test_drain_bay_entry_bytes_premature_eof` | Traps premature EOF during entry draining, preventing container stream desynchronization. | `PASSED` |
+| 14 | `extractor::bay` | `test_drain_bay_entry_bytes_zero_length` | Handles 0-byte entries without stream stalling. | `PASSED` |
+| 15 | `extractor::bay` | `test_drain_bay_entry_bytes_io_error` | Ensures underlying I/O errors are immediately surfaced during stream draining. | `PASSED` |
 | 16 | `inspector::bay` | `test_read_bay_trailer_valid_toc` | Validates correct parsing of `.bay` instant Table of Contents (TOC) metadata. | `PASSED` |
 | 17 | `inspector::bay` | `test_read_bay_trailer_rejects_file_too_small` | Safely rejects undersized files before reading trailer magic. | `PASSED` |
 | 18 | `inspector::bay` | `test_read_bay_trailer_rejects_zero_toc_len` | Rejects corrupted zero-length TOC entries. | `PASSED` |
@@ -64,7 +64,7 @@ Bayzip enforces strict automated regression and security testing across all cont
 | 34 | `compressor` | `test_compression_task_guard_isolation` | Verifies RAII `CompressionTaskGuard` isolates thread-local cancellation scopes without zombie leaks. | `PASSED` |
 | 35 | `extractor` | `test_extraction_task_guard_isolation` | Verifies RAII `ExtractionTaskGuard` scopes isolate cancellation flags per extraction job. | `PASSED` |
 | 36 | `tester` | `test_tester_task_guard_isolation` | Verifies RAII `TestTaskGuard` scopes isolate cancellation flags during integrity tests. | `PASSED` |
-| 37 | `extractor` | `test_cleanup_extracted_files_safely_removes_created_files` | Validates `cleanup_extracted_files` safely deletes newly extracted items without panicking on missing paths. | `PASSED` |
+| 37 | `extractor::utils` | `test_cleanup_extracted_files_safely_removes_created_files` | Validates `cleanup_extracted_files` safely deletes newly extracted items without panicking on missing paths. | `PASSED` |
 | 38 | `compressor::utils` | `test_is_path_excluded_dot_slash_prefix` | Ensures `./`, `/`, and backslash relative path prefixes normalize cleanly during exclusion matching. | `PASSED` |
 | 39 | `compressor::utils` | `test_is_excluded_or_temp_artifact` | Verifies `.baytmp`, `.baypart`, output archive, and temp archive paths are excluded from self-inclusion. | `PASSED` |
 | 40 | `inspector::preview` | `test_extract_entry_ext` | Validates extension parsing on nested paths containing dots in folder names and extensionless files. | `PASSED` |
@@ -72,8 +72,8 @@ Bayzip enforces strict automated regression and security testing across all cont
 | 42 | `crypto` | `test_chunked_aes_drop_and_finish` | Verifies `ChunkedAesWriter`/`ChunkedAesReader` `Drop` zeroizes plaintext buffers and base nonces safely after finish or early drop. | `PASSED` |
 | 43 | `inspector` | `test_rejects_unencrypted_baytoc_on_bayenc_archive` | Rejects unencrypted `BAYTOC` trailers appended to `BAYENC` encrypted containers. | `PASSED` |
 | 44 | `inspector` | `test_inspect_encrypted_bay_wrong_password_returns_err` | Ensures `inspect_archive` returns an explicit wrong-password error instead of an empty listing for encrypted `.bay` containers. | `PASSED` |
-| 45 | `extractor` | `test_should_abort_fallback_on_cancel_and_password` | Verifies `universal_extract` fallback chains abort immediately on user cancellation or password errors. | `PASSED` |
-| 46 | `extractor` | `test_extract_bay_stream_eof_drain_and_truncation_detection` | Ensures `.bay` extraction detects truncated streams missing `entry_type == 0` EOF markers and drains remaining decoder bytes. | `PASSED` |
+| 45 | `extractor::utils` | `test_should_abort_fallback_on_cancel_and_password` | Verifies `universal_extract` fallback chains abort immediately on user cancellation or password errors. | `PASSED` |
+| 46 | `extractor::bay` | `test_extract_bay_stream_eof_drain_and_truncation_detection` | Ensures `.bay` extraction detects truncated streams missing `entry_type == 0` EOF markers and drains remaining decoder bytes. | `PASSED` |
 | 47 | `tester` | `test_should_abort_test_fallback_blocks_cancel_and_password` | Ensures `test_archive_sync` fallback logic never masks cancellation or password errors. | `PASSED` |
 | 48 | `tester` | `test_test_bay_stream_detects_missing_eof_marker` | Verifies `test_bay_stream` detects truncated `.bay` payloads missing a terminating EOF marker. | `PASSED` |
 | 49 | `tester` | `test_test_tar_archive_delegates_xz_and_bz2` | Confirms `.xz`, `.txz`, `.bz2`, and `.tbz2` archives delegate cleanly through system tar payload testing. | `PASSED` |
@@ -84,7 +84,7 @@ Bayzip enforces strict automated regression and security testing across all cont
 | 54 | `lib` | `test_parse_cli_args_gui_compress_and_extract` | Verifies CLI parsing for `--gui-compress` and `--extract` verbs across multi-target paths. | `PASSED` |
 | 55 | `lib` | `test_is_mini_extract_invocation_skips_startup_sync` | Ensures mini-extract CLI invocations are detected reliably so startup background registry synchronization is skipped. | `PASSED` |
 | 56 | `inspector` | `test_build_excluded_set_and_prefix_matching` | Verifies normalized `build_excluded_set` construction and `O(depth)` ancestor prefix exclusion without sibling false positives. | `PASSED` |
-| 57 | `extractor` | `test_finalize_staged_extraction_preserves_preexisting_and_filters_case_glob_segments` | Verifies staged `tar.exe` extraction filters case/glob/sub-component exclusions cleanly without overwriting preexisting destination files. | `PASSED` |
+| 57 | `extractor::system_tar` | `test_finalize_staged_extraction_preserves_preexisting_and_filters_case_glob_segments` | Verifies staged `tar.exe` extraction filters case/glob/sub-component exclusions cleanly without overwriting preexisting destination files. | `PASSED` |
 
 ---
 
@@ -98,14 +98,14 @@ test compressor::tests::test_is_gamer_preset_normalization ... ok
 test compressor::tests::test_compression_task_guard_isolation ... ok
 test compressor::tests::test_calculate_zstd_level_gamer_preset_cap ... ok
 test compressor::utils::tests::test_is_path_excluded_dot_slash_prefix ... ok
-test extractor::tests::test_drain_bay_entry_bytes_exact_match ... ok
-test extractor::tests::test_drain_bay_entry_bytes_io_error ... ok
-test extractor::tests::test_drain_bay_entry_bytes_premature_eof ... ok
-test extractor::tests::test_drain_bay_entry_bytes_unaligned_chunking ... ok
-test extractor::tests::test_drain_bay_entry_bytes_zero_length ... ok
+test extractor::bay::tests::test_drain_bay_entry_bytes_exact_match ... ok
+test extractor::bay::tests::test_drain_bay_entry_bytes_io_error ... ok
+test extractor::bay::tests::test_drain_bay_entry_bytes_premature_eof ... ok
+test extractor::bay::tests::test_drain_bay_entry_bytes_unaligned_chunking ... ok
+test extractor::bay::tests::test_drain_bay_entry_bytes_zero_length ... ok
 test extractor::tests::test_extraction_task_guard_isolation ... ok
 test compressor::utils::tests::test_is_excluded_or_temp_artifact ... ok
-test extractor::tests::test_should_abort_fallback_on_cancel_and_password ... ok
+test extractor::utils::tests::test_should_abort_fallback_on_cancel_and_password ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_encrypted_toc_exceeding_file_bounds ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_encrypted_toc ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_file_too_small ... ok
@@ -127,7 +127,7 @@ test inspector::tests::test_valid_paths ... ok
 test inspector::tests::test_trailing_period_and_space_evasion ... ok
 test priority::tests::test_background_shield_toggle ... ok
 test priority::tests::test_nested_scoped_priority_guards_unwind_correctly ... ok
-test extractor::tests::test_cleanup_extracted_files_safely_removes_created_files ... ok
+test extractor::utils::tests::test_cleanup_extracted_files_safely_removes_created_files ... ok
 test priority::tests::test_concurrent_threads_priority_guards_restore_independently ... ok
 test registry::tests::test_format_registration_stamp_determinism ... ok
 test priority::tests::test_midflight_background_shield_toggle_syncs_process_priority ... ok
@@ -143,15 +143,15 @@ test tests::test_is_mini_extract_invocation_skips_startup_sync ... ok
 test tests::test_parse_cli_args_gui_compress_and_extract ... ok
 test types::tests::test_task_cancel_token_lifecycle ... ok
 test types::tests::test_task_cancel_tokens_are_isolated ... ok
-test extractor::tests::test_finalize_staged_extraction_preserves_preexisting_and_filters_case_glob_segments ... ok
+test extractor::system_tar::tests::test_finalize_staged_extraction_preserves_preexisting_and_filters_case_glob_segments ... ok
 test crypto::tests::test_chunked_aes_wrong_password ... ok
 test crypto::tests::test_chunked_aes_roundtrip ... ok
-test extractor::tests::test_extract_bay_stream_eof_drain_and_truncation_detection ... ok
+test extractor::bay::tests::test_extract_bay_stream_eof_drain_and_truncation_detection ... ok
 test crypto::tests::test_chunked_aes_truncation_detection ... ok
 test crypto::tests::test_chunked_aes_drop_and_finish ... ok
 test inspector::tests::test_inspect_encrypted_bay_wrong_password_returns_err ... ok
 
-test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
 ```
 
 ### Frontend TypeScript Static Analysis (`npx tsc --noEmit`)

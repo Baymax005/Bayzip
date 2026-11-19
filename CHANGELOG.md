@@ -2,6 +2,18 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v2.4.11] - 2026-11-19
+### Architecture — Modular Extraction Engine (`src-tauri/src/extractor/`)
+- **Decomposed Monolithic `extractor.rs` (2,321 lines) into Focused Format Submodules**:
+  - **`src-tauri/src/extractor/mod.rs`**: Submodule declarations and re-exports, `ExtractionTaskGuard` and thread-isolated cancellation state, `universal_extract`, `extract_archive_sync`, `headless_extract_here`, and `headless_extract_to_subfolder`.
+  - **`src-tauri/src/extractor/utils.rs`**: Shared cleanup (`cleanup_extracted_files`), folder stem/root stripping (`base_folder_stem`, `strip_root_component`, `resolve_unique_folder_name`), throttled progress emission (`emit_extract_progress`), and fallback abort rules (`should_abort_fallback`).
+  - **`src-tauri/src/extractor/bay.rs`**: `.bay` / `.bayg` streaming unpackers (`drain_bay_entry_bytes`, `extract_bay_stream`, `extract_bay_archive`).
+  - **`src-tauri/src/extractor/zip.rs`**: `.zip` extraction engine (`extract_zip_archive`).
+  - **`src-tauri/src/extractor/tar.rs`**: Native `.tar` / `.tar.gz` extraction (`extract_tar_entries`, `extract_tar_archive`).
+  - **`src-tauri/src/extractor/sevenz.rs`**: `.7z` extraction engine (`extract_7z_archive`).
+  - **`src-tauri/src/extractor/system_tar.rs`**: Windows `tar.exe` fallback, `-tf`/`-tvf` pre-inspection, `StagingDirGuard`, and `finalize_staged_extraction` (`extract_with_system_tar`).
+  - Removed the legacy single-file `src-tauri/src/extractor.rs` while preserving all existing public APIs, security/Zip-Slip checks, and **57/57 unit tests passing**.
+
 ## [v2.4.10] - 2026-11-17
 ### Performance & Security — Instant `O(depth)` Exclusions & Staging Hardening
 - **Prefix-Minimal Folder Exclusions & Cached Tree Index (`src/utils/archive.ts`)**:
