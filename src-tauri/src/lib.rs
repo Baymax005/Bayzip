@@ -1,4 +1,6 @@
 #![cfg_attr(test, allow(dead_code, unused_imports))]
+// Clippy 0.1.99 false positive on `thread_local! { static ... = const { ... }; }`
+#![allow(clippy::missing_const_for_thread_local)]
 
 pub mod types;
 pub mod crypto;

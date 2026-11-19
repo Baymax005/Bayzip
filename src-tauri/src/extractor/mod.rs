@@ -41,6 +41,8 @@ use crate::inspector::{
 thread_local! {
     static CURRENT_EXTRACTION_TOKEN: RefCell<Option<TaskCancelToken>> = const { RefCell::new(None) };
     static CURRENT_EXTRACTION_BYTES: RefCell<Option<Arc<AtomicU64>>> = const { RefCell::new(None) };
+    #[cfg(test)]
+    static IN_EXTRACTION_CANCEL_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 static ACTIVE_EXTRACTION_TOKEN: Mutex<Vec<TaskCancelToken>> = Mutex::new(Vec::new());
@@ -60,8 +62,15 @@ impl ExtractionTaskGuard {
         CURRENT_EXTRACTION_BYTES.with(|cell| {
             *cell.borrow_mut() = Some(Arc::clone(&bytes_extracted));
         });
+        #[cfg(not(test))]
         if let Ok(mut lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
             lock.push(token.clone());
+        }
+        #[cfg(test)]
+        if IN_EXTRACTION_CANCEL_TEST.with(|c| c.get()) {
+            if let Ok(mut lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
+                lock.push(token.clone());
+            }
         }
         Self {
             token,
@@ -128,6 +137,10 @@ pub fn is_extraction_cancelled() -> bool {
     if let Some(cancelled) = thread_cancelled {
         return cancelled;
     }
+    #[cfg(test)]
+    if !IN_EXTRACTION_CANCEL_TEST.with(|c| c.get()) {
+        return false;
+    }
     if let Ok(lock) = ACTIVE_EXTRACTION_TOKEN.lock() {
         return lock.iter().any(|t| t.is_cancelled());
     }
@@ -175,7 +188,16 @@ pub fn universal_extract(
                     extract_with_system_tar(archive_path, dest_dir, app, excluded)
                 })
         },
-        ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd | ArchiveFormat::Iso | ArchiveFormat::Cab => {
+        ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Zstd => {
+            extract_tar_archive(archive_path, dest_dir, expected_size, app, excluded)
+                .or_else(|e| {
+                    if should_abort_fallback(&e) {
+                        return Err(e);
+                    }
+                    extract_with_system_tar(archive_path, dest_dir, app, excluded)
+                })
+        },
+        ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Iso | ArchiveFormat::Cab => {
             extract_with_system_tar(archive_path, dest_dir, app, excluded)
                 .or_else(|e| {
                     if should_abort_fallback(&e) {
@@ -240,10 +262,10 @@ pub fn extract_archive_sync(
     let stem = archive_stem_name(path);
 
     let format = detect_archive_type(path);
-    let is_tar_or_rar = matches!(format, ArchiveFormat::Rar | ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd | ArchiveFormat::Iso | ArchiveFormat::Cab)
+    let is_tar_or_rar = matches!(format, ArchiveFormat::Rar | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Iso | ArchiveFormat::Cab)
         || path.extension().and_then(|s| s.to_str()).map(|ext| {
             let l = ext.to_lowercase();
-            l == "rar" || l == "tar" || l == "gz" || l == "tgz" || l == "bz2" || l == "xz" || l == "zst" || l == "iso" || l == "cab"
+            l == "rar" || l == "bz2" || l == "xz" || l == "iso" || l == "cab"
         }).unwrap_or(false);
 
     let rar_single_root_match = if is_tar_or_rar && extract_to_subfolder.unwrap_or(true) {
@@ -442,6 +464,15 @@ mod tests {
 
     #[test]
     fn test_extraction_task_guard_isolation() {
+        struct CancelTestScope;
+        impl Drop for CancelTestScope {
+            fn drop(&mut self) {
+                IN_EXTRACTION_CANCEL_TEST.with(|c| c.set(false));
+            }
+        }
+        IN_EXTRACTION_CANCEL_TEST.with(|c| c.set(true));
+        let _scope = CancelTestScope;
+
         {
             let guard1 = ExtractionTaskGuard::new();
             assert!(!is_extraction_cancelled());
