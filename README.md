@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v2.4.11-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v2.4.11" /></a>
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v3.0.0-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v3.0.0" /></a>
   <a href="#windows-shell-integration"><img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows 10 | 11" /></a>
   <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2.0" /></a>
   <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021 Edition" /></a>
@@ -20,13 +20,14 @@
 
 <p align="center">
   <a href="src-tauri/src/crypto.rs"><img src="https://img.shields.io/badge/security-AES--256--GCM%20AEAD-10B981?style=flat-square&logo=shield&logoColor=white" alt="AES-256-GCM AEAD Security" /></a>
-  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-57%2F57%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="57/57 Automated Tests Passing" /></a>
-  <a href="src-tauri/src/compressor/mod.rs"><img src="https://img.shields.io/badge/engine-Zstandard%20%7C%20LZ4%20%7C%20Brotli-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Compression Engine" /></a>
+  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-90%2F90%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="90/90 Automated Tests Passing" /></a>
+  <a href="src-tauri/src/compressor/mod.rs"><img src="https://img.shields.io/badge/engine-Zstandard%20%7C%20zlib--rs%20%7C%20LZMA2-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Compression Engine" /></a>
   <a href="src-tauri/crates/bayzip_shell/src/lib.rs"><img src="https://img.shields.io/badge/shell-Windows%2011%20COM-6366F1?style=flat-square&logo=windows&logoColor=white" alt="Windows 11 COM Shell Extension" /></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/audit-60%2F60%20remediated-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="60/60 Technical Audit Findings Remediated" /></a>
 </p>
 
 <p align="center">
+  <a href="#-whats-new-in-v300"><b>🚀 What's New in v3.0.0</b></a> •
   <a href="#-key-features"><b>⚡ Key Features</b></a> •
   <a href="#-storage-calibrated-streaming-io"><b>💾 I/O Calibration</b></a> •
   <a href="#-zero-allocation-streaming-aes-256-gcm-encryption"><b>🔒 Security & Cryptography</b></a> •
@@ -39,17 +40,43 @@
 
 ---
 
+## 🚀 What's New in v3.0.0
+
+Bayzip **v3.0.0** introduces a ground-up **Multi-Core, Storage-Aware Extraction Architecture** across six engineering phases alongside an upgraded **RFC 8878 Seekable `.bay` / `.bayg` Container Format**:
+
+- **Multi-Frame Seekable `.bay` / `.bayg` Container & Parallel Zstd Unpacking (`compressor/bay.rs`, `inspector/bay.rs`, `extractor/bay.rs`)**:
+  - Unencrypted Zstandard archives now emit independent seekable Zstd frames (`8 MB` frames for `.bayg` Gamer Preset; `16 MB` frames for `.bay`) indexed by an RFC 8878 Seek Table skippable frame (`0x184D2A5E` / `0x8F92EAB1`) directly ahead of the instant `BAYTOC\x02\x00` trailer.
+  - `ParallelSeekableZstdReader` decodes frames concurrently across `2–8` `zstd::bulk::Decompressor` workers inside a bounded `96 MB` sliding window with recycled buffers, using independent `open_random_read` handles on SSDs/NVMe and serialized sequential reads on spinning HDDs/USB drives—while remaining 100% backward-compatible with legacy single-frame `.bay` and encrypted `BAYENC\x03` archives.
+- **Storage-Aware Win32 NTFS I/O & `AsyncFileWriterPool` (`inspector/hardware.rs`, `extractor/io.rs`, `extractor/mod.rs`)**:
+  - Queries both `STORAGE_BUS_TYPE` and `StorageDeviceSeekPenaltyProperty` (`PropertyId = 7`) via `IOCTL_STORAGE_QUERY_PROPERTY` to distinguish NVMe SSDs, SATA SSDs, spinning HDDs, and USB flash drives.
+  - Applies Win32 `FILE_FLAG_SEQUENTIAL_SCAN` / `FILE_FLAG_RANDOM_ACCESS` hints, NTFS `FileAllocationInfo` preallocation for files `>= 64 KB`, `DirectoryCache` ancestor tracking to eliminate redundant `create_dir_all` syscalls, and a byte-budgeted `AsyncFileWriterPool` (`16–48 MB` in-flight cap) with per-worker `ScopedPriorityGuard` and deterministic `abort_and_join()` rollback cleanup.
+- **Parallel Multi-Core `.zip` Extraction & SIMD `zlib-rs` (`Cargo.toml`, `extractor/zip.rs`)**:
+  - Switched `flate2` to `zlib-rs` SIMD hardware acceleration and enabled `zip` `deflate-flate2`.
+  - Added zero-seek Pass 1 central-directory planning (`name_for_index`), case-insensitive duplicate conflict resolution (last-wins), per-worker `open_random_read` handles (`2–8` NVMe / `2–6` SATA SSD / sequential HDD & USB), and Zip-Bomb `eof_check` guards.
+- **Zero-Double-Buffer Pipelined `.bay` Extraction & Async AES Read-Ahead (`extractor/bay.rs`, `priority.rs`, `tester.rs`)**:
+  - Eliminated double buffering via `zstd::stream::Decoder::with_buffer` and added `PipedAesBufReader` (`8 × 512 KB` zeroized ring buffers) to overlap AES-256-GCM decryption on a read-ahead thread with Zstd decompression and async file writes, plus bounded `locate_bay_payload_end` framing for `BAYTOC` trailers.
+- **Multi-Block Parallel `.7z` & Native SIMD `.tar` / `.tar.gz` / `.tar.zst` (`extractor/sevenz.rs`, `extractor/tar.rs`, `extractor/mod.rs`)**:
+  - Added Longest-Processing-Time parallel `.7z` block workers (`open_random_read`) governed by storage seek-penalty limits and a `512 MB` (`SEVENZ_MAX_CONCURRENT_DICT_BYTES`) dictionary RAM ceiling, `Lzma2ReaderMt` + `AsyncFileWriterPool` for solid blocks, cross-block duplicate serialization, and stream-aligned `drain_7z_entry` skipping.
+  - Routed `.tar`, multi-member `pigz`/`.tar.gz` (`MultiGzDecoder` via `zlib-rs` SIMD), and multi-frame `.tar.zst` through a native streaming Rust extractor with `DirectoryCache`, `AsyncFileWriterPool`, and single-pass `hoist_single_root_dir`.
+- **Single-Pass Cancellable System `tar.exe` Inspection (`extractor/system_tar.rs`)**:
+  - Replaced three sequential `tar.exe` pre-scans with a single cancellable streaming `tar.exe -tvf` pass and fail-closed `parse_bsdtar_tvf_line` parser (rejecting symlinks, hardlinks, FIFOs, sockets, and device nodes mid-stream) plus fast `DirectoryCache` staged finalization.
+- **Expanded Verification**:
+  - Automated Rust test suite expanded from **57 to 90 unit tests (`90/90 passing`)**, verified alongside `0` Clippy warnings and `0` TypeScript errors.
+
+---
+
 ## ⚡ Highlights
 
 | Feature | Description | Architecture Component |
 |---|---|---|
+| **⚡ Multi-Core Seekable Extraction Engine (v3.0.0)** | Parallel Zstd `.bay`/`.bayg` frames, multi-core SIMD `zlib-rs` `.zip`, multi-block `.7z` + LZMA2-MT, native `.tar`/`.tar.gz`/`.tar.zst`, and async Win32 NTFS writer pools. | `extractor/`, `compressor/bay.rs` |
 | **🛡️ In-Place Archive Integrity & CRC-32 Tester** | High-throughput zero-disk-write stream verification engine validating container parity, CRC-32 checksums, and encrypted blocks with live UI telemetry. | `tester.rs` |
-| **🏎️ Ultra-Fast Gamer Preset (`.bayg`)** | Locked at Zstandard Level 3 with multi-core parallelism for maximum game installation and transfer throughput. | `compressor/bay.rs` |
-| **🛡️ Zip-Slip & Path Traversal Proof** | Multi-layer sanitization rejecting directory escapes (`..`), DOS device aliases (`CLOCK$`, `CONFIG$`, `CON`), NTFS ADS colons, and illegal characters. | `inspector/mod.rs` |
+| **🏎️ Ultra-Fast Gamer Preset (`.bayg`)** | Locked at Zstandard Level 3 with `8 MB` seekable frames for maximum multi-core game installation, repack, and transfer throughput. | `compressor/bay.rs`, `extractor/bay.rs` |
+| **🛡️ Zip-Slip & Path Traversal Proof** | Multi-layer sanitization rejecting directory escapes (`..`), DOS device aliases (`CLOCK$`, `CONFIG$`, `CON`), NTFS ADS colons, illegal characters, and external link/device entries. | `inspector/mod.rs`, `extractor/system_tar.rs` |
 | **⚡ 100k-File Virtualized UI** | Silky 60 FPS scrolling and $O(1)$ folder lookups using custom debounced virtual scrolling and memoized tree hierarchies. | `VirtualScrollList.tsx` |
-| **🔒 Streaming Chunked AEAD Encryption** | 4 MB chunked AES-256-GCM streaming with constant < 100 MB RAM footprint and cryptographic EOF truncation detection. | `crypto.rs` |
+| **🔒 Streaming Chunked AEAD Encryption** | 4 MB chunked AES-256-GCM streaming with async read-ahead ring pipeline (`PipedAesBufReader`), constant < 100 MB RAM footprint, and cryptographic EOF truncation detection. | `crypto.rs`, `extractor/bay.rs` |
 | **🪟 Windows 11 Native Context Menu** | In-process Win32 COM DLL (`IExplorerCommand`) top-level menu integration with MSIX Sparse Package identity and verified binary resolution. | `bayzip_shell.dll` |
-| **💾 Storage Bus-Aware Buffer Slicing** | Dynamic buffer calibration (NVMe 2 MB, SATA 1 MB, USB 512 KB) preventing controller lockups, platter thrashing, and RAW disk corruption. | `compressor/mod.rs` |
+| **💾 Storage Bus & Seek-Penalty Calibration** | Win32 IOCTL detection (`STORAGE_BUS_TYPE` + `StorageDeviceSeekPenaltyProperty`) scaling thread counts, NTFS preallocation, and buffers across NVMe, SATA SSD, HDD, and USB. | `inspector/hardware.rs`, `extractor/io.rs` |
 
 ---
 
@@ -101,41 +128,45 @@
 
 ## 💾 Storage-Calibrated Streaming I/O
 
-Bayzip inspects physical drive characteristics via Win32 IOCTL (`IOCTL_STORAGE_QUERY_PROPERTY`) to calibrate read slices and write buffers to the exact bus capabilities:
+Bayzip inspects physical drive characteristics via Win32 IOCTL (`IOCTL_STORAGE_QUERY_PROPERTY`) for both `STORAGE_BUS_TYPE` and `StorageDeviceSeekPenaltyProperty` (`PropertyId = 7`) to calibrate read slices, write buffers, NTFS `FileAllocationInfo` preallocation (`>= 64 KB`), and parallel extraction concurrency to the exact drive profile:
 
 ```mermaid
 flowchart TD
-    Drive[Target Drive Path] --> Query["Win32 IOCTL Query (IOCTL_STORAGE_QUERY_PROPERTY)"]
+    Drive[Target Drive Path] --> Query["Win32 IOCTL Query (IOCTL_STORAGE_QUERY_PROPERTY + SeekPenalty)"]
     
-    subgraph Bus Detection ["Bus Architecture Detection"]
-        Query --> Detect{STORAGE_BUS_TYPE}
+    subgraph Bus Detection ["Bus & Seek-Penalty Detection"]
+        Query --> Detect{STORAGE_BUS_TYPE & SeekPenalty}
         Detect -->|BusTypeUsb| USB["External USB Flash (BusTypeUsb)"]
-        Detect -->|BusTypeSata / ATAPI| SATA["SATA SSD / HDD (BusTypeSata)"]
+        Detect -->|BusTypeSata HDD| SATA_HDD["Internal SATA HDD (SeekPenalty = true)"]
+        Detect -->|BusTypeSata SSD| SATA_SSD["Internal SATA SSD (SeekPenalty = false)"]
         Detect -->|BusTypeNvme| NVME["PCIe M.2 NVMe SSD (BusTypeNvme)"]
         Detect -->|Network / UNC / Unknown| NET["Network Share / Remote (DRIVE_REMOTE)"]
     end
 
-    subgraph Read Slicing ["Source Read Slicing (f.read)"]
-        USB --> R_USB["256 KB Read Slice<br/>(Instant Cancel / Zero USB Stalls)"]
-        SATA --> R_SATA["512 KB Read Slice<br/>(Smooth Platter Throughput)"]
-        NVME --> R_NVME["1 MB Read Slice<br/>(Saturates PCIe Multi-GB Bus)"]
-        NET --> R_NET["256 KB Read Slice<br/>(Safe Network Buffer)"]
+    subgraph Read Slicing ["Read Slice & Extract Chunk"]
+        USB --> R_USB["256 KB Read Slice<br/>1 Writer | 16 MB In-Flight"]
+        SATA_HDD --> R_HDD["512 KB Read Slice<br/>1 Writer | 16 MB In-Flight"]
+        SATA_SSD --> R_SSD["512 KB Read Slice<br/>2-4 Writers | 32 MB In-Flight"]
+        NVME --> R_NVME["1 MB Read Slice<br/>2-6 Writers | 48 MB In-Flight"]
+        NET --> R_NET["256 KB Read Slice<br/>1 Writer | 16 MB In-Flight"]
     end
 
     subgraph Safe Buffer Capping ["Destination Write Capping (BufWriter)"]
         USB --> W_USB["512 KB Safe Cap<br/>(Prevents RAW Disks & Quick-Removal Freezes)"]
-        SATA --> W_SATA["1 MB Safe Cap<br/>(Prevents Platter Thrashing & Queue Congestion)"]
+        SATA_HDD --> W_HDD["1 MB Safe Cap<br/>(Sequential Writers Prevent Platter Thrashing)"]
+        SATA_SSD --> W_SSD["1 MB Calibrated Cap<br/>(Balanced SSD Queue & MFT Scaling)"]
         NVME --> W_NVME["2 MB Calibrated Cap<br/>(Flushes in 1–2 ms; Zero NVMe Queue Stalls)"]
         NET --> W_NET["512 KB Safe Cap<br/>(Prevents Packet Queue Overflows)"]
     end
 ```
 
-| Storage Medium | Bus Type | Read Slice | Write Buffer Cap | Flush Latency | Core Hardware Safeguard |
+| Storage Medium | Bus / Seek Profile | Read Slice | Write Buffer Cap | Extract Writers / In-Flight Budget | Core Hardware Safeguard |
 |---|:---:|:---:|:---:|:---:|---|
-| **External USB / Flash Drive** | `BusTypeUsb` | **256 KB** | **512 KB** | ~0.04 – 0.08s | Prevents Windows Quick-Removal lockups, 20s stalls, and RAW partition corruption |
-| **Internal Mechanical HDD / SATA SSD** | `BusTypeSata` | **512 KB** | **1 MB** | ~0.01 – 0.02s | Prevents mechanical platter head thrashing and disk queue congestion |
-| **Internal PCIe NVMe SSD (M.2)** | `BusTypeNvme` | **1 MB** | **2 MB** | ~0.001 – 0.002s | Maximum PCIe line rate; flushes in 1–2ms without controller queue saturation |
-| **Network Share / UNC / Fallback** | `DRIVE_REMOTE` | **256 KB** | **512 KB** | Safe generic | Prevents packet queue overflows and network driver latency |
+| **Internal PCIe NVMe SSD (M.2)** | `BusTypeNvme` / No Seek | **1 MB** | **2 MB** | **2–6** writers (`2–8` ZIP/7z/.bay workers) / **48 MB** | Maximum PCIe line rate without NTFS `$MFT` lock convoys |
+| **Internal SATA SSD** | `BusTypeSata` / No Seek | **512 KB** | **1 MB** | **2–4** writers (`2–6` ZIP/7z/.bay workers) / **32 MB** | Multi-queue SSD extraction without saturating AHCI/SATA channels |
+| **Internal Mechanical SATA HDD** | `BusTypeSata` / Seek Penalty | **512 KB** | **1 MB** | **1** writer (Sequential ZIP/7z) / **16 MB** | Keeps disk I/O sequential to prevent mechanical platter head thrashing |
+| **External USB / Flash Drive** | `BusTypeUsb` | **256 KB** | **512 KB** | **1** writer (Sequential ZIP/7z) / **16 MB** | Prevents Windows Quick-Removal lockups, stalls, and RAW corruption |
+| **Network Share / UNC / Fallback** | `DRIVE_REMOTE` | **256 KB** | **512 KB** | **1** writer / **16 MB** | Prevents packet queue overflows and remote handle stalls |
 
 ---
 
@@ -176,18 +207,18 @@ flowchart TD
 
 | Format | Extension | Create | Extract | Preview | Algorithms & Engines |
 |---|---|:---:|:---:|:---:|---|
-| **Bayzip** | `.bay` | ✅ | ✅ | ✅ | Zstandard (Levels 1–19), Brotli, LZ4 |
-| **Bayzip Gamer** | `.bayg` | ✅ | ✅ | ✅ | Zstd-Fast (Capped at Level 3 for Max Throughput) |
-| **ZIP** | `.zip` | ✅ | ✅ | ✅ | Deflate, Store (Zero-CPU Smart Bypass), BZip2 |
-| **7-Zip** | `.7z` | ✅ | ✅ | ✅ | LZMA2 Multi-Threaded |
-| **TAR** | `.tar` | ✅ | ✅ | ✅ | POSIX Tar (Store) |
-| **GZip / TarGz** | `.gz`, `.tgz` | — | ✅ | ✅ | Deflate / Tar |
-| **BZip2 / TarBz2** | `.bz2`, `.tar.bz2` | — | ✅ | ✅ | BZip2 / Tar |
-| **XZ / TarXz** | `.xz`, `.tar.xz` | — | ✅ | ✅ | LZMA2 / Tar |
-| **Zstandard Tar** | `.zst`, `.tar.zst` | — | ✅ | ✅ | Zstandard / Tar |
-| **ISO Image** | `.iso` | — | ✅ | ✅ | ISO 9660 Disc Image |
-| **Cabinet** | `.cab` | — | ✅ | ✅ | Microsoft Cabinet |
-| **RAR** | `.rar` | — | ✅ | ✅ | Uncompressed & Standard RAR via libarchive |
+| **Bayzip** | `.bay` | ✅ | ✅ | ✅ | Seekable Multi-Frame Zstandard (`16 MB` frames, Levels 1–19, parallel unpack), Brotli, LZ4, AES-256-GCM (`PipedAesBufReader`) |
+| **Bayzip Gamer** | `.bayg` | ✅ | ✅ | ✅ | Seekable Multi-Frame Zstd-Fast (`8 MB` frames, Level 3 cap, `2–8` core parallel unpack) |
+| **ZIP** | `.zip` | ✅ | ✅ | ✅ | Parallel Multi-Core (`2–8` NVMe / `2–6` SSD workers), `zlib-rs` SIMD Deflate, Store (Smart Media Bypass), BZip2 |
+| **7-Zip** | `.7z` | ✅ | ✅ | ✅ | Multi-Block Parallel Workers + `Lzma2ReaderMt`, `512 MB` Dict RAM Cap, AES-256 |
+| **TAR** | `.tar` | ✅ | ✅ | ✅ | Native Streaming Rust Engine + `AsyncFileWriterPool` + `DirectoryCache` |
+| **GZip / TarGz** | `.gz`, `.tgz`, `.tar.gz` | — | ✅ | ✅ | Native `zlib-rs` SIMD `MultiGzDecoder` (Multi-Member `pigz`) + Tar |
+| **Zstandard Tar** | `.zst`, `.tar.zst` | — | ✅ | ✅ | Native Multi-Frame Zstandard `Decoder` + Tar |
+| **BZip2 / TarBz2** | `.bz2`, `.tar.bz2` | — | ✅ | ✅ | Single-Pass Cancellable `tar.exe` Streaming Engine (BZip2 / Tar) |
+| **XZ / TarXz** | `.xz`, `.tar.xz` | — | ✅ | ✅ | Single-Pass Cancellable `tar.exe` Streaming Engine (LZMA2 / Tar) |
+| **ISO Image** | `.iso` | — | ✅ | ✅ | Single-Pass Cancellable `tar.exe` Streaming Engine (ISO 9660) |
+| **Cabinet** | `.cab` | — | ✅ | ✅ | Single-Pass Cancellable `tar.exe` Streaming Engine (Microsoft Cabinet) |
+| **RAR** | `.rar` | — | ✅ | ✅ | Single-Pass Cancellable `tar.exe` / libarchive with Link/Device Guard |
 
 ---
 

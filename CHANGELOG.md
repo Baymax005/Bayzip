@@ -2,6 +2,42 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v3.0.0] - 2026-11-20
+### Major Release — Multi-Core Storage-Aware Extraction Engine & Seekable `.bay` / `.bayg` Container (Phases 1–6)
+
+- **Phase 1 — Storage-Aware Win32 NTFS I/O, `DirectoryCache`, `AsyncFileWriterPool` & Byte Accounting (`inspector/hardware.rs`, `extractor/io.rs`, `extractor/mod.rs`)**:
+  - Extended `IOCTL_STORAGE_QUERY_PROPERTY` in `inspector/hardware.rs` with `StorageDeviceSeekPenaltyProperty` (`PropertyId = 7`, cached in `DRIVE_SEEK_PENALTY_CACHE`) and added `get_drive_seek_penalty`, `calculate_extract_writer_threads`, `calculate_extract_inflight_budget`, and `calculate_extract_chunk_size` to differentiate NVMe SSD (`2–6` writers / `48 MB` budget / `1 MB` chunk), SATA SSD (`2–4` writers / `32 MB` budget / `512 KB` chunk), and HDD/USB (`1` sequential writer / `16 MB` budget / `256 KB` or `512 KB` chunk).
+  - Created `src-tauri/src/extractor/io.rs` with Win32 `open_sequential_read` (`FILE_FLAG_SEQUENTIAL_SCAN`), `open_random_read` (`FILE_FLAG_RANDOM_ACCESS`), `preallocate_file` via Win32 `FileAllocationInfo` for payloads `>= 64 KB`, `create_output_file_fast`, `write_file_payload` (atomic overwrite fallback), `DirectoryCache` (`ensure_dir_tracked` / `ensure_parent_tracked`), and byte-budgeted `AsyncFileWriterPool` (`ASYNC_INMEMORY_MAX_BYTES = 2 MB`) with per-worker `ScopedPriorityGuard`, normalized case-duplicate serialization, and `abort_and_join()` rollback cleanup.
+  - Added atomic byte accounting (`ExtractionTaskGuard::bytes_extracted()`, `current_extraction_token()`, `record_extracted_bytes()`) in `src-tauri/src/extractor/mod.rs`.
+
+- **Phase 2 — Multi-Core Parallel `.zip` Extraction & SIMD `zlib-rs` (`Cargo.toml`, `extractor/zip.rs`)**:
+  - Switched `flate2` to `zlib-rs` SIMD acceleration (`default-features = false, features = ["zlib-rs"]`) and enabled `zip` features `["deflate-flate2", "flate2", "bzip2", "aes-crypto"]`.
+  - Upgraded `src-tauri/src/extractor/zip.rs` with zero-seek Pass 1 central-directory planning (`name_for_index`), case-insensitive duplicate resolution (last-wins), storage-aware parallel workers (`calculate_zip_worker_threads`: up to `8` on NVMe, `6` on SATA SSD, `1` sequential on HDD/USB), per-worker `open_random_read` handles with `ScopedPriorityGuard`, `DirectoryCache`, `write_file_payload` / `create_output_file_fast`, and Zip-Bomb `eof_check` guards.
+
+- **Phase 3 — Zero-Double-Buffer Pipelined `.bay` Extraction & Async AES Read-Ahead (`extractor/bay.rs`, `priority.rs`, `tester.rs`)**:
+  - Added `PipedAesBufReader` (`8 × 512 KB` recycled zeroized ring buffer read-ahead thread) in `src-tauri/src/extractor/bay.rs` to overlap AES-256-GCM decryption (`BAYENC\x03`) with zero-double-buffer `zstd::stream::Decoder::with_buffer` decompression and `AsyncFileWriterPool` writes.
+  - Switched `.bay` extraction to `open_sequential_read`, shared `DirectoryCache` helpers in `extractor/io.rs`, enforced `abort_and_join()` before rollback, hardened `.baypart` retry handling on transient `PermissionDenied`, and ensured clean Zstd EOF framing around unencrypted `BAYTOC\x02\x00` trailers (`extractor/bay.rs`, `tester.rs`).
+  - Added test-mode isolation (`IN_PRIORITY_UNIT_TEST` + `PriorityTestLockGuard`) in `src-tauri/src/priority.rs` so concurrent worker `ScopedPriorityGuard` invocations never interfere with priority unit tests.
+
+- **Phase 4 — Multi-Block Parallel `.7z` Extraction & Native SIMD `.tar` / `.tar.gz` / `.tar.zst` Pipeline (`extractor/sevenz.rs`, `extractor/tar.rs`, `extractor/mod.rs`, `lib.rs`)**:
+  - Upgraded `src-tauri/src/extractor/sevenz.rs` with `estimate_block_max_dict_bytes`, `calculate_7z_parallelism` (storage-aware block workers `8` NVMe / `6` SATA SSD / `1` HDD & USB + `512 MB` `SEVENZ_MAX_CONCURRENT_DICT_BYTES` dictionary RAM cap + `Lzma2ReaderMt`), Pass 1 archive planning (empty-block skipping, `DirectoryCache`, cross-block case-duplicate serialization), Longest-Processing-Time multi-block parallel workers with `open_random_read` & `ScopedPriorityGuard`, `AsyncFileWriterPool`, and solid-block alignment via `drain_7z_entry`.
+  - Upgraded `src-tauri/src/extractor/tar.rs` with `TarCompression` (`None`, `Gzip`, `Zstd` magic + extension detection), zero-double-buffer `flate2::bufread::MultiGzDecoder` (`zlib-rs` SIMD + multi-member `pigz`) and multi-frame `zstd::stream::Decoder::with_buffer`, `DirectoryCache`, `AsyncFileWriterPool`, and single-pass post-`finish()` `hoist_single_root_dir`.
+  - Updated `src-tauri/src/extractor/mod.rs` to route `.tar` / `.tgz` / `.tar.gz` / `.tar.zst` through `extract_tar_archive` first (with `extract_with_system_tar` fallback), narrowed `is_tar_or_rar` staging pre-scans to external formats (`Rar | Bzip2 | Xz | Iso | Cab`), and isolated cancellation tests via `IN_EXTRACTION_CANCEL_TEST`.
+
+- **Phase 5 — Single-Pass Cancellable System `tar.exe` Inspection & Fast Staged Finalization (`extractor/system_tar.rs`)**:
+  - Consolidated three redundant external `tar.exe` pre-scans (`-tf`, `-tvf`, RAR listing) into a single cancellable streaming `tar.exe -tvf` pass (`inspect_archive_with_system_tar` + `run_tar_streaming_lines`) while caching `entry_sizes` and `total_uncompressed_bytes`.
+  - Added fail-closed `parse_bsdtar_tvf_line` validation handling US/BSD, European, and ISO timestamps with filename space preservation while immediately aborting mid-stream on symlinks, hardlinks, FIFOs, sockets, and block/char device nodes.
+  - Upgraded `finalize_staged_extraction_inner` to use `DirectoryCache` and fast `safe_atomic_rename`.
+
+- **Phase 6 — RFC 8878 Multi-Frame Seekable `.bay` / `.bayg` Container & Parallel Multi-Core Zstd Extraction (`compressor/bay.rs`, `inspector/bay.rs`, `extractor/bay.rs`, `tester.rs`)**:
+  - Added `SeekableZstdWriter<W>` (`zstd::bulk::Compressor`) in `src-tauri/src/compressor/bay.rs` emitting independent compressed frames (`8 MB` for `.bayg` Gamer Preset, `16 MB` for standard `.bay`) followed by an RFC 8878 Zstd Seek Table skippable frame (`0x184D2A5E` / `0x8F92EAB1`) before the `BAYTOC\x02\x00` trailer on unencrypted Zstd archives (`compress_bay` and `headless_quick_compress_bay_items`).
+  - Added `ZstdSeekFrame`, `ZstdSeekTable`, `locate_bay_payload_end`, and `read_zstd_seek_table` in `src-tauri/src/inspector/bay.rs`, bounding unencrypted Zstd `list_bay_entries`, `preview_bay_entry_bytes`, and `tester.rs` (`test_unencrypted_zstd_bay`) decoders cleanly to `payload_end` across multi-frame streams.
+  - Added `calculate_bay_seekable_workers` and `ParallelSeekableZstdReader` in `src-tauri/src/extractor/bay.rs`, decoding independent frames in parallel across `2–8` `zstd::bulk::Decompressor` workers inside a `96 MB` bounded sliding window (`open_random_read` on SSD/NVMe vs. serialized `Mutex<File>` on HDD/USB, `ScopedPriorityGuard`) with seamless multi-frame fallback for legacy archives.
+
+### Verification
+- Verified **90/90 unit tests passing** (`cargo test --manifest-path src-tauri/Cargo.toml`), adding **33 new unit tests (#58–#90)** across Phases 1–6 (`inspector::hardware`, `extractor::io`, `extractor`, `extractor::zip`, `extractor::bay`, `extractor::sevenz`, `extractor::tar`, `extractor::system_tar`, and `inspector::bay`).
+- Verified zero compiler/linter errors across `cargo clippy --all-targets -- -D warnings` and `npx tsc --noEmit`.
+
 ## [v2.4.11] - 2026-11-19
 ### Architecture — Modular Extraction Engine (`src-tauri/src/extractor/`)
 - **Decomposed Monolithic `extractor.rs` (2,321 lines) into Focused Format Submodules**:
