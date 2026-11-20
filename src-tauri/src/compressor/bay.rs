@@ -11,6 +11,116 @@ use crate::crypto::ChunkedAesWriter;
 use super::{is_compression_cancelled, calculate_target_threads, calculate_zstd_level, get_io_buffers, is_gamer_preset};
 use super::utils::{is_precompressed_file, is_path_excluded, is_excluded_or_temp_artifact};
 
+pub const BAY_GAMER_SEEK_FRAME_SIZE: usize = 8 * 1024 * 1024; // 8 MB frames (.bayg)
+pub const BAY_STD_SEEK_FRAME_SIZE: usize = 16 * 1024 * 1024;  // 16 MB frames (.bay)
+
+/// Writes independent concatenated Zstd frames followed by an RFC 8878 Seekable Skippable Frame
+/// (`0x184D2A5E`, footer `0x8F92EAB1`) whenever 2 or more frames are emitted.
+pub struct SeekableZstdWriter<W: Write> {
+    inner: W,
+    compressor: zstd::bulk::Compressor<'static>,
+    frame_target_bytes: usize,
+    frame_buf: Vec<u8>,
+    comp_buf: Vec<u8>,
+    seek_entries: Vec<(u32, u32)>,
+}
+
+impl<W: Write> SeekableZstdWriter<W> {
+    pub fn new(
+        inner: W,
+        level: i32,
+        threads: u32,
+        include_checksum: bool,
+        frame_target_bytes: usize,
+    ) -> std::io::Result<Self> {
+        let mut compressor = zstd::bulk::Compressor::new(level)?;
+        let _ = compressor.multithread(threads);
+        let _ = compressor.include_checksum(include_checksum);
+        let clamped = frame_target_bytes.clamp(64 * 1024, 32 * 1024 * 1024);
+
+        Ok(Self {
+            inner,
+            compressor,
+            frame_target_bytes: clamped,
+            frame_buf: Vec::new(),
+            comp_buf: Vec::new(),
+            seek_entries: Vec::new(),
+        })
+    }
+
+    fn flush_frame(&mut self) -> std::io::Result<()> {
+        if self.frame_buf.is_empty() {
+            return Ok(());
+        }
+        let decomp_len = u32::try_from(self.frame_buf.len())
+            .map_err(|_| std::io::Error::other("Seekable Zstd frame uncompressed size exceeds u32"))?;
+        let bound = zstd::zstd_safe::compress_bound(self.frame_buf.len());
+        self.comp_buf.clear();
+        self.comp_buf.reserve(bound);
+
+        let written = self
+            .compressor
+            .compress_to_buffer(&self.frame_buf, &mut self.comp_buf)?;
+        let comp_len = u32::try_from(written)
+            .map_err(|_| std::io::Error::other("Seekable Zstd frame compressed size exceeds u32"))?;
+
+        self.inner.write_all(&self.comp_buf[..written])?;
+        self.seek_entries.push((comp_len, decomp_len));
+        self.frame_buf.clear();
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> std::io::Result<W> {
+        self.flush_frame()?;
+        if self.seek_entries.len() >= 2 {
+            let num_frames = u32::try_from(self.seek_entries.len())
+                .map_err(|_| std::io::Error::other("Seek table frame count exceeds u32"))?;
+            let payload_u64 = (self.seek_entries.len() as u64)
+                .checked_mul(8)
+                .and_then(|n| n.checked_add(9))
+                .ok_or_else(|| std::io::Error::other("Seek table size overflow"))?;
+            let table_payload_size = u32::try_from(payload_u64)
+                .map_err(|_| std::io::Error::other("Seek table size exceeds u32"))?;
+
+            self.inner.write_all(
+                &crate::inspector::bay::ZSTD_SEEKABLE_SKIPPABLE_MAGIC.to_le_bytes(),
+            )?;
+            self.inner.write_all(&table_payload_size.to_le_bytes())?;
+            for &(comp_sz, decomp_sz) in &self.seek_entries {
+                self.inner.write_all(&comp_sz.to_le_bytes())?;
+                self.inner.write_all(&decomp_sz.to_le_bytes())?;
+            }
+            self.inner.write_all(&num_frames.to_le_bytes())?;
+            self.inner.write_all(&[0u8])?;
+            self.inner.write_all(
+                &crate::inspector::bay::ZSTD_SEEKABLE_FOOTER_MAGIC.to_le_bytes(),
+            )?;
+        }
+        self.inner.flush()?;
+        Ok(self.inner)
+    }
+}
+
+impl<W: Write> Write for SeekableZstdWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut offset = 0usize;
+        while offset < buf.len() {
+            let avail = self.frame_target_bytes - self.frame_buf.len();
+            let take = avail.min(buf.len() - offset);
+            self.frame_buf.extend_from_slice(&buf[offset..offset + take]);
+            offset += take;
+            if self.frame_buf.len() >= self.frame_target_bytes {
+                self.flush_frame()?;
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 pub fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<ArchiveEntryItem>, depth: usize) {
     if depth > 32 { return; }
     if let Ok(m) = std::fs::symlink_metadata(dir) {
@@ -499,39 +609,82 @@ pub fn compress_bay(
                 threads = threads.min(8);
             }
 
-            let mut encoder = zstd::stream::Encoder::new(out_sink, zstd_level)
+            if pwd_trimmed.is_none() {
+                let frame_size = if is_gamer {
+                    BAY_GAMER_SEEK_FRAME_SIZE
+                } else {
+                    BAY_STD_SEEK_FRAME_SIZE
+                };
+                let mut encoder = SeekableZstdWriter::new(
+                    out_sink,
+                    zstd_level,
+                    threads as u32,
+                    !is_gamer,
+                    frame_size,
+                )
                 .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
-            let _ = encoder.multithread(threads as u32);
-            if is_gamer {
-                let _ = encoder.include_checksum(false);
+                write_bay_items(
+                    &ordered_files,
+                    output_path,
+                    &temp_final,
+                    &mut encoder,
+                    &mut read_buf,
+                    &mut bytes_processed,
+                    total_original,
+                    app,
+                    &mut last_emit,
+                    &mut toc_entries,
+                    excluded,
+                )?;
+                if is_compression_cancelled() {
+                    return Err("Compression cancelled by user".to_string());
+                }
+                encoder.write_all(&[0u8]).map_err(|e| format!("EOF marker write error: {}", e))?;
+                let _ = app.emit("compress_progress", CompressProgress {
+                    percent: 99.0,
+                    current_file: "Finalizing archive...".to_string(),
+                    bytes_processed,
+                    total_bytes: total_original,
+                });
+                let finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
+                let mut file_writer = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
+                write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+                    .map_err(|e| format!("Failed to write TOC: {}", e))?;
+            } else {
+                let mut encoder = zstd::stream::Encoder::new(out_sink, zstd_level)
+                    .map_err(|e| format!("Failed to initialize compression encoder: {}", e))?;
+                let _ = encoder.multithread(threads as u32);
+                if is_gamer {
+                    let _ = encoder.include_checksum(false);
+                }
+                write_bay_items(
+                    &ordered_files,
+                    output_path,
+                    &temp_final,
+                    &mut encoder,
+                    &mut read_buf,
+                    &mut bytes_processed,
+                    total_original,
+                    app,
+                    &mut last_emit,
+                    &mut toc_entries,
+                    excluded,
+                )?;
+                if is_compression_cancelled() {
+                    return Err("Compression cancelled by user".to_string());
+                }
+                encoder.write_all(&[0u8]).map_err(|e| format!("EOF marker write error: {}", e))?;
+                let _ = app.emit("compress_progress", CompressProgress {
+                    percent: 99.0,
+                    current_file: "Finalizing archive...".to_string(),
+                    bytes_processed,
+                    total_bytes: total_original,
+                });
+                let finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
+                let mut file_writer = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
+                write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+                    .map_err(|e| format!("Failed to write TOC: {}", e))?;
             }
-            write_bay_items(
-                &ordered_files,
-                output_path,
-                &temp_final,
-                &mut encoder,
-                &mut read_buf,
-                &mut bytes_processed,
-                total_original,
-                app,
-                &mut last_emit,
-                &mut toc_entries,
-                excluded,
-            )?;
-            if is_compression_cancelled() {
-                return Err("Compression cancelled by user".to_string());
-            }
-            encoder.write_all(&[0u8]).map_err(|e| format!("EOF marker write error: {}", e))?;
-            let _ = app.emit("compress_progress", CompressProgress {
-                percent: 99.0,
-                current_file: "Finalizing archive...".to_string(),
-                bytes_processed,
-                total_bytes: total_original,
-            });
-            let finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
-            let mut file_writer = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
-            write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
-                .map_err(|e| format!("Failed to write TOC: {}", e))?;
         }
 
         // Atomic rename of completed archive
@@ -573,20 +726,27 @@ pub fn headless_quick_compress_bay_items(paths: &[&Path], output_path: &Path, is
         let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
         let threads = calculate_target_threads(50, total_cores);
         let zstd_level = calculate_zstd_level(50, is_gamer);
-        let mut encoder = zstd::stream::Encoder::new(buf_out, zstd_level)
-            .map_err(|e| format!("Encoder error: {}", e))?;
-        let _ = encoder.multithread(threads as u32);
-        if is_gamer {
-            let _ = encoder.include_checksum(false);
-        }
+        let frame_size = if is_gamer {
+            BAY_GAMER_SEEK_FRAME_SIZE
+        } else {
+            BAY_STD_SEEK_FRAME_SIZE
+        };
+        let mut encoder = SeekableZstdWriter::new(
+            buf_out,
+            zstd_level,
+            threads as u32,
+            !is_gamer,
+            frame_size,
+        )
+        .map_err(|e| format!("Encoder error: {}", e))?;
 
         let mut read_buf = vec![0u8; read_buf_size];
 
         #[allow(clippy::too_many_arguments)]
-        fn add_dir<W: Write>(
+        fn add_dir<E: Write>(
             dir: &Path,
             base_parent: &Path,
-            encoder: &mut zstd::stream::Encoder<W>,
+            encoder: &mut E,
             read_buf: &mut [u8],
             depth: usize,
             toc_entries: &mut Vec<ArchiveEntryItem>,

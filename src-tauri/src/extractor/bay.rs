@@ -1,22 +1,36 @@
-use std::io::{BufRead, BufReader, BufWriter, Read, Seek, Write};
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::time::Instant;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use zeroize::Zeroize;
 
 use crate::crypto::ChunkedAesReader;
+use crate::inspector::bay::{
+    locate_bay_payload_end,
+    read_zstd_seek_table,
+    ZstdSeekFrame,
+    ZstdSeekTable,
+};
 use crate::inspector::{
     clear_readonly,
+    get_drive_bus_kind,
+    get_drive_seek_penalty,
     get_optimal_extract_chunk_size,
     get_single_root_dir,
     safe_atomic_rename,
     sanitize_archive_path,
+    DriveBusKind,
 };
 use crate::priority::ScopedPriorityGuard;
+use crate::types::TaskCancelToken;
 use super::{current_extraction_token, is_extraction_cancelled};
 use super::io::{
     create_output_file_fast,
+    open_random_read,
     open_sequential_read,
     AsyncFileWriterPool,
     DirectoryCache,
@@ -29,6 +43,369 @@ use super::utils::{
     is_path_excluded,
     strip_root_component,
 };
+
+/// Computes optimal worker threads and bounded decoded-frame sliding window slots for
+/// parallel seekable Zstd extraction based on source drive profile and frame RAM size.
+pub fn calculate_bay_seekable_workers(
+    bus: DriveBusKind,
+    incurs_seek_penalty: bool,
+    total_cores: usize,
+    frame_count: usize,
+    max_decomp_frame_bytes: usize,
+) -> (usize, usize) {
+    if frame_count < 2 || total_cores <= 1 {
+        return (1, 1);
+    }
+
+    let workers = match bus {
+        DriveBusKind::Nvme => total_cores.clamp(2, 8).min(frame_count),
+        DriveBusKind::Sata if !incurs_seek_penalty => total_cores.clamp(2, 6).min(frame_count),
+        DriveBusKind::Sata | DriveBusKind::UsbRemovable | DriveBusKind::Unknown => {
+            total_cores.clamp(2, 4).min(frame_count)
+        }
+    };
+
+    let mem_slots = (96usize * 1024 * 1024)
+        .checked_div(max_decomp_frame_bytes)
+        .unwrap_or(12)
+        .max(2);
+    let window_slots = (workers + 2).min(12).min(mem_slots).max(2);
+    let effective_workers = workers.min(window_slots).max(1);
+    (effective_workers, window_slots)
+}
+
+struct SeekableDecodeState {
+    next_dispatch: usize,
+    next_deliver: usize,
+    ready: BTreeMap<usize, Vec<u8>>,
+    recycled: Vec<Vec<u8>>,
+    first_error: Option<String>,
+    aborted: bool,
+}
+
+struct SeekableShared {
+    state: Mutex<SeekableDecodeState>,
+    cv: Condvar,
+    frames: Vec<ZstdSeekFrame>,
+    window_slots: usize,
+    cancel_token: Option<TaskCancelToken>,
+    sequential_file: Option<Mutex<File>>,
+}
+
+/// Decodes independent RFC 8878 Seekable Zstd frames in parallel across CPU cores using
+/// a memory-bounded sliding window and delivers uncompressed bytes strictly in frame order.
+struct ParallelSeekableZstdReader {
+    shared: Arc<SeekableShared>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+    current_buf: Vec<u8>,
+    offset: usize,
+    holding_frame: bool,
+}
+
+fn is_seekable_cancelled(cancel_token: &Option<TaskCancelToken>) -> bool {
+    match cancel_token {
+        Some(token) => token.is_cancelled(),
+        None => is_extraction_cancelled(),
+    }
+}
+
+fn seekable_worker_loop(shared: Arc<SeekableShared>, archive_path: PathBuf) {
+    let _priority_guard = ScopedPriorityGuard::new();
+    let mut decompressor = match zstd::bulk::Decompressor::new() {
+        Ok(d) => d,
+        Err(e) => {
+            if let Ok(mut st) = shared.state.lock() {
+                if st.first_error.is_none() {
+                    st.first_error = Some(format!("Failed to create Zstd decompressor: {}", e));
+                }
+                st.aborted = true;
+                shared.cv.notify_all();
+            }
+            return;
+        }
+    };
+
+    let mut local_random_file = if shared.sequential_file.is_none() {
+        match open_random_read(&archive_path) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                if let Ok(mut st) = shared.state.lock() {
+                    if st.first_error.is_none() {
+                        st.first_error = Some(format!("Failed to open .bay archive in worker: {}", e));
+                    }
+                    st.aborted = true;
+                    shared.cv.notify_all();
+                }
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut comp_buf: Vec<u8> = Vec::new();
+
+    loop {
+        let (frame_idx, mut decomp_buf) = {
+            let mut st = match shared.state.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            loop {
+                if st.aborted || is_seekable_cancelled(&shared.cancel_token) {
+                    st.aborted = true;
+                    shared.cv.notify_all();
+                    return;
+                }
+                if st.next_dispatch >= shared.frames.len() {
+                    return;
+                }
+                if st.next_dispatch < st.next_deliver.saturating_add(shared.window_slots) {
+                    let idx = st.next_dispatch;
+                    st.next_dispatch += 1;
+                    let reused = st.recycled.pop().unwrap_or_default();
+                    break (idx, reused);
+                }
+                let (guard, _) = shared
+                    .cv
+                    .wait_timeout(st, Duration::from_millis(50))
+                    .unwrap_or_else(|e| e.into_inner());
+                st = guard;
+            }
+        };
+
+        let frame = shared.frames[frame_idx];
+        comp_buf.resize(frame.comp_size as usize, 0);
+
+        let read_res = if let Some(ref seq_mutex) = shared.sequential_file {
+            let mut guard = match seq_mutex.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    if let Ok(mut st) = shared.state.lock() {
+                        if st.first_error.is_none() {
+                            st.first_error = Some("Sequential file lock poisoned".to_string());
+                        }
+                        st.aborted = true;
+                        shared.cv.notify_all();
+                    }
+                    return;
+                }
+            };
+            guard
+                .seek(SeekFrom::Start(frame.comp_offset))
+                .and_then(|_| guard.read_exact(&mut comp_buf))
+        } else {
+            let f = local_random_file
+                .as_mut()
+                .expect("random-access worker handle initialized");
+            f.seek(SeekFrom::Start(frame.comp_offset))
+                .and_then(|_| f.read_exact(&mut comp_buf))
+        };
+
+        if let Err(e) = read_res {
+            if let Ok(mut st) = shared.state.lock() {
+                if st.first_error.is_none() {
+                    st.first_error = Some(format!("Failed to read .bay frame {}: {}", frame_idx, e));
+                }
+                st.aborted = true;
+                shared.cv.notify_all();
+            }
+            return;
+        }
+
+        let expected_decomp = frame.decomp_size as usize;
+        decomp_buf.clear();
+        if decomp_buf.capacity() < expected_decomp {
+            decomp_buf.reserve(expected_decomp - decomp_buf.capacity());
+        }
+
+        match decompressor.decompress_to_buffer(&comp_buf, &mut decomp_buf) {
+            Ok(decoded_len) if decoded_len == expected_decomp => {}
+            Ok(decoded_len) => {
+                if let Ok(mut st) = shared.state.lock() {
+                    if st.first_error.is_none() {
+                        st.first_error = Some(format!(
+                            "Corrupted .bay frame {}: expected {} bytes, decoded {} bytes",
+                            frame_idx, expected_decomp, decoded_len
+                        ));
+                    }
+                    st.aborted = true;
+                    shared.cv.notify_all();
+                }
+                return;
+            }
+            Err(e) => {
+                if let Ok(mut st) = shared.state.lock() {
+                    if st.first_error.is_none() {
+                        st.first_error = Some(format!(
+                            "Zstd decompression error in .bay frame {}: {}",
+                            frame_idx, e
+                        ));
+                    }
+                    st.aborted = true;
+                    shared.cv.notify_all();
+                }
+                return;
+            }
+        }
+
+        let mut st = match shared.state.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if st.aborted {
+            return;
+        }
+        st.ready.insert(frame_idx, decomp_buf);
+        shared.cv.notify_all();
+    }
+}
+
+impl ParallelSeekableZstdReader {
+    fn new(
+        archive_path: &Path,
+        seek_table: ZstdSeekTable,
+        worker_count: usize,
+        window_slots: usize,
+        sequential_reads: bool,
+    ) -> std::io::Result<Self> {
+        let sequential_file = if sequential_reads {
+            Some(Mutex::new(open_sequential_read(archive_path)?))
+        } else {
+            None
+        };
+
+        let shared = Arc::new(SeekableShared {
+            state: Mutex::new(SeekableDecodeState {
+                next_dispatch: 0,
+                next_deliver: 0,
+                ready: BTreeMap::new(),
+                recycled: Vec::new(),
+                first_error: None,
+                aborted: false,
+            }),
+            cv: Condvar::new(),
+            frames: seek_table.frames,
+            window_slots: window_slots.max(2),
+            cancel_token: current_extraction_token(),
+            sequential_file,
+        });
+
+        let mut workers = Vec::with_capacity(worker_count.max(1));
+        for _ in 0..worker_count.max(1) {
+            let shared_clone = Arc::clone(&shared);
+            let path_clone = archive_path.to_path_buf();
+            workers.push(std::thread::spawn(move || {
+                seekable_worker_loop(shared_clone, path_clone);
+            }));
+        }
+
+        Ok(Self {
+            shared,
+            workers,
+            current_buf: Vec::new(),
+            offset: 0,
+            holding_frame: false,
+        })
+    }
+}
+
+impl Read for ParallelSeekableZstdReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            if self.offset < self.current_buf.len() {
+                let avail = &self.current_buf[self.offset..];
+                let n = avail.len().min(buf.len());
+                buf[..n].copy_from_slice(&avail[..n]);
+                self.offset += n;
+                return Ok(n);
+            }
+
+            let mut st = self
+                .shared
+                .state
+                .lock()
+                .map_err(|_| std::io::Error::other("Parallel seekable reader lock poisoned"))?;
+
+            if self.holding_frame {
+                let mut recycled = std::mem::take(&mut self.current_buf);
+                recycled.clear();
+                if st.recycled.len() < self.shared.window_slots {
+                    st.recycled.push(recycled);
+                }
+                self.offset = 0;
+                self.holding_frame = false;
+                st.next_deliver += 1;
+                self.shared.cv.notify_all();
+            }
+
+            loop {
+                if is_seekable_cancelled(&self.shared.cancel_token) {
+                    st.aborted = true;
+                    if st.first_error.is_none() {
+                        st.first_error = Some("Extraction cancelled by user".to_string());
+                    }
+                    self.shared.cv.notify_all();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "Extraction cancelled by user",
+                    ));
+                }
+
+                if let Some(ref err) = st.first_error {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        err.clone(),
+                    ));
+                }
+
+                if st.next_deliver >= self.shared.frames.len() {
+                    return Ok(0);
+                }
+
+                let deliver_idx = st.next_deliver;
+                if let Some(next_buf) = st.ready.remove(&deliver_idx) {
+                    self.current_buf = next_buf;
+                    self.offset = 0;
+                    self.holding_frame = true;
+                    break;
+                }
+
+                if st.aborted {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Parallel seekable Zstd extraction aborted",
+                    ));
+                }
+
+                let (guard, _) = self
+                    .shared
+                    .cv
+                    .wait_timeout(st, Duration::from_millis(50))
+                    .unwrap_or_else(|e| e.into_inner());
+                st = guard;
+            }
+        }
+    }
+}
+
+impl Drop for ParallelSeekableZstdReader {
+    fn drop(&mut self) {
+        if let Ok(mut st) = self.shared.state.lock() {
+            st.aborted = true;
+            st.ready.clear();
+            st.recycled.clear();
+        }
+        self.shared.cv.notify_all();
+        for handle in self.workers.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
 
 /// Decouples AES-256-GCM chunk decryption (`ChunkedAesReader`) onto a dedicated read-ahead
 /// thread using a fixed-capacity ring of recycled `512 KB` buffers (`4 MB` total ring)
@@ -719,13 +1096,11 @@ pub fn extract_bay_archive(
         } else {
             7
         };
-        file.seek(std::io::SeekFrom::Start(offset))
-            .map_err(|e| e.to_string())?;
-        let decoder = zstd::stream::Decoder::with_buffer(file)
-            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?
-            .single_frame();
-        extract_bay_stream(
-            decoder,
+        extract_unencrypted_zstd_bay(
+            file.into_inner(),
+            offset,
+            read_cap,
+            archive_path,
             dest_dir,
             total_expected_bytes,
             app,
@@ -747,13 +1122,11 @@ pub fn extract_bay_archive(
         )
     } else {
         // Standard Zstd
-        file.seek(std::io::SeekFrom::Start(0))
-            .map_err(|e| e.to_string())?;
-        let decoder = zstd::stream::Decoder::with_buffer(file)
-            .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?
-            .single_frame();
-        extract_bay_stream(
-            decoder,
+        extract_unencrypted_zstd_bay(
+            file.into_inner(),
+            0,
+            read_cap,
+            archive_path,
             dest_dir,
             total_expected_bytes,
             app,
@@ -761,6 +1134,72 @@ pub fn extract_bay_archive(
             excluded,
         )
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_unencrypted_zstd_bay(
+    mut raw: File,
+    offset: u64,
+    read_cap: usize,
+    archive_path: &Path,
+    dest_dir: &Path,
+    total_expected_bytes: u64,
+    app: Option<&AppHandle>,
+    single_root_prefix: Option<&str>,
+    excluded: Option<&std::collections::HashSet<String>>,
+) -> Result<Vec<String>, String> {
+    let file_len = raw.metadata().map(|m| m.len()).unwrap_or(0);
+    let payload_end = locate_bay_payload_end(&mut raw, file_len);
+
+    if let Some(seek_table) = read_zstd_seek_table(&mut raw, offset, payload_end) {
+        let src_bus = get_drive_bus_kind(archive_path);
+        let src_seek = get_drive_seek_penalty(archive_path);
+        let total_cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let (workers, window_slots) = calculate_bay_seekable_workers(
+            src_bus,
+            src_seek,
+            total_cores,
+            seek_table.frames.len(),
+            seek_table.max_decomp_frame_bytes,
+        );
+        if workers >= 2 {
+            drop(raw);
+            let sequential_reads =
+                src_seek || matches!(src_bus, DriveBusKind::UsbRemovable | DriveBusKind::Unknown);
+            let parallel_reader = ParallelSeekableZstdReader::new(
+                archive_path,
+                seek_table,
+                workers,
+                window_slots,
+                sequential_reads,
+            )
+            .map_err(|e| format!("Failed to initialize parallel .bay reader: {}", e))?;
+            return extract_bay_stream(
+                parallel_reader,
+                dest_dir,
+                total_expected_bytes,
+                app,
+                single_root_prefix,
+                excluded,
+            );
+        }
+    }
+
+    raw.seek(SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
+    let bounded = BufReader::with_capacity(read_cap, raw.take(payload_end.saturating_sub(offset)));
+    let decoder = zstd::stream::Decoder::with_buffer(bounded)
+        .map_err(|e| format!("Failed to initialize zstd decoder: {}", e))?;
+    extract_bay_stream(
+        decoder,
+        dest_dir,
+        total_expected_bytes,
+        app,
+        single_root_prefix,
+        excluded,
+    )
 }
 
 #[cfg(test)]
@@ -1161,6 +1600,227 @@ mod tests {
         let (_, _, enc_test_errors) =
             crate::tester::test_bay_archive(&enc_bay, Some(pwd), None).unwrap();
         assert!(enc_test_errors.is_empty(), "Unexpected enc test errors: {:?}", enc_test_errors);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_calculate_bay_seekable_workers_by_storage_and_memory_budget() {
+        // Single-frame or single-core stays 1 worker
+        assert_eq!(
+            calculate_bay_seekable_workers(DriveBusKind::Nvme, false, 16, 1, 16 * 1024 * 1024),
+            (1, 1)
+        );
+        assert_eq!(
+            calculate_bay_seekable_workers(DriveBusKind::Nvme, false, 1, 8, 16 * 1024 * 1024),
+            (1, 1)
+        );
+
+        // NVMe 8 MB (.bayg) frames across 16 cores -> 8 workers, 10 window slots (<= 96 MB)
+        assert_eq!(
+            calculate_bay_seekable_workers(DriveBusKind::Nvme, false, 16, 12, 8 * 1024 * 1024),
+            (8, 10)
+        );
+
+        // NVMe 16 MB (.bay) frames -> 96 MB / 16 MB = 6 window slots, workers capped at 6
+        assert_eq!(
+            calculate_bay_seekable_workers(DriveBusKind::Nvme, false, 16, 12, 16 * 1024 * 1024),
+            (6, 6)
+        );
+
+        // SATA SSD caps at 6 workers; HDD/USB allow 2-4 decode workers with sequential reads
+        assert_eq!(
+            calculate_bay_seekable_workers(DriveBusKind::Sata, false, 16, 12, 8 * 1024 * 1024),
+            (6, 8)
+        );
+        assert_eq!(
+            calculate_bay_seekable_workers(DriveBusKind::Sata, true, 16, 12, 8 * 1024 * 1024),
+            (4, 6)
+        );
+        assert_eq!(
+            calculate_bay_seekable_workers(
+                DriveBusKind::UsbRemovable,
+                true,
+                16,
+                12,
+                8 * 1024 * 1024
+            ),
+            (4, 6)
+        );
+    }
+
+    #[test]
+    fn test_phase6_seekable_multiframe_bay_parallel_extract_preview_tester_and_corruption_rollback() {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test_phase6_seekable_bay");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let bay_path = base.join("seekable.bay");
+        let dest_dir = base.join("out");
+
+        // Build ~1.5 MB pseudo-random payload to span multiple 256 KB Zstd frames
+        let mut x: u64 = 0xD1B5_4A32_D192_ED03;
+        let mut span_data = vec![0u8; 1536 * 1024];
+        for chunk in span_data.as_chunks_mut::<8>().0 {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            let v = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+            chunk.copy_from_slice(&v.to_le_bytes());
+        }
+
+        {
+            let mut raw = File::create(&bay_path).unwrap();
+            raw.write_all(b"BAYZIP\x02\x00").unwrap();
+            let mut enc =
+                crate::compressor::bay::SeekableZstdWriter::new(raw, 1, 1, true, 256 * 1024)
+                    .unwrap();
+            write_bay_file_entry(&mut enc, "first.txt", b"frame-zero-entry");
+            write_bay_file_entry(&mut enc, "mid/span.bin", &span_data);
+            write_bay_file_entry(&mut enc, "later/tail.txt", b"tail-frame-entry-ok");
+            enc.write_all(&[0u8]).unwrap();
+            let mut raw = enc.finish().unwrap();
+
+            let toc = vec![
+                crate::types::ArchiveEntryItem {
+                    name: "first.txt".to_string(),
+                    size: 16,
+                    is_dir: false,
+                },
+                crate::types::ArchiveEntryItem {
+                    name: "mid/span.bin".to_string(),
+                    size: span_data.len() as u64,
+                    is_dir: false,
+                },
+                crate::types::ArchiveEntryItem {
+                    name: "later/tail.txt".to_string(),
+                    size: 19,
+                    is_dir: false,
+                },
+            ];
+            crate::compressor::bay::write_bay_toc_trailer(&mut raw, &toc, None).unwrap();
+        }
+
+        // Verify seek table & BAYTOC metadata
+        let seek_table = {
+            let mut f = File::open(&bay_path).unwrap();
+            let file_len = f.metadata().unwrap().len();
+            let payload_end = locate_bay_payload_end(&mut f, file_len);
+            read_zstd_seek_table(&mut f, 8, payload_end).unwrap()
+        };
+        assert!(seek_table.frames.len() >= 6);
+        assert!(crate::inspector::has_instant_bay_toc(&bay_path));
+
+        // Verify parallel multi-core extraction
+        let guard = ExtractionTaskGuard::new();
+        let extracted = extract_bay_archive(&bay_path, &dest_dir, None, None, None, None).unwrap();
+        assert_eq!(extracted.len(), 3);
+        assert_eq!(
+            std::fs::read_to_string(dest_dir.join("first.txt")).unwrap(),
+            "frame-zero-entry"
+        );
+        assert_eq!(
+            std::fs::read(dest_dir.join("mid/span.bin")).unwrap(),
+            span_data
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest_dir.join("later/tail.txt")).unwrap(),
+            "tail-frame-entry-ok"
+        );
+        assert_eq!(
+            guard.bytes_extracted(),
+            (16 + span_data.len() + 19) as u64
+        );
+
+        // Verify archive tester passes across all seekable frames + skippable table
+        let (tested_count, tested_bytes, test_errors) =
+            crate::tester::test_bay_archive(&bay_path, None, None).unwrap();
+        assert!(test_errors.is_empty(), "Unexpected test errors: {:?}", test_errors);
+        assert_eq!(tested_count, 3);
+        assert_eq!(tested_bytes, (16 + span_data.len() + 19) as u64);
+
+        // Verify bounded preview reads entry from later frame accurately
+        let (preview_bytes, preview_sz) =
+            crate::inspector::bay::preview_bay_entry_bytes(&bay_path, "later/tail.txt", None)
+                .unwrap();
+        assert_eq!(preview_sz, 19);
+        assert_eq!(preview_bytes, b"tail-frame-entry-ok");
+
+        // Verify corruption in frame #3 fails checksum/decode and rolls back cleanly
+        let corrupt_bay = base.join("corrupt_seekable.bay");
+        let corrupt_out = base.join("out_corrupt");
+        let mut raw_bytes = std::fs::read(&bay_path).unwrap();
+        let f3 = seek_table.frames[3];
+        let flip_idx = (f3.comp_offset as usize) + (f3.comp_size as usize).saturating_sub(2);
+        raw_bytes[flip_idx] ^= 0xFF;
+        std::fs::write(&corrupt_bay, &raw_bytes).unwrap();
+
+        let corrupt_res = extract_bay_archive(&corrupt_bay, &corrupt_out, None, None, None, None);
+        assert!(corrupt_res.is_err());
+        assert!(!corrupt_out.join("first.txt").exists());
+        assert!(!corrupt_out.join("mid/span.bin").exists());
+        assert!(!corrupt_out.join("later/tail.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_phase6_headless_gamer_preset_creates_multiframe_8mb_seekable_bayg() {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test_phase6_gamer_bayg");
+        let _ = std::fs::remove_dir_all(&base);
+        let src_dir = base.join("game_assets");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        // Write ~9 MB deterministic semi-compressible payload (> 8 MB gamer frame threshold)
+        let total_len = 9 * 1024 * 1024 + 64 * 1024;
+        let mut payload = vec![0u8; total_len];
+        for (i, chunk) in payload.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let v = ((i as u32).wrapping_mul(0x9E37_79B9) & 0x0FFF_0FFF).to_le_bytes();
+            chunk.copy_from_slice(&v);
+        }
+        std::fs::write(src_dir.join("level.pak"), &payload).unwrap();
+        std::fs::write(src_dir.join("manifest.txt"), b"gamer-preset-8mb").unwrap();
+
+        let bayg_path = base.join("assets.bayg");
+        crate::compressor::bay::headless_quick_compress_bay_items(
+            &[src_dir.as_path()],
+            &bayg_path,
+            true,
+        )
+        .unwrap();
+
+        // Confirm >= 2 frames were written using the 8 MB gamer frame ceiling
+        let seek_table = {
+            let mut f = File::open(&bayg_path).unwrap();
+            let file_len = f.metadata().unwrap().len();
+            let payload_end = locate_bay_payload_end(&mut f, file_len);
+            read_zstd_seek_table(&mut f, 8, payload_end).unwrap()
+        };
+        assert!(seek_table.frames.len() >= 2);
+        assert!(seek_table.max_decomp_frame_bytes <= 8 * 1024 * 1024);
+
+        let dest_dir = base.join("out");
+        let guard = ExtractionTaskGuard::new();
+        let files = extract_bay_archive(&bayg_path, &dest_dir, None, None, None, None).unwrap();
+        assert_eq!(files.len(), 3); // 1 dir + 2 files
+        assert_eq!(
+            std::fs::read(dest_dir.join("game_assets/level.pak")).unwrap(),
+            payload
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest_dir.join("game_assets/manifest.txt")).unwrap(),
+            "gamer-preset-8mb"
+        );
+        assert!(guard.bytes_extracted() > payload.len() as u64);
+
+        let (_, _, errors) = crate::tester::test_bay_archive(&bayg_path, None, None).unwrap();
+        assert!(errors.is_empty(), "Unexpected gamer bayg test errors: {:?}", errors);
 
         let _ = std::fs::remove_dir_all(&base);
     }

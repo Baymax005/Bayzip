@@ -84,6 +84,142 @@ pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem
 /// Maximum allowable memory allocation for archive Table of Contents (TOC) metadata (64 MB).
 pub const MAX_TOC_SIZE: u64 = 64 * 1024 * 1024;
 
+pub const ZSTD_SEEKABLE_SKIPPABLE_MAGIC: u32 = 0x184D_2A5E;
+pub const ZSTD_SEEKABLE_FOOTER_MAGIC: u32 = 0x8F92_EAB1;
+pub const MAX_SEEKABLE_FRAMES: usize = 1_000_000;
+pub const MAX_SEEKABLE_FRAME_BYTES: u32 = 64 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZstdSeekFrame {
+    pub comp_offset: u64,
+    pub comp_size: u32,
+    pub decomp_offset: u64,
+    pub decomp_size: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZstdSeekTable {
+    pub frames: Vec<ZstdSeekFrame>,
+    pub total_decompressed: u64,
+    pub max_decomp_frame_bytes: usize,
+}
+
+/// Returns the byte offset where compressed payload ends (stripping a valid `BAYTOC\x02\x00`
+/// trailer if present at EOF, otherwise returning `file_len`).
+pub fn locate_bay_payload_end<R: Read + Seek>(reader: &mut R, file_len: u64) -> u64 {
+    if file_len < 16 {
+        return file_len;
+    }
+    if reader.seek(std::io::SeekFrom::End(-8)).is_err() {
+        return file_len;
+    }
+    let mut magic = [0u8; 8];
+    if reader.read_exact(&mut magic).is_err() || &magic != b"BAYTOC\x02\x00" {
+        return file_len;
+    }
+    if reader.seek(std::io::SeekFrom::End(-16)).is_err() {
+        return file_len;
+    }
+    let mut len_bytes = [0u8; 8];
+    if reader.read_exact(&mut len_bytes).is_err() {
+        return file_len;
+    }
+    let toc_len = u64::from_le_bytes(len_bytes);
+    if toc_len > 0 && toc_len <= MAX_TOC_SIZE && toc_len <= file_len.saturating_sub(16) {
+        file_len - 16 - toc_len
+    } else {
+        file_len
+    }
+}
+
+/// Parses an RFC 8878 Zstd Seekable skippable frame (`0x184D2A5E`, footer `0x8F92EAB1`) located
+/// immediately before `payload_end`, validating frame bounds and exact compressed-offset alignment.
+pub fn read_zstd_seek_table<R: Read + Seek>(
+    reader: &mut R,
+    stream_start: u64,
+    payload_end: u64,
+) -> Option<ZstdSeekTable> {
+    if payload_end < stream_start.saturating_add(17) {
+        return None;
+    }
+    reader.seek(std::io::SeekFrom::Start(payload_end - 9)).ok()?;
+    let mut footer = [0u8; 9];
+    reader.read_exact(&mut footer).ok()?;
+
+    let footer_magic = u32::from_le_bytes([footer[5], footer[6], footer[7], footer[8]]);
+    if footer_magic != ZSTD_SEEKABLE_FOOTER_MAGIC {
+        return None;
+    }
+
+    let num_frames = u32::from_le_bytes([footer[0], footer[1], footer[2], footer[3]]) as usize;
+    let descriptor = footer[4];
+    if !(2..=MAX_SEEKABLE_FRAMES).contains(&num_frames) || (descriptor & 0x7F) != 0 {
+        return None;
+    }
+
+    let entry_size: u64 = if (descriptor & 0x80) != 0 { 12 } else { 8 };
+    let table_payload_size = (num_frames as u64).checked_mul(entry_size)?.checked_add(9)?;
+    if table_payload_size > u32::MAX as u64 {
+        return None;
+    }
+    let skippable_total = table_payload_size.checked_add(8)?;
+    let skippable_start = payload_end.checked_sub(skippable_total)?;
+    if skippable_start < stream_start {
+        return None;
+    }
+
+    reader.seek(std::io::SeekFrom::Start(skippable_start)).ok()?;
+    let mut hdr = [0u8; 8];
+    reader.read_exact(&mut hdr).ok()?;
+    let skippable_magic = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
+    let skippable_payload_len = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]);
+    if skippable_magic != ZSTD_SEEKABLE_SKIPPABLE_MAGIC
+        || skippable_payload_len != table_payload_size as u32
+    {
+        return None;
+    }
+
+    let entries_byte_len = num_frames.checked_mul(entry_size as usize)?;
+    let mut table_buf = vec![0u8; entries_byte_len];
+    reader.read_exact(&mut table_buf).ok()?;
+
+    let mut frames = Vec::with_capacity(num_frames);
+    let mut comp_cursor = stream_start;
+    let mut decomp_cursor = 0u64;
+    let mut max_decomp = 0usize;
+    let stride = entry_size as usize;
+
+    for chunk in table_buf.chunks_exact(stride) {
+        let comp_size = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let decomp_size = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+        if comp_size == 0
+            || comp_size > MAX_SEEKABLE_FRAME_BYTES
+            || decomp_size > MAX_SEEKABLE_FRAME_BYTES
+        {
+            return None;
+        }
+        frames.push(ZstdSeekFrame {
+            comp_offset: comp_cursor,
+            comp_size,
+            decomp_offset: decomp_cursor,
+            decomp_size,
+        });
+        comp_cursor = comp_cursor.checked_add(comp_size as u64)?;
+        decomp_cursor = decomp_cursor.checked_add(decomp_size as u64)?;
+        max_decomp = max_decomp.max(decomp_size as usize);
+    }
+
+    if comp_cursor != skippable_start {
+        return None;
+    }
+
+    Some(ZstdSeekTable {
+        frames,
+        total_decompressed: decomp_cursor,
+        max_decomp_frame_bytes: max_decomp,
+    })
+}
+
 pub trait BayTrailerSource {
     fn with_file<R, F: FnOnce(&mut File) -> Result<R, String>>(&mut self, f: F) -> Result<R, String>;
 }
@@ -359,8 +495,11 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
         list_bay_stream_entries(decoder)
     } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let payload_end = locate_bay_payload_end(&mut file, file_len);
         let _ = file.seek(std::io::SeekFrom::Start(offset));
-        if let Ok(decoder) = zstd::stream::Decoder::new(file) {
+        let bounded = file.take(payload_end.saturating_sub(offset));
+        if let Ok(decoder) = zstd::stream::Decoder::new(bounded) {
             list_bay_stream_entries(decoder)
         } else {
             (Vec::new(), 0, 0)
@@ -370,8 +509,11 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
         list_bay_stream_entries(decoder)
     } else {
+        let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let payload_end = locate_bay_payload_end(&mut file, file_len);
         let _ = file.seek(std::io::SeekFrom::Start(0));
-        if let Ok(decoder) = zstd::stream::Decoder::new(file) {
+        let bounded = file.take(payload_end);
+        if let Ok(decoder) = zstd::stream::Decoder::new(bounded) {
             list_bay_stream_entries(decoder)
         } else {
             (Vec::new(), 0, 0)
@@ -506,16 +648,22 @@ pub fn preview_bay_entry_bytes(path: &Path, entry_name: &str, password: Option<&
         read_bay_entry_from_stream(decoder, entry_name)
     } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
         let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+        let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let payload_end = locate_bay_payload_end(&mut file, file_len);
         let _ = file.seek(std::io::SeekFrom::Start(offset));
-        let decoder = zstd::stream::Decoder::new(file).map_err(|e| e.to_string())?;
+        let bounded = file.take(payload_end.saturating_sub(offset));
+        let decoder = zstd::stream::Decoder::new(bounded).map_err(|e| e.to_string())?;
         read_bay_entry_from_stream(decoder, entry_name)
     } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
         let _ = file.seek(std::io::SeekFrom::Start(0));
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
         read_bay_entry_from_stream(decoder, entry_name)
     } else {
+        let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let payload_end = locate_bay_payload_end(&mut file, file_len);
         let _ = file.seek(std::io::SeekFrom::Start(0));
-        let decoder = zstd::stream::Decoder::new(file).map_err(|e| e.to_string())?;
+        let bounded = file.take(payload_end);
+        let decoder = zstd::stream::Decoder::new(bounded).map_err(|e| e.to_string())?;
         read_bay_entry_from_stream(decoder, entry_name)
     }
 }
@@ -679,5 +827,72 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Archive file too small"));
+    }
+
+    #[test]
+    fn test_locate_bay_payload_end_and_read_zstd_seek_table_validation() {
+        let stream_start = 8u64;
+        let frame0 = vec![0x11u8; 120];
+        let frame1 = vec![0x22u8; 80];
+
+        let build_blob = |f0_comp: u32, f1_comp: u32, decomp_sz: u32, frame_count: u32, append_toc: bool| {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(b"BAYZIP\x02\x00");
+            buf.extend_from_slice(&frame0);
+            buf.extend_from_slice(&frame1);
+
+            let table_payload_len = frame_count * 8 + 9;
+            buf.extend_from_slice(&ZSTD_SEEKABLE_SKIPPABLE_MAGIC.to_le_bytes());
+            buf.extend_from_slice(&table_payload_len.to_le_bytes());
+            for i in 0..frame_count {
+                let cs = if i == 0 { f0_comp } else { f1_comp };
+                buf.extend_from_slice(&cs.to_le_bytes());
+                buf.extend_from_slice(&decomp_sz.to_le_bytes());
+            }
+            buf.extend_from_slice(&frame_count.to_le_bytes());
+            buf.push(0u8);
+            buf.extend_from_slice(&ZSTD_SEEKABLE_FOOTER_MAGIC.to_le_bytes());
+
+            if append_toc {
+                let toc = br#"[{"name":"a.bin","size":4096,"is_dir":false}]"#;
+                buf.extend_from_slice(toc);
+                buf.extend_from_slice(&(toc.len() as u64).to_le_bytes());
+                buf.extend_from_slice(b"BAYTOC\x02\x00");
+            }
+            buf
+        };
+
+        // 1. Valid seek table + BAYTOC\x02\x00 trailer
+        let valid = build_blob(120, 80, 256 * 1024, 2, true);
+        let valid_len = valid.len() as u64;
+        let mut cur = Cursor::new(valid);
+        let payload_end = locate_bay_payload_end(&mut cur, valid_len);
+        assert!(payload_end < valid_len);
+        let table = read_zstd_seek_table(&mut cur, stream_start, payload_end).unwrap();
+        assert_eq!(table.frames.len(), 2);
+        assert_eq!(table.frames[0].comp_offset, 8);
+        assert_eq!(table.frames[0].comp_size, 120);
+        assert_eq!(table.frames[1].comp_offset, 128);
+        assert_eq!(table.frames[1].comp_size, 80);
+        assert_eq!(table.frames[1].decomp_offset, 256 * 1024);
+        assert_eq!(table.total_decompressed, 512 * 1024);
+
+        // 2. Tampered compressed size sum -> None
+        let bad_sum = build_blob(120, 79, 256 * 1024, 2, false);
+        let bad_sum_len = bad_sum.len() as u64;
+        let mut cur = Cursor::new(bad_sum);
+        assert!(read_zstd_seek_table(&mut cur, stream_start, bad_sum_len).is_none());
+
+        // 3. Oversized frame exceeds MAX_SEEKABLE_FRAME_BYTES -> None
+        let oversized = build_blob(120, 80, MAX_SEEKABLE_FRAME_BYTES + 1, 2, false);
+        let oversized_len = oversized.len() as u64;
+        let mut cur = Cursor::new(oversized);
+        assert!(read_zstd_seek_table(&mut cur, stream_start, oversized_len).is_none());
+
+        // 4. Frame count < 2 -> None
+        let single_frame = build_blob(200, 0, 256 * 1024, 1, false);
+        let single_len = single_frame.len() as u64;
+        let mut cur = Cursor::new(single_frame);
+        assert!(read_zstd_seek_table(&mut cur, stream_start, single_len).is_none());
     }
 }
