@@ -1,5 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashSet, VecDeque};
 use std::fs::File;
+use std::hash::Hasher;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
@@ -16,7 +18,44 @@ use crate::types::TaskCancelToken;
 use super::{current_extraction_token, is_extraction_cancelled};
 
 pub const PREALLOC_THRESHOLD_BYTES: u64 = 64 * 1024;
+pub const PREALLOC_MAX_BYTES: u64 = 256 * 1024 * 1024;
 pub const ASYNC_INMEMORY_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Returns true if filesystem metadata represents a symlink or Windows NTFS reparse point (junction/symlink).
+pub fn is_reparse_or_symlink(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Checks whether a destination path in a potentially non-empty extraction directory exists and
+/// rejects any pre-existing symlink or NTFS reparse point before writing.
+pub fn check_existing_target_safe(out_path: &Path, dest_was_empty: bool) -> Result<bool, String> {
+    if dest_was_empty {
+        return Ok(false);
+    }
+    match std::fs::symlink_metadata(out_path) {
+        Ok(meta) => {
+            if is_reparse_or_symlink(&meta) {
+                return Err(format!(
+                    "Security violation: destination target {:?} is a symlink or NTFS reparse point",
+                    out_path
+                ));
+            }
+            Ok(true)
+        }
+        Err(_) => Ok(false),
+    }
+}
 
 /// Opens a file optimized for sequential front-to-back streaming reads (`FILE_FLAG_SEQUENTIAL_SCAN`).
 pub fn open_sequential_read(path: &Path) -> std::io::Result<File> {
@@ -52,9 +91,10 @@ pub fn open_random_read(path: &Path) -> std::io::Result<File> {
 }
 
 /// Reserves contiguous NTFS clusters via `SetFileInformationByHandle(FileAllocationInfo)`
-/// without altering logical EOF or triggering zero-fill penalties.
+/// without altering logical EOF or triggering zero-fill penalties, clamped to `PREALLOC_MAX_BYTES`.
 pub fn preallocate_file(file: &File, expected_size: u64) {
-    if expected_size < PREALLOC_THRESHOLD_BYTES || expected_size > i64::MAX as u64 {
+    let capped_size = expected_size.min(PREALLOC_MAX_BYTES);
+    if capped_size < PREALLOC_THRESHOLD_BYTES || capped_size > i64::MAX as u64 {
         return;
     }
 
@@ -67,7 +107,7 @@ pub fn preallocate_file(file: &File, expected_size: u64) {
         };
 
         let alloc_info = FILE_ALLOCATION_INFO {
-            AllocationSize: expected_size as i64,
+            AllocationSize: capped_size as i64,
         };
         unsafe {
             let _ = SetFileInformationByHandle(
@@ -131,8 +171,21 @@ pub fn write_file_payload(out_path: &Path, data: &[u8], file_existed: bool) -> R
             PathBuf::from(p)
         };
 
-        let mut out_file = create_output_file_fast(&part_path, data.len() as u64)
-            .map_err(|e| format!("Failed to create temporary output file {:?}: {}", part_path, e))?;
+        let mut out_file = match create_output_file_fast(&part_path, data.len() as u64) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                clear_readonly(&part_path);
+                create_output_file_fast(&part_path, data.len() as u64).map_err(|e2| {
+                    format!("Failed to create temporary output file {:?}: {}", part_path, e2)
+                })?
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Failed to create temporary output file {:?}: {}",
+                    part_path, e
+                ));
+            }
+        };
 
         if !data.is_empty() {
             if let Err(e) = out_file.write_all(data) {
@@ -217,12 +270,18 @@ impl DirectoryCache {
             if self.created.contains(cur) {
                 break;
             }
-            let already_exists = if dest_was_empty {
-                false
+            let existing_meta = if dest_was_empty {
+                None
             } else {
-                std::fs::symlink_metadata(cur).is_ok()
+                std::fs::symlink_metadata(cur).ok()
             };
-            if already_exists {
+            if let Some(meta) = existing_meta {
+                if is_reparse_or_symlink(&meta) {
+                    return Err(format!(
+                        "Security violation: destination directory {:?} is a symlink or NTFS reparse point",
+                        cur
+                    ));
+                }
                 break;
             }
             missing.push(cur.to_path_buf());
@@ -285,11 +344,17 @@ fn is_pool_cancelled(cancel_token: &Option<TaskCancelToken>) -> bool {
     }
 }
 
-fn normalize_write_key(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_ascii_lowercase()
+fn normalize_write_key_hash(path: &Path) -> u64 {
+    let raw = path.to_string_lossy();
+    let trimmed = raw.trim_end_matches(['/', '\\']);
+    let mut hasher = DefaultHasher::new();
+    for ch in trimmed.chars() {
+        let mapped = if ch == '\\' { '/' } else { ch };
+        for lc in mapped.to_lowercase() {
+            hasher.write_u32(lc as u32);
+        }
+    }
+    hasher.finish()
 }
 
 fn drain_queued_jobs(state: &mut PoolState) {
@@ -358,7 +423,7 @@ fn worker_loop(shared: Arc<PoolShared>) {
 pub struct AsyncFileWriterPool {
     shared: Arc<PoolShared>,
     workers: Vec<std::thread::JoinHandle<()>>,
-    seen_paths: HashSet<String>,
+    seen_paths: HashSet<u64>,
 }
 
 impl AsyncFileWriterPool {
@@ -410,7 +475,7 @@ impl AsyncFileWriterPool {
         data: Vec<u8>,
         file_existed: bool,
     ) -> Result<(), String> {
-        let key = normalize_write_key(&out_path);
+        let key = normalize_write_key_hash(&out_path);
         let effective_existed = if self.seen_paths.contains(&key) {
             self.wait_idle()?;
             true
@@ -467,7 +532,7 @@ impl AsyncFileWriterPool {
     /// Synchronizes any prior async writes targeting the same case-insensitive path
     /// before a large file is streamed directly on the producer thread.
     pub fn prepare_direct_write(&mut self, out_path: &Path) -> Result<bool, String> {
-        let key = normalize_write_key(out_path);
+        let key = normalize_write_key_hash(out_path);
         if self.seen_paths.contains(&key) {
             self.wait_idle()?;
             Ok(true)
@@ -689,5 +754,70 @@ mod tests {
 
         // Cleanup succeeds cleanly with zero open handles left behind
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_io_hardening_readonly_baypart_reparse_check_and_prealloc_cap() {
+        let base = std::env::current_dir().unwrap().join("target").join("test_io_hardening");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // 1. Read-only stale .baypart must not block atomic overwrite
+        let target = base.join("existing.txt");
+        let part = base.join("existing.txt.baypart");
+        std::fs::write(&target, b"old-data").unwrap();
+        std::fs::write(&part, b"stale-part").unwrap();
+        let mut perms = part.metadata().unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&part, perms).unwrap();
+
+        write_file_payload(&target, b"new-overwritten-data", true).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new-overwritten-data");
+        assert!(!part.exists());
+
+        // 2. check_existing_target_safe returns Ok(false) on empty dest or missing file, Ok(true) on regular file
+        assert!(!check_existing_target_safe(&target, true).unwrap());
+        assert!(check_existing_target_safe(&target, false).unwrap());
+        assert!(!check_existing_target_safe(&base.join("missing.txt"), false).unwrap());
+
+        // 3. preallocate_file safely clamps huge sizes (> PREALLOC_MAX_BYTES) without extending EOF
+        let huge_stub = base.join("clamped_prealloc.bin");
+        let f = create_output_file_fast(&huge_stub, u64::MAX / 2).unwrap();
+        assert_eq!(f.metadata().unwrap().len(), 0);
+        drop(f);
+
+        // 4. Reject NTFS directory junctions / reparse points in non-empty destinations (Windows)
+        #[cfg(target_os = "windows")]
+        {
+            let real_dir = base.join("outside_real");
+            let dest_dir = base.join("dest");
+            let junction = dest_dir.join("escape_junction");
+            std::fs::create_dir_all(&real_dir).unwrap();
+            std::fs::create_dir_all(&dest_dir).unwrap();
+
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&real_dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            if status.map(|s| s.success()).unwrap_or(false) {
+                let target_err = check_existing_target_safe(&junction, false).unwrap_err();
+                assert!(target_err.contains("Security violation"));
+
+                let mut cache = DirectoryCache::new();
+                cache.mark_existing(&dest_dir);
+                let mut newly = Vec::new();
+                let dir_err = cache
+                    .ensure_dir_tracked(&junction.join("sub"), &dest_dir, false, &mut newly)
+                    .unwrap_err();
+                assert!(dir_err.contains("Security violation"));
+
+                let _ = std::fs::remove_dir(&junction);
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

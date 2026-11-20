@@ -78,23 +78,34 @@ fn hoist_single_root_dir(
         )
     })?;
 
-    let read_res = std::fs::read_dir(&temp_root).map_err(|e| {
-        format!(
-            "Failed to list single-root directory {:?} during hoist: {}",
-            temp_root, e
-        )
-    })?;
+    let read_res = match std::fs::read_dir(&temp_root) {
+        Ok(rd) => rd,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&temp_root);
+            return Err(format!(
+                "Failed to list single-root directory {:?} during hoist: {}",
+                temp_root, e
+            ));
+        }
+    };
 
     for entry_res in read_res {
-        let entry = entry_res.map_err(|e| format!("Hoist read_dir entry error: {}", e))?;
+        let entry = match entry_res {
+            Ok(e) => e,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&temp_root);
+                return Err(format!("Hoist read_dir entry error: {}", e));
+            }
+        };
         let src = entry.path();
         let target = dest_dir.join(entry.file_name());
-        std::fs::rename(&src, &target).map_err(|e| {
-            format!(
+        if let Err(e) = std::fs::rename(&src, &target) {
+            let _ = std::fs::remove_dir_all(&temp_root);
+            return Err(format!(
                 "Failed moving {:?} to {:?} during hoist: {}",
                 src, target, e
-            )
-        })?;
+            ));
+        }
     }
 
     let _ = std::fs::remove_dir(&temp_root);
@@ -232,11 +243,8 @@ pub(crate) fn extract_tar_entries<R: Read>(
             )?;
 
             let file_size = entry.size();
-            let file_existed = if dest_was_empty {
-                false
-            } else {
-                std::fs::symlink_metadata(&out_path).is_ok()
-            };
+            let file_existed =
+                super::io::check_existing_target_safe(&out_path, dest_was_empty)?;
             let out_str = out_path.to_string_lossy().to_string();
 
             if file_size <= ASYNC_INMEMORY_MAX_BYTES {
@@ -389,7 +397,11 @@ pub(crate) fn extract_tar_entries<R: Read>(
     if single_root_valid {
         if let (Some(actual_root), Some(d_stem)) = (single_root_candidate.as_deref(), dest_stem) {
             if actual_root.eq_ignore_ascii_case(d_stem) {
-                hoist_single_root_dir(dest_dir, actual_root, &mut extracted_files)?;
+                if let Err(e) = hoist_single_root_dir(dest_dir, actual_root, &mut extracted_files) {
+                    cleanup_extracted_files(&newly_created);
+                    cleanup_extracted_files(&extracted_files);
+                    return Err(e);
+                }
             }
         }
     }
@@ -707,6 +719,87 @@ mod tests {
         let out_zst = base.join("out_zst");
         let res_zst = extract_tar_archive(&raw_zst, &out_zst, None, None, None);
         assert!(res_zst.is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_tar_inspector_preview_and_tester_multimember_gz_and_zst() {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test_tar_cross_module_multimember");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let mut builder = tar::Builder::new(Vec::new());
+        append_tar_dir(&mut builder, "pkg/");
+        append_tar_file(&mut builder, "pkg/first.txt", b"member-one-body");
+        append_tar_file(&mut builder, "pkg/second.txt", b"member-two-body-ok");
+        let tar_bytes = builder.into_inner().unwrap();
+        let mid = tar_bytes.len() / 2;
+
+        // 1. Multi-member pigz-style .tar.gz
+        let tgz_path = base.join("multi.tar.gz");
+        let mut tgz_bytes = Vec::new();
+        {
+            let mut gz1 =
+                flate2::write::GzEncoder::new(&mut tgz_bytes, flate2::Compression::fast());
+            gz1.write_all(&tar_bytes[..mid]).unwrap();
+            gz1.finish().unwrap();
+        }
+        {
+            let mut gz2 =
+                flate2::write::GzEncoder::new(&mut tgz_bytes, flate2::Compression::fast());
+            gz2.write_all(&tar_bytes[mid..]).unwrap();
+            gz2.finish().unwrap();
+        }
+        std::fs::write(&tgz_path, tgz_bytes).unwrap();
+
+        let (gz_items, gz_count, _) = crate::inspector::tar::list_tar_entries(&tgz_path);
+        assert_eq!(gz_count, 3);
+        assert!(gz_items.iter().any(|e| e.name == "pkg/second.txt"));
+
+        let (gz_prev, gz_sz) =
+            crate::inspector::tar::preview_tar_entry_bytes(&tgz_path, "pkg/second.txt").unwrap();
+        assert_eq!(gz_sz, 18);
+        assert_eq!(gz_prev, b"member-two-body-ok");
+
+        let (gz_tested, gz_bytes_tested, gz_errs) =
+            crate::tester::test_tar_archive(&tgz_path, None).unwrap();
+        assert!(gz_errs.is_empty());
+        assert_eq!(gz_tested, 3);
+        assert_eq!(gz_bytes_tested, 33);
+
+        // 2. Multi-frame .tar.zst
+        let tzst_path = base.join("multi.tar.zst");
+        let mut zst_bytes = Vec::new();
+        {
+            let mut enc1 = zstd::stream::Encoder::new(&mut zst_bytes, 1).unwrap();
+            enc1.write_all(&tar_bytes[..mid]).unwrap();
+            enc1.finish().unwrap();
+        }
+        {
+            let mut enc2 = zstd::stream::Encoder::new(&mut zst_bytes, 1).unwrap();
+            enc2.write_all(&tar_bytes[mid..]).unwrap();
+            enc2.finish().unwrap();
+        }
+        std::fs::write(&tzst_path, zst_bytes).unwrap();
+
+        let (zst_items, zst_count, _) = crate::inspector::tar::list_tar_entries(&tzst_path);
+        assert_eq!(zst_count, 3);
+        assert!(zst_items.iter().any(|e| e.name == "pkg/second.txt"));
+
+        let (zst_prev, zst_sz) =
+            crate::inspector::tar::preview_tar_entry_bytes(&tzst_path, "pkg/second.txt").unwrap();
+        assert_eq!(zst_sz, 18);
+        assert_eq!(zst_prev, b"member-two-body-ok");
+
+        let (zst_tested, zst_bytes_tested, zst_errs) =
+            crate::tester::test_tar_archive(&tzst_path, None).unwrap();
+        assert!(zst_errs.is_empty());
+        assert_eq!(zst_tested, 3);
+        assert_eq!(zst_bytes_tested, 33);
 
         let _ = std::fs::remove_dir_all(&base);
     }

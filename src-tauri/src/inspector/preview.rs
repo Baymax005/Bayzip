@@ -66,8 +66,8 @@ pub fn preview_archive_entry_sync(
         ArchiveFormat::Bay => preview_bay_entry_bytes(p, entry_name, password)?,
         ArchiveFormat::Zip => preview_zip_entry_bytes(p, entry_name, password)?,
         ArchiveFormat::SevenZip => preview_7z_entry_bytes(p, entry_name, password)?,
-        ArchiveFormat::Tar | ArchiveFormat::TarGz => preview_tar_entry_bytes(p, entry_name)?,
-        ArchiveFormat::Rar | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Zstd | ArchiveFormat::Iso | ArchiveFormat::Cab => preview_rar_entry_bytes(p, entry_name)?,
+        ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::Zstd => preview_tar_entry_bytes(p, entry_name)?,
+        ArchiveFormat::Rar | ArchiveFormat::Bzip2 | ArchiveFormat::Xz | ArchiveFormat::Iso | ArchiveFormat::Cab => preview_rar_entry_bytes(p, entry_name)?,
         ArchiveFormat::Unknown => {
             let lower = archive_path.to_lowercase();
             if lower.ends_with(".bay") || lower.ends_with(".bayg") {
@@ -76,9 +76,9 @@ pub fn preview_archive_entry_sync(
                 preview_zip_entry_bytes(p, entry_name, password)?
             } else if lower.ends_with(".7z") {
                 preview_7z_entry_bytes(p, entry_name, password)?
-            } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+            } else if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".tar.zst") || lower.ends_with(".tzst") || lower.ends_with(".zst") {
                 preview_tar_entry_bytes(p, entry_name)?
-            } else if lower.ends_with(".rar") || lower.ends_with(".tar.bz2") || lower.ends_with(".bz2") || lower.ends_with(".tar.xz") || lower.ends_with(".xz") || lower.ends_with(".tar.zst") || lower.ends_with(".zst") || lower.ends_with(".iso") || lower.ends_with(".cab") {
+            } else if lower.ends_with(".rar") || lower.ends_with(".tar.bz2") || lower.ends_with(".bz2") || lower.ends_with(".tar.xz") || lower.ends_with(".xz") || lower.ends_with(".iso") || lower.ends_with(".cab") {
                 preview_rar_entry_bytes(p, entry_name)?
             } else {
                 return Err("Unsupported archive format for preview".into());

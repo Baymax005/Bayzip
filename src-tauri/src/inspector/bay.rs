@@ -10,6 +10,10 @@ use zeroize::Zeroize;
 use crate::crypto::{derive_bay_key, ChunkedAesReader};
 use crate::types::ArchiveEntryItem;
 
+pub fn is_valid_bay_inner_sig_suffix(rest: &[u8; 6]) -> bool {
+    rest == b"AYZIP\x02" || rest == b"AYBRO\x02" || rest == b"AYLZ4\x02"
+}
+
 pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut items = Vec::new();
     let mut total_size = 0u64;
@@ -19,7 +23,9 @@ pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem
     if decoder.read_exact(&mut first_byte).is_ok() {
         if first_byte[0] == b'B' {
             let mut rest = [0u8; 6];
-            let _ = decoder.read_exact(&mut rest);
+            if decoder.read_exact(&mut rest).is_err() || !is_valid_bay_inner_sig_suffix(&rest) {
+                return (Vec::new(), 0, 0);
+            }
         } else {
             has_first = true;
         }
@@ -41,6 +47,9 @@ pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem
         };
 
         if entry_type == 0 {
+            break;
+        }
+        if entry_type != 1 && entry_type != 2 {
             break;
         }
 
@@ -192,7 +201,8 @@ pub fn read_zstd_seek_table<R: Read + Seek>(
     for chunk in table_buf.chunks_exact(stride) {
         let comp_size = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         let decomp_size = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
-        if comp_size == 0
+        if comp_size < 8
+            || decomp_size == 0
             || comp_size > MAX_SEEKABLE_FRAME_BYTES
             || decomp_size > MAX_SEEKABLE_FRAME_BYTES
         {
@@ -530,7 +540,9 @@ pub fn read_bay_entry_from_stream<R: Read>(mut decoder: R, target_entry: &str) -
     if decoder.read_exact(&mut first_byte).is_ok() {
         if first_byte[0] == b'B' {
             let mut rest = [0u8; 6];
-            let _ = decoder.read_exact(&mut rest);
+            if decoder.read_exact(&mut rest).is_err() || !is_valid_bay_inner_sig_suffix(&rest) {
+                return Err("Malformed .bay archive: invalid inner signature header".into());
+            }
         } else {
             has_first = true;
         }
@@ -550,6 +562,9 @@ pub fn read_bay_entry_from_stream<R: Read>(mut decoder: R, target_entry: &str) -
 
         if entry_type == 0 {
             break;
+        }
+        if entry_type != 1 && entry_type != 2 {
+            return Err(format!("Malformed .bay archive: invalid entry type {}", entry_type));
         }
 
         let mut len_bytes = [0u8; 4];

@@ -1,9 +1,9 @@
 # 🧪 Bayzip Automated Test Suite & Quality Report
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-90%2F90%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="90/90 Automated Tests Passing" />
+  <img src="https://img.shields.io/badge/tests-93%2F93%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="93/93 Automated Tests Passing" />
   <img src="https://img.shields.io/badge/typecheck-0%20errors-0078D6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 0 Errors" />
-  <img src="https://img.shields.io/badge/duration-4.29s-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Execution Time 4.29s" />
+  <img src="https://img.shields.io/badge/duration-7.85s-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Execution Time 7.85s" />
   <img src="https://img.shields.io/badge/coverage-100%25%20Passing-10B981?style=flat-square&logo=shield&logoColor=white" alt="100% Passing" />
   <img src="https://img.shields.io/badge/audit-60%2F60%20verified-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="60/60 Audit Findings Verified" />
 </p>
@@ -15,16 +15,16 @@
 Bayzip enforces strict automated regression and security testing across all container engines, multi-core parallel unpackers, storage-aware NTFS I/O subsystems, cryptographic protocols, path sanitizers, and OS priority controllers. Every commit and release milestone is validated against:
 
 1. **Cryptographic Stream Integrity**: Chunked AES-256-GCM AEAD encryption, async `PipedAesBufReader` read-ahead decryption roundtrip, wrong-password rejection, and premature EOF stream truncation detection.
-2. **Deep-Defense Path Traversal Defense (Zip-Slip Proof)**: Denial of parent traversal (`..`), drive prefixes, root paths, DOS device aliases (`CLOCK$`, `CONFIG$`, `CON`, `AUX`, etc.), NTFS Alternate Data Streams (`:`), null bytes, illegal control characters, and external `bsdtar` symlink/hardlink/FIFO/socket/device entries.
-3. **Container Framing, Seekable `.bay`/`.bayg` & Exact-Byte Alignment**: RFC 8878 Zstd seek table parsing and `locate_bay_payload_end` framing around `BAYTOC`/`BAYETOC` trailers, parallel Zstd frame decoding, solid `.7z` stream draining, and multi-member/multi-frame `.tar.gz`/`.tar.zst` alignment.
-4. **Memory-Bounded Parsing & Storage-Aware I/O**: Strict 64 MB TOC cap (`MAX_TOC_SIZE`), `512 MB` `.7z` dictionary RAM budget, `96 MB` parallel `.bay` sliding window, Win32 `FileAllocationInfo` preallocation (`>= 64 KB`), byte-budgeted `AsyncFileWriterPool`, and deterministic `abort_and_join()` rollback cleanup.
+2. **Deep-Defense Path Traversal Defense (Zip-Slip Proof)**: Denial of parent traversal (`..`), drive prefixes, root paths, DOS device aliases (`CLOCK$`, `CONFIG$`, `CON`, `AUX`, etc.), NTFS Alternate Data Streams (`:`), null bytes, illegal control characters, NTFS reparse/symlink destination checks, and external `bsdtar` symlink/hardlink/FIFO/socket/device entries.
+3. **Container Framing, Seekable `.bay`/`.bayg` & Exact-Byte Alignment**: RFC 8878 Zstd seek table parsing and `locate_bay_payload_end` framing around `BAYTOC`/`BAYETOC` trailers, parallel Zstd frame decoding, `tester.rs` seek-table validation, solid `.7z` stream draining, and multi-member/multi-frame `.tar.gz`/`.tar.zst` alignment.
+4. **Memory-Bounded Parsing & Storage-Aware I/O**: Strict 64 MB TOC cap (`MAX_TOC_SIZE`), `512 MB` `.7z` dictionary RAM budget, `96 MB` parallel `.bay` sliding window, capped Win32 `FileAllocationInfo` preallocation (`64 KB–256 MB`), hash-indexed `AsyncFileWriterPool`, and deterministic `abort_and_join()` rollback cleanup.
 5. **Hardware Scaling & Gamer Preset Limits**: Compression and extraction worker scaling (`StorageDeviceSeekPenaltyProperty` + `STORAGE_BUS_TYPE` across NVMe, SATA SSD, HDD, and USB) and Gamer Preset (`.bayg`) Zstandard Level 3 / `8 MB` frame enforcement.
-6. **Thread-Local OS Priority Guards**: Prevention of UI and gaming thread priority inversion across nested scopes and parallel worker threads.
+6. **Thread-Local OS Priority Guards**: Prevention of UI and gaming thread priority inversion across nested scopes and live mid-flight worker threads (`OpenThread` synchronization).
 7. **Frontend Type-Safety**: 100% strict TypeScript compilation with zero diagnostic errors.
 
 ---
 
-## 📊 Automated Test Matrix (90 Unit Tests)
+## 📊 Automated Test Matrix (93 Unit Tests)
 
 | # | Test Module | Test Name | Purpose & Security Verification | Status |
 |---|---|---|---|:---:|
@@ -118,6 +118,9 @@ Bayzip enforces strict automated regression and security testing across all cont
 | 88 | `extractor::bay` | `test_calculate_bay_seekable_workers_by_storage_and_memory_budget` | Verifies `calculate_bay_seekable_workers` worker and sliding-window slot calculation within the `96 MB` RAM ceiling across drive types. | `PASSED` |
 | 89 | `extractor::bay` | `test_phase6_seekable_multiframe_bay_parallel_extract_preview_tester_and_corruption_rollback` | End-to-end Phase 6 test covering multi-frame seekable `.bay` compression, parallel extraction, preview, `tester.rs`, and frame corruption rollback. | `PASSED` |
 | 90 | `extractor::bay` | `test_phase6_headless_gamer_preset_creates_multiframe_8mb_seekable_bayg` | Verifies `.bayg` Gamer Preset creates `8 MB` multi-frame RFC 8878 seekable containers with instant `BAYTOC` and full parallel extraction parity. | `PASSED` |
+| 91 | `extractor::io` | `test_io_hardening_readonly_baypart_reparse_check_and_prealloc_cap` | Verifies read-only stale `.baypart` atomic overwrite recovery, `check_existing_target_safe` reparse/symlink rejection, and `256 MB` preallocation capping. | `PASSED` |
+| 92 | `extractor::bay` | `test_bay_audit_seek_table_tester_invalid_entry_type_and_oversized_toc` | Verifies rejection of invalid `.bay` `entry_type` bytes and bogus `b'B'` headers, `> 64 MB` TOC skip safety, and RFC 8878 seek-table tamper detection in `tester.rs`. | `PASSED` |
+| 93 | `extractor::tar` | `test_tar_inspector_preview_and_tester_multimember_gz_and_zst` | Verifies cross-module parity across `inspector::tar`, `preview`, and `tester::test_tar_archive` on multi-member `pigz` `.tar.gz` and multi-frame `.tar.zst`. | `PASSED` |
 
 ---
 
@@ -125,99 +128,102 @@ Bayzip enforces strict automated regression and security testing across all cont
 
 ### Backend Rust Test Suite (`cargo test`)
 ```text
-running 90 tests
+running 93 tests
 test compressor::tests::test_calculate_target_threads_scaling ... ok
-test compressor::tests::test_calculate_zstd_level_gamer_preset_cap ... ok
-test compressor::tests::test_is_gamer_preset_normalization ... ok
 test compressor::tests::test_compression_task_guard_isolation ... ok
-test compressor::utils::tests::test_is_path_excluded_dot_slash_prefix ... ok
+test compressor::tests::test_is_gamer_preset_normalization ... ok
+test compressor::tests::test_calculate_zstd_level_gamer_preset_cap ... ok
 test extractor::bay::tests::test_drain_bay_entry_bytes_exact_match ... ok
 test extractor::bay::tests::test_calculate_bay_seekable_workers_by_storage_and_memory_budget ... ok
-test extractor::bay::tests::test_drain_bay_entry_bytes_io_error ... ok
+test compressor::utils::tests::test_is_path_excluded_dot_slash_prefix ... ok
 test extractor::bay::tests::test_drain_bay_entry_bytes_premature_eof ... ok
+test extractor::bay::tests::test_drain_bay_entry_bytes_io_error ... ok
 test extractor::bay::tests::test_drain_bay_entry_bytes_unaligned_chunking ... ok
 test extractor::bay::tests::test_drain_bay_entry_bytes_zero_length ... ok
 test compressor::utils::tests::test_is_excluded_or_temp_artifact ... ok
 test extractor::io::tests::test_async_writer_pool_abort_joins_before_cleanup ... ok
 test extractor::io::tests::test_async_writer_pool_respects_byte_budget_and_propagates_errors ... ok
+test extractor::bay::tests::test_extract_bay_archive_unencrypted_zstd_multifile_and_large_streaming ... ok
+test extractor::io::tests::test_create_output_file_fast_preallocates_without_extending_eof ... ok
 test extractor::io::tests::test_async_writer_pool_writes_files_and_handles_case_duplicates ... ok
 test extractor::io::tests::test_directory_cache_creates_nested_and_tracks_ancestors ... ok
-test extractor::io::tests::test_create_output_file_fast_preallocates_without_extending_eof ... ok
+test extractor::bay::tests::test_phase6_seekable_multiframe_bay_parallel_extract_preview_tester_and_corruption_rollback ... ok
 test extractor::io::tests::test_write_file_payload_direct_and_atomic_overwrite ... ok
 test extractor::sevenz::tests::test_7z_cross_block_case_duplicate_serializes_last_wins ... ok
 test extractor::sevenz::tests::test_calculate_7z_parallelism_by_storage_and_dict_memory ... ok
-test extractor::bay::tests::test_phase6_seekable_multiframe_bay_parallel_extract_preview_tester_and_corruption_rollback ... ok
 test extractor::sevenz::tests::test_7z_encrypted_password_handling_and_roundtrip ... ok
-test extractor::bay::tests::test_extract_bay_archive_unencrypted_zstd_multifile_and_large_streaming ... ok
-test extractor::sevenz::tests::test_solid_7z_extraction_drains_excluded_entries_without_desync ... ok
-test extractor::system_tar::tests::test_finalize_staged_extraction_preserves_preexisting_and_filters_case_glob_segments ... ok
+test extractor::io::tests::test_io_hardening_readonly_baypart_reparse_check_and_prealloc_cap ... ok
+test crypto::tests::test_chunked_aes_wrong_password ... ok
+test crypto::tests::test_chunked_aes_truncation_detection ... ok
 test extractor::system_tar::tests::test_parse_bsdtar_tvf_line_formats_spaces_and_security ... ok
+test crypto::tests::test_chunked_aes_roundtrip ... ok
+test extractor::system_tar::tests::test_finalize_staged_extraction_preserves_preexisting_and_filters_case_glob_segments ... ok
+test extractor::sevenz::tests::test_solid_7z_extraction_drains_excluded_entries_without_desync ... ok
+test extractor::bay::tests::test_extract_bay_stream_eof_drain_and_truncation_detection ... ok
 test extractor::tar::tests::test_extract_tar_atomic_overwrite_and_case_duplicates ... ok
 test extractor::tar::tests::test_extract_tar_gz_multimember_pigz_and_single_root_hoist ... ok
-test extractor::tar::tests::test_extract_plain_tar_multifile_large_exclusions_and_zip_slip ... ok
-test extractor::tar::tests::test_extract_tar_rejects_non_tar_gz_and_zst_cleanly ... ok
 test extractor::tests::test_extraction_task_guard_isolation ... ok
 test extractor::tests::test_extraction_task_guard_records_bytes_isolated ... ok
 test extractor::utils::tests::test_cleanup_extracted_files_safely_removes_created_files ... ok
+test extractor::tar::tests::test_tar_inspector_preview_and_tester_multimember_gz_and_zst ... ok
 test extractor::utils::tests::test_should_abort_fallback_on_cancel_and_password ... ok
-test extractor::zip::tests::test_calculate_zip_worker_threads_by_storage_profile ... ok
+test extractor::tar::tests::test_extract_tar_rejects_non_tar_gz_and_zst_cleanly ... ok
 test extractor::tar::tests::test_extract_tar_zst_multiframe_roundtrip ... ok
-test crypto::tests::test_chunked_aes_roundtrip ... ok
-test extractor::bay::tests::test_phase6_headless_gamer_preset_creates_multiframe_8mb_seekable_bayg ... ok
-test crypto::tests::test_chunked_aes_wrong_password ... ok
-test crypto::tests::test_chunked_aes_truncation_detection ... ok
+test extractor::zip::tests::test_calculate_zip_worker_threads_by_storage_profile ... ok
+test extractor::tar::tests::test_extract_plain_tar_multifile_large_exclusions_and_zip_slip ... ok
 test inspector::bay::tests::test_locate_bay_payload_end_and_read_zstd_seek_table_validation ... ok
-test extractor::zip::tests::test_parallel_zip_atomic_overwrite_and_rejects_zip_slip ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_encrypted_toc_exceeding_file_bounds ... ok
+test crypto::tests::test_chunked_aes_drop_and_finish ... ok
 test inspector::bay::tests::test_read_bay_trailer_rejects_file_too_small ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_encrypted_toc ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_toc_exceeding_file_bounds ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_zero_encrypted_toc_len ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_zero_toc_len ... ok
-test inspector::bay::tests::test_read_bay_trailer_valid_toc ... ok
-test extractor::bay::tests::test_extract_bay_stream_eof_drain_and_truncation_detection ... ok
-test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_toc ... ok
-test inspector::preview::tests::test_extract_entry_ext ... ok
-test inspector::preview::tests::test_is_likely_utf8_text ... ok
-test inspector::tests::test_absolute_and_drive_paths ... ok
-test inspector::tests::test_build_excluded_set_and_prefix_matching ... ok
 test extractor::zip::tests::test_parallel_zip_handles_case_duplicate_entries_last_wins ... ok
+test extractor::zip::tests::test_parallel_zip_atomic_overwrite_and_rejects_zip_slip ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_encrypted_toc ... ok
+test extractor::zip::tests::test_parallel_zip_extraction_multifile_nested_and_exclusions ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_oversized_toc ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_toc_exceeding_file_bounds ... ok
 test inspector::hardware::tests::test_calculate_extract_writer_threads_by_drive_profile ... ok
+test inspector::preview::tests::test_extract_entry_ext ... ok
+test inspector::bay::tests::test_read_bay_trailer_valid_toc ... ok
 test inspector::hardware::tests::test_calculate_extract_inflight_budget_and_chunk_size ... ok
-test inspector::tests::test_dos_reserved_devices ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_zero_encrypted_toc_len ... ok
+test inspector::preview::tests::test_is_likely_utf8_text ... ok
+test inspector::bay::tests::test_read_bay_trailer_rejects_zero_toc_len ... ok
+test inspector::tests::test_absolute_and_drive_paths ... ok
 test inspector::tests::test_empty_and_dot_paths ... ok
 test inspector::tests::test_invalid_characters ... ok
+test inspector::tests::test_build_excluded_set_and_prefix_matching ... ok
 test inspector::tests::test_parent_traversal ... ok
+test inspector::tests::test_dos_reserved_devices ... ok
 test inspector::tests::test_rejects_unencrypted_baytoc_on_bayenc_archive ... ok
-test inspector::tests::test_trailing_period_and_space_evasion ... ok
 test inspector::tests::test_valid_paths ... ok
 test priority::tests::test_background_shield_toggle ... ok
+test inspector::tests::test_trailing_period_and_space_evasion ... ok
 test priority::tests::test_concurrent_threads_priority_guards_restore_independently ... ok
-test priority::tests::test_nested_scoped_priority_guards_unwind_correctly ... ok
 test registry::tests::test_format_registration_stamp_determinism ... ok
-test priority::tests::test_midflight_background_shield_toggle_syncs_process_priority ... ok
 test registry::tests::test_should_skip_startup_registration_when_stamp_and_files_match ... ok
-test priority::tests::test_scoped_priority_guard_restores_thread_priority ... ok
 test tester::tests::test_concurrent_test_task_guards_do_not_clobber_tokens ... ok
-test tester::tests::test_tester_task_guard_isolation ... ok
-test tester::tests::test_test_tar_archive_delegates_xz_and_bz2 ... ok
+test priority::tests::test_midflight_background_shield_toggle_syncs_process_priority ... ok
 test tester::tests::test_should_abort_test_fallback_blocks_cancel_and_password ... ok
 test tester::tests::test_test_bay_stream_detects_missing_eof_marker ... ok
+test priority::tests::test_nested_scoped_priority_guards_unwind_correctly ... ok
+test priority::tests::test_scoped_priority_guard_restores_thread_priority ... ok
+test tester::tests::test_test_tar_archive_delegates_xz_and_bz2 ... ok
+test tester::tests::test_tester_task_guard_isolation ... ok
+test tests::test_collect_system_specs ... ok
 test tests::test_is_mini_extract_invocation_skips_startup_sync ... ok
 test tests::test_parse_cli_args_gui_compress_and_extract ... ok
 test types::tests::test_task_cancel_token_lifecycle ... ok
-test tests::test_collect_system_specs ... ok
 test types::tests::test_task_cancel_tokens_are_isolated ... ok
-test extractor::zip::tests::test_parallel_zip_extraction_multifile_nested_and_exclusions ... ok
-test crypto::tests::test_chunked_aes_drop_and_finish ... ok
 test extractor::zip::tests::test_parallel_zip_encrypted_password_error_and_rollback ... ok
 test extractor::bay::tests::test_extract_bay_roundtrip_with_real_baytoc_and_bayetoc_trailers ... ok
-test extractor::sevenz::tests::test_parallel_7z_multiblock_extraction_exclusions_empty_files_and_zip_slip ... ok
 test inspector::tests::test_inspect_encrypted_bay_wrong_password_returns_err ... ok
 test extractor::system_tar::tests::test_extract_with_system_tar_single_pass_roundtrip_exclusions_and_security ... ok
+test extractor::sevenz::tests::test_parallel_7z_multiblock_extraction_exclusions_empty_files_and_zip_slip ... ok
+test extractor::bay::tests::test_phase6_headless_gamer_preset_creates_multiframe_8mb_seekable_bayg ... ok
 test extractor::bay::tests::test_extract_bay_archive_encrypted_v3_pipelined_roundtrip_and_wrong_password ... ok
+test extractor::bay::tests::test_bay_audit_seek_table_tester_invalid_entry_type_and_oversized_toc ... ok
 
-test result: ok. 90 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.29s
+test result: ok. 93 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.85s
 ```
 
 ### Frontend TypeScript Static Analysis (`npx tsc --noEmit`)

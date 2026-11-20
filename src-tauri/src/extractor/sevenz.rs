@@ -551,11 +551,8 @@ pub fn extract_7z_archive(
             }
 
             dir_cache.ensure_parent_tracked(&out_path, dest_dir, dest_was_empty, &mut newly_created)?;
-            let file_existed = if dest_was_empty {
-                false
-            } else {
-                std::fs::symlink_metadata(&out_path).is_ok()
-            };
+            let file_existed =
+                super::io::check_existing_target_safe(&out_path, dest_was_empty)?;
 
             let block_idx = archive
                 .stream_map

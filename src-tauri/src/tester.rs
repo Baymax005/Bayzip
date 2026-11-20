@@ -131,7 +131,16 @@ pub fn test_bay_stream<R: Read>(
         Ok(_) => {
             if first_byte[0] == b'B' {
                 let mut rest_sig = [0u8; 6];
-                let _ = decoder.read_exact(&mut rest_sig);
+                if let Err(e) = decoder.read_exact(&mut rest_sig) {
+                    return Err(format!("Error reading archive signature: {}", e));
+                }
+                if !crate::inspector::bay::is_valid_bay_inner_sig_suffix(&rest_sig) {
+                    errors.push(TestArchiveErrorItem {
+                        file_name: "Archive Header".to_string(),
+                        error: "Malformed .bay archive: invalid inner signature header".to_string(),
+                    });
+                    return Ok((0, 0, errors));
+                }
             } else {
                 has_first = true;
             }
@@ -188,6 +197,13 @@ pub fn test_bay_stream<R: Read>(
                     }
                 }
             }
+            break;
+        }
+        if entry_type != 1 && entry_type != 2 {
+            errors.push(TestArchiveErrorItem {
+                file_name: "Archive Stream".to_string(),
+                error: format!("Malformed .bay archive: invalid entry type {}", entry_type),
+            });
             break;
         }
 
@@ -353,6 +369,102 @@ pub fn test_bay_archive(
     }
 }
 
+struct SeekTableVerifyReader {
+    file: BufReader<File>,
+    frames: Vec<crate::inspector::bay::ZstdSeekFrame>,
+    frame_idx: usize,
+    decompressor: zstd::bulk::Decompressor<'static>,
+    comp_buf: Vec<u8>,
+    decomp_buf: Vec<u8>,
+    decomp_offset: usize,
+    decomp_len: usize,
+    seek_table_error: Option<String>,
+}
+
+impl SeekTableVerifyReader {
+    fn new(
+        mut raw: File,
+        offset: u64,
+        table: crate::inspector::bay::ZstdSeekTable,
+    ) -> Result<Self, String> {
+        raw.seek(std::io::SeekFrom::Start(offset))
+            .map_err(|e| e.to_string())?;
+        let decompressor = zstd::bulk::Decompressor::new()
+            .map_err(|e| format!("Failed to create Zstd decompressor: {}", e))?;
+        Ok(Self {
+            file: BufReader::with_capacity(1024 * 1024, raw),
+            frames: table.frames,
+            frame_idx: 0,
+            decompressor,
+            comp_buf: Vec::new(),
+            decomp_buf: Vec::with_capacity(table.max_decomp_frame_bytes),
+            decomp_offset: 0,
+            decomp_len: 0,
+            seek_table_error: None,
+        })
+    }
+}
+
+impl Read for SeekTableVerifyReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        while self.decomp_offset >= self.decomp_len {
+            if self.frame_idx >= self.frames.len() {
+                return Ok(0);
+            }
+            if is_test_cancelled() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "Testing cancelled by user",
+                ));
+            }
+            let frame = self.frames[self.frame_idx];
+            self.comp_buf.resize(frame.comp_size as usize, 0);
+            self.file.read_exact(&mut self.comp_buf)?;
+
+            let expected = frame.decomp_size as usize;
+            self.decomp_buf.clear();
+            if self.decomp_buf.capacity() < expected {
+                self.decomp_buf
+                    .reserve(expected - self.decomp_buf.capacity());
+            }
+
+            let decoded = self
+                .decompressor
+                .decompress_to_buffer(&self.comp_buf, &mut self.decomp_buf)
+                .map_err(|e| {
+                    let msg = format!(
+                        "Zstd Seek Table frame {} decode error: {}",
+                        self.frame_idx, e
+                    );
+                    self.seek_table_error = Some(msg.clone());
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, msg)
+                })?;
+
+            if decoded != expected {
+                let msg = format!(
+                    "Seek Table frame {} size mismatch: expected {} bytes, decoded {} bytes",
+                    self.frame_idx, expected, decoded
+                );
+                self.seek_table_error = Some(msg.clone());
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, msg));
+            }
+
+            self.decomp_offset = 0;
+            self.decomp_len = decoded;
+            self.frame_idx += 1;
+        }
+
+        let avail = self.decomp_len - self.decomp_offset;
+        let n = avail.min(buf.len());
+        buf[..n].copy_from_slice(&self.decomp_buf[self.decomp_offset..self.decomp_offset + n]);
+        self.decomp_offset += n;
+        Ok(n)
+    }
+}
+
 fn test_unencrypted_zstd_bay(
     mut raw: File,
     offset: u64,
@@ -361,6 +473,43 @@ fn test_unencrypted_zstd_bay(
 ) -> Result<(usize, u64, Vec<TestArchiveErrorItem>), String> {
     let file_len = raw.metadata().map(|m| m.len()).unwrap_or(0);
     let payload_end = crate::inspector::bay::locate_bay_payload_end(&mut raw, file_len);
+
+    if payload_end >= offset.saturating_add(17) {
+        let mut tail_magic = [0u8; 4];
+        if raw.seek(std::io::SeekFrom::Start(payload_end - 4)).is_ok()
+            && raw.read_exact(&mut tail_magic).is_ok()
+            && tail_magic == crate::inspector::bay::ZSTD_SEEKABLE_FOOTER_MAGIC.to_le_bytes()
+        {
+            let Some(seek_table) =
+                crate::inspector::bay::read_zstd_seek_table(&mut raw, offset, payload_end)
+            else {
+                return Ok((
+                    0,
+                    0,
+                    vec![TestArchiveErrorItem {
+                        file_name: "Zstd Seek Table".to_string(),
+                        error: "Corrupted RFC 8878 Zstd seek table header or frame bounds"
+                            .to_string(),
+                    }],
+                ));
+            };
+
+            let mut reader = SeekTableVerifyReader::new(raw, offset, seek_table)?;
+            let test_res = test_bay_stream(&mut reader, total_expected_bytes, app);
+            if let Some(seek_err) = reader.seek_table_error.take() {
+                let (count, tested, mut errors) = test_res.unwrap_or_default();
+                if !errors.iter().any(|e| e.file_name == "Zstd Seek Table") {
+                    errors.push(TestArchiveErrorItem {
+                        file_name: "Zstd Seek Table".to_string(),
+                        error: seek_err,
+                    });
+                }
+                return Ok((count, tested, errors));
+            }
+            return test_res;
+        }
+    }
+
     raw.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
     let bounded = BufReader::with_capacity(
         1024 * 1024,
@@ -586,7 +735,18 @@ pub fn test_tar_archive(
 
     let raw_file = File::open(archive_path)
         .map_err(|e| format!("Failed to open archive: {}", e))?;
-    let reader = BufReader::with_capacity(1024 * 1024, raw_file);
+    let mut reader = BufReader::with_capacity(1024 * 1024, raw_file);
+    let mut magic = [0u8; 4];
+    let n = reader.read(&mut magic).unwrap_or(0);
+    reader
+        .seek(std::io::SeekFrom::Start(0))
+        .map_err(|e| format!("Failed to rewind tar reader: {}", e))?;
+
+    let is_gz = (n >= 2 && magic[0] == 0x1F && magic[1] == 0x8B)
+        || path_str.ends_with(".tar.gz")
+        || path_str.ends_with(".tgz");
+    let is_zst = (n >= 4 && magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD])
+        || path_str.ends_with(".tar.zst");
 
     let mut tested_count = 0usize;
     let mut total_tested = 0u64;
@@ -637,12 +797,12 @@ pub fn test_tar_archive(
         Ok(())
     };
 
-    if path_str.ends_with(".tar.gz") || path_str.ends_with(".tgz") {
-        let gz = flate2::read::GzDecoder::new(reader);
+    if is_gz {
+        let gz = flate2::bufread::MultiGzDecoder::new(reader);
         let archive = tar::Archive::new(Box::new(gz) as Box<dyn Read>);
         process_tar(archive)?;
-    } else if path_str.ends_with(".tar.zst") {
-        let zstd_dec = zstd::stream::Decoder::new(reader).map_err(|e| e.to_string())?;
+    } else if is_zst {
+        let zstd_dec = zstd::stream::Decoder::with_buffer(reader).map_err(|e| e.to_string())?;
         let archive = tar::Archive::new(Box::new(zstd_dec) as Box<dyn Read>);
         process_tar(archive)?;
     } else {

@@ -191,7 +191,7 @@ fn extract_single_zip_entry<R: Read + Seek>(
     }
 
     if file.is_dir() {
-        let dir_existed = std::fs::symlink_metadata(&item.outpath).is_ok();
+        let dir_existed = super::io::check_existing_target_safe(&item.outpath, false).map_err(Some)?;
         let _ = std::fs::create_dir_all(&item.outpath);
         if !dir_existed && item.outpath.exists() {
             newly_created.push(item.outpath.to_string_lossy().to_string());
@@ -251,10 +251,15 @@ fn extract_single_zip_entry<R: Read + Seek>(
 
         let out_file = match create_output_file_fast(&target_write_path, file_size) {
             Ok(f) => f,
-            Err(e) if !item.file_existed && e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                 clear_readonly(&target_write_path);
-                create_output_file_fast(&target_write_path, file_size)
-                    .map_err(|e2| Some(format!("Create file error: {}", e2)))?
+                create_output_file_fast(&target_write_path, file_size).map_err(|e2| {
+                    Some(if item.file_existed {
+                        format!("Create temporary file error: {}", e2)
+                    } else {
+                        format!("Create file error: {}", e2)
+                    })
+                })?
             }
             Err(e) => {
                 return Err(Some(if item.file_existed {
@@ -541,11 +546,8 @@ pub(crate) fn extract_zip_archive_with_workers(
                     .replace('\\', "/")
                     .trim_end_matches('/')
                     .to_ascii_lowercase();
-                let file_existed = if dest_was_empty {
-                    false
-                } else {
-                    std::fs::symlink_metadata(&outpath).is_ok()
-                };
+                let file_existed =
+                    super::io::check_existing_target_safe(&outpath, dest_was_empty)?;
 
                 let item = ZipWorkItem {
                     index: i,

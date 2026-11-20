@@ -17,7 +17,7 @@ pub const BAY_STD_SEEK_FRAME_SIZE: usize = 16 * 1024 * 1024;  // 16 MB frames (.
 /// Writes independent concatenated Zstd frames followed by an RFC 8878 Seekable Skippable Frame
 /// (`0x184D2A5E`, footer `0x8F92EAB1`) whenever 2 or more frames are emitted.
 pub struct SeekableZstdWriter<W: Write> {
-    inner: W,
+    inner: Option<W>,
     compressor: zstd::bulk::Compressor<'static>,
     frame_target_bytes: usize,
     frame_buf: Vec<u8>,
@@ -39,7 +39,7 @@ impl<W: Write> SeekableZstdWriter<W> {
         let clamped = frame_target_bytes.clamp(64 * 1024, 32 * 1024 * 1024);
 
         Ok(Self {
-            inner,
+            inner: Some(inner),
             compressor,
             frame_target_bytes: clamped,
             frame_buf: Vec::new(),
@@ -64,14 +64,17 @@ impl<W: Write> SeekableZstdWriter<W> {
         let comp_len = u32::try_from(written)
             .map_err(|_| std::io::Error::other("Seekable Zstd frame compressed size exceeds u32"))?;
 
-        self.inner.write_all(&self.comp_buf[..written])?;
+        let inner = self.inner.as_mut().expect("seekable zstd inner present");
+        inner.write_all(&self.comp_buf[..written])?;
         self.seek_entries.push((comp_len, decomp_len));
+        self.frame_buf.zeroize();
         self.frame_buf.clear();
         Ok(())
     }
 
     pub fn finish(mut self) -> std::io::Result<W> {
         self.flush_frame()?;
+        let mut inner = self.inner.take().expect("seekable zstd inner present");
         if self.seek_entries.len() >= 2 {
             let num_frames = u32::try_from(self.seek_entries.len())
                 .map_err(|_| std::io::Error::other("Seek table frame count exceeds u32"))?;
@@ -82,22 +85,31 @@ impl<W: Write> SeekableZstdWriter<W> {
             let table_payload_size = u32::try_from(payload_u64)
                 .map_err(|_| std::io::Error::other("Seek table size exceeds u32"))?;
 
-            self.inner.write_all(
+            inner.write_all(
                 &crate::inspector::bay::ZSTD_SEEKABLE_SKIPPABLE_MAGIC.to_le_bytes(),
             )?;
-            self.inner.write_all(&table_payload_size.to_le_bytes())?;
+            inner.write_all(&table_payload_size.to_le_bytes())?;
             for &(comp_sz, decomp_sz) in &self.seek_entries {
-                self.inner.write_all(&comp_sz.to_le_bytes())?;
-                self.inner.write_all(&decomp_sz.to_le_bytes())?;
+                inner.write_all(&comp_sz.to_le_bytes())?;
+                inner.write_all(&decomp_sz.to_le_bytes())?;
             }
-            self.inner.write_all(&num_frames.to_le_bytes())?;
-            self.inner.write_all(&[0u8])?;
-            self.inner.write_all(
+            inner.write_all(&num_frames.to_le_bytes())?;
+            inner.write_all(&[0u8])?;
+            inner.write_all(
                 &crate::inspector::bay::ZSTD_SEEKABLE_FOOTER_MAGIC.to_le_bytes(),
             )?;
         }
-        self.inner.flush()?;
-        Ok(self.inner)
+        inner.flush()?;
+        self.frame_buf.zeroize();
+        self.comp_buf.zeroize();
+        Ok(inner)
+    }
+}
+
+impl<W: Write> Drop for SeekableZstdWriter<W> {
+    fn drop(&mut self) {
+        self.frame_buf.zeroize();
+        self.comp_buf.zeroize();
     }
 }
 
@@ -117,7 +129,11 @@ impl<W: Write> Write for SeekableZstdWriter<W> {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
+        if let Some(ref mut inner) = self.inner {
+            inner.flush()
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -418,7 +434,7 @@ pub fn write_bay_toc_trailer<W: Write>(
     }
 
     let toc_json = serde_json::to_vec(toc_entries).unwrap_or_default();
-    if toc_json.is_empty() {
+    if toc_json.is_empty() || (toc_json.len() as u64) > crate::inspector::bay::MAX_TOC_SIZE {
         return Ok(());
     }
 
@@ -442,6 +458,9 @@ pub fn write_bay_toc_trailer<W: Write>(
             .map_err(|e| std::io::Error::other(format!("TOC encryption error: {}", e)))?;
 
         let enc_toc_len = encrypted_toc.len() as u64;
+        if enc_toc_len > crate::inspector::bay::MAX_TOC_SIZE {
+            return Ok(());
+        }
 
         file_writer.write_all(&encrypted_toc)?;
         file_writer.write_all(&enc_toc_len.to_le_bytes())?;

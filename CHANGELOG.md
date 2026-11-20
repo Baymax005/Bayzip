@@ -2,6 +2,32 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v3.0.1] - 2026-11-20
+### Security, Memory Bounds & QA Hardening Patch (`v3.0.0` Post-Release Audit)
+
+- **Multi-Member `.tar.gz` & `.tar.zst` Cross-Module Parity (`BUG-01`, `inspector/tar.rs`, `inspector/preview.rs`, `tester.rs`)**:
+  - Upgraded `inspector::tar::list_tar_entries`, `preview_tar_entry_bytes`, and `tester::test_tar_archive` with magic-byte format detection, `flate2::bufread::MultiGzDecoder` (`pigz` multi-member support), and `zstd::stream::Decoder::with_buffer` (multi-frame `.tar.zst`), and routed `ArchiveFormat::Zstd` previews cleanly in `inspector/preview.rs`.
+- **RFC 8878 Seek Table, `.bay` Stream & Oversized TOC Safety (`BUG-02`, `BUG-04`, `SEC-04`, `SEC-05`, `QA-01`, `compressor/bay.rs`, `inspector/bay.rs`, `extractor/bay.rs`, `tester.rs`)**:
+  - Guarded `write_bay_toc_trailer` so `> 64 MB` (`MAX_TOC_SIZE`) trailers are skipped cleanly rather than triggering EOF mis-framing in `locate_bay_payload_end`.
+  - Tightened `read_zstd_seek_table` to require `comp_size >= 8` and `decomp_size > 0`.
+  - Added single-pass `SeekTableVerifyReader` inside `tester::test_unencrypted_zstd_bay` so corrupted RFC 8878 seek tables or frame size mismatches are reported explicitly as `Zstd Seek Table` verification errors.
+  - Enforced `is_valid_bay_inner_sig_suffix` validation and strict `entry_type` bounds (`0`, `1`, `2`) across `extractor/bay.rs`, `inspector/bay.rs`, and `tester.rs`.
+  - Fed exact `BAYTOC` uncompressed byte totals into `extract_bay_archive` progress estimation (`QA-01`).
+- **NTFS Reparse/Symlink Guards, Read-Only `.baypart` Recovery & `hoist_single_root_dir` Rollback (`BUG-03`, `BUG-05`, `SEC-01`, `SEC-02`, `SEC-03`, `MEM-05`)**:
+  - Added `is_reparse_or_symlink` and `check_existing_target_safe` in `extractor/io.rs` and enforced symlink/NTFS reparse-point checks across `DirectoryCache::ensure_dir_tracked`, `.bay`, `.zip`, `.7z`, `.tar`, and `system_tar.rs`.
+  - Capped upfront `preallocate_file` NTFS `FileAllocationInfo` reservations at `PREALLOC_MAX_BYTES` (`256 MB`), and retried with `clear_readonly` on `PermissionDenied` when overwriting stale read-only `.baypart` temporary files (`extractor/io.rs`, `extractor/zip.rs`).
+  - Added staging cleanup & extracted-file rollback when `hoist_single_root_dir` fails in `extractor/tar.rs`.
+  - Forced `StagingDirGuard` staging isolation in `extractor/system_tar.rs` whenever `-tvf` encounters unparseable lines (`had_unparseable`), while clearing `entry_sizes` and `total_uncompressed_bytes` cleanly on fallback (`MEM-05`).
+- **Memory & Plaintext Zeroization Hardening (`MEM-01`, `MEM-02`, `MEM-03`, `MEM-04`)**:
+  - Replaced `HashSet<String>` in `AsyncFileWriterPool::seen_paths` with `u64` path hashes (`normalize_write_key_hash`) to eliminate duplicate full-path heap strings across large extractions.
+  - Added explicit `aborted: Arc<AtomicBool>` and ordered teardown in `PipedAesBufReader::drop` (`recycle_tx` close -> queue drain -> `worker.join()` -> final drain + `.zeroize()`), plus `Drop` zeroization on `SeekableZstdWriter` and `4 MB` worker `comp_buf` shrink clamping in `seekable_worker_loop`.
+- **Mid-Flight Worker Thread Priority Synchronization (`BUG-06`, `priority.rs`)**:
+  - Tracked active guarded OS thread handles inside `ProcessPriorityState` via `OpenThread` / `CloseHandle` so toggling `set_background_shield` updates live background worker thread priorities in real time alongside `SetPriorityClass`.
+
+### Verification
+- Verified **93/93 unit tests passing** (`cargo test --manifest-path src-tauri/Cargo.toml`), adding **3 new hardening unit tests (#91–#93)** across `extractor::io`, `extractor::bay`, and `extractor::tar` plus multi-thread worker priority verification in `priority::tests`.
+- Verified zero compiler/linter warnings across `cargo clippy --all-targets -- -D warnings` and zero errors across `npx tsc --noEmit`.
+
 ## [v3.0.0] - 2026-11-20
 ### Major Release — Multi-Core Storage-Aware Extraction Engine & Seekable `.bay` / `.bayg` Container (Phases 1–6)
 

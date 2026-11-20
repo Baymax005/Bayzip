@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -249,6 +250,11 @@ fn seekable_worker_loop(shared: Arc<SeekableShared>, archive_path: PathBuf) {
             }
         }
 
+        if comp_buf.capacity() > 4 * 1024 * 1024 {
+            comp_buf.clear();
+            comp_buf.shrink_to(4 * 1024 * 1024);
+        }
+
         let mut st = match shared.state.lock() {
             Ok(g) => g,
             Err(_) => return,
@@ -413,6 +419,7 @@ impl Drop for ParallelSeekableZstdReader {
 struct PipedAesBufReader {
     data_rx: Option<Receiver<Result<Vec<u8>, std::io::Error>>>,
     recycle_tx: Option<SyncSender<Vec<u8>>>,
+    aborted: Arc<AtomicBool>,
     current_buf: Vec<u8>,
     offset: usize,
     eof: bool,
@@ -436,18 +443,23 @@ impl PipedAesBufReader {
         }
 
         let cancel_token = current_extraction_token();
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_worker = Arc::clone(&aborted);
         let worker = std::thread::spawn(move || {
             let _priority_guard = ScopedPriorityGuard::new();
             loop {
-                let cancelled = match &cancel_token {
-                    Some(token) => token.is_cancelled(),
-                    None => is_extraction_cancelled(),
-                };
+                let cancelled = aborted_worker.load(Ordering::Acquire)
+                    || match &cancel_token {
+                        Some(token) => token.is_cancelled(),
+                        None => is_extraction_cancelled(),
+                    };
                 if cancelled {
-                    let _ = data_tx.send(Err(std::io::Error::new(
-                        std::io::ErrorKind::Interrupted,
-                        "Extraction cancelled by user",
-                    )));
+                    if !aborted_worker.load(Ordering::Acquire) {
+                        let _ = data_tx.send(Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "Extraction cancelled by user",
+                        )));
+                    }
                     break;
                 }
 
@@ -462,6 +474,9 @@ impl PipedAesBufReader {
                 let mut filled = 0;
                 let mut read_err: Option<std::io::Error> = None;
                 while filled < buf.len() {
+                    if aborted_worker.load(Ordering::Acquire) {
+                        break;
+                    }
                     match enc_reader.read(&mut buf[filled..]) {
                         Ok(0) => break,
                         Ok(n) => filled += n,
@@ -470,6 +485,13 @@ impl PipedAesBufReader {
                             break;
                         }
                     }
+                }
+
+                if aborted_worker.load(Ordering::Acquire) {
+                    buf.zeroize();
+                    buf.clear();
+                    drop(buf);
+                    break;
                 }
 
                 if filled > 0 {
@@ -502,6 +524,7 @@ impl PipedAesBufReader {
         Self {
             data_rx: Some(data_rx),
             recycle_tx: Some(recycle_tx),
+            aborted,
             current_buf: prefix.map(|p| p.to_vec()).unwrap_or_default(),
             offset: 0,
             eof: false,
@@ -576,8 +599,20 @@ impl Read for PipedAesBufReader {
 
 impl Drop for PipedAesBufReader {
     fn drop(&mut self) {
+        self.aborted.store(true, Ordering::Release);
         self.current_buf.zeroize();
         self.current_buf.clear();
+        self.recycle_tx.take();
+        if let Some(rx) = self.data_rx.as_ref() {
+            while let Ok(item) = rx.try_recv() {
+                if let Ok(mut b) = item {
+                    b.zeroize();
+                }
+            }
+        }
+        if let Some(handle) = self.worker.take() {
+            let _ = handle.join();
+        }
         if let Some(rx) = self.data_rx.take() {
             while let Ok(item) = rx.try_recv() {
                 if let Ok(mut b) = item {
@@ -585,10 +620,6 @@ impl Drop for PipedAesBufReader {
                 }
             }
             drop(rx);
-        }
-        self.recycle_tx.take();
-        if let Some(handle) = self.worker.take() {
-            let _ = handle.join();
         }
     }
 }
@@ -665,9 +696,14 @@ pub fn extract_bay_stream<R: Read>(
     match decoder.read_exact(&mut first_byte) {
         Ok(_) => {
             if first_byte[0] == b'B' {
-                // Peek/skip remaining signature bytes (AYZIP\x02, AYBRO\x02, AYLZ4\x02)
+                // Verify and skip remaining 6 signature bytes (AYZIP\x02, AYBRO\x02, AYLZ4\x02)
                 let mut rest_sig = [0u8; 6];
-                let _ = decoder.read_exact(&mut rest_sig);
+                decoder
+                    .read_exact(&mut rest_sig)
+                    .map_err(|e| format!("Error reading archive signature: {}", e))?;
+                if !crate::inspector::bay::is_valid_bay_inner_sig_suffix(&rest_sig) {
+                    return Err("Malformed .bay archive: invalid inner signature header".to_string());
+                }
             } else {
                 has_first = true;
             }
@@ -720,6 +756,12 @@ pub fn extract_bay_stream<R: Read>(
                     }
                 }
                 break;
+            }
+            if entry_type != 1 && entry_type != 2 {
+                return Err(format!(
+                    "Malformed .bay archive: invalid entry type {}",
+                    entry_type
+                ));
             }
 
             let mut len_bytes = [0u8; 4];
@@ -789,11 +831,7 @@ pub fn extract_bay_stream<R: Read>(
                 &mut newly_created,
             )?;
 
-            let file_existed = if dest_was_empty {
-                false
-            } else {
-                std::fs::symlink_metadata(&out_path).is_ok()
-            };
+            let file_existed = super::io::check_existing_target_safe(&out_path, dest_was_empty)?;
             let out_str = out_path.to_string_lossy().to_string();
 
             if file_size <= ASYNC_INMEMORY_MAX_BYTES {
@@ -949,21 +987,24 @@ pub fn extract_bay_archive(
     app: Option<&AppHandle>,
     excluded: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>, String> {
+    let (single_root_prefix, toc_uncompressed_bytes) =
+        if crate::inspector::has_instant_bay_toc(archive_path) {
+            let (entries, _, total_unc) = crate::inspector::list_bay_entries(archive_path, password);
+            (get_single_root_dir(&entries), total_unc)
+        } else {
+            (None, 0)
+        };
+    let s_prefix = single_root_prefix.as_deref();
+
     let total_expected_bytes: u64 = if let Some(sz) = expected_size.filter(|&s| s > 0) {
         sz
+    } else if toc_uncompressed_bytes > 0 {
+        toc_uncompressed_bytes
     } else {
         std::fs::metadata(archive_path)
             .map(|m| m.len() * 2)
             .unwrap_or(1)
     };
-
-    let single_root_prefix = if crate::inspector::has_instant_bay_toc(archive_path) {
-        let (entries, _, _) = crate::inspector::list_bay_entries(archive_path, password);
-        get_single_root_dir(&entries)
-    } else {
-        None
-    };
-    let s_prefix = single_root_prefix.as_deref();
 
     let raw_file = open_sequential_read(archive_path)
         .map_err(|e| format!("Failed to open .bay archive: {}", e))?;
@@ -1821,6 +1862,102 @@ mod tests {
 
         let (_, _, errors) = crate::tester::test_bay_archive(&bayg_path, None, None).unwrap();
         assert!(errors.is_empty(), "Unexpected gamer bayg test errors: {:?}", errors);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_bay_audit_seek_table_tester_invalid_entry_type_and_oversized_toc() {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test_bay_audit_fixes");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // 1. Invalid entry_type (e.g. 99) and invalid b'B' inner signature must be rejected (SEC-04)
+        let bad_type = vec![99u8, 1, 0, 0, 0, b'a'];
+        let err_type = extract_bay_stream(
+            Cursor::new(bad_type.clone()),
+            &base.join("out_bad_type"),
+            10,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err_type.contains("invalid entry type 99"));
+
+        let (_, _, test_type_errs) =
+            crate::tester::test_bay_stream(Cursor::new(bad_type), 10, None).unwrap();
+        assert!(!test_type_errs.is_empty());
+        assert!(test_type_errs[0].error.contains("invalid entry type 99"));
+
+        let bad_sig = b"BXOTHER\x01".to_vec();
+        let err_sig = extract_bay_stream(
+            Cursor::new(bad_sig),
+            &base.join("out_bad_sig"),
+            10,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err_sig.contains("invalid inner signature header"));
+
+        // 2. Oversized > 64 MB TOC is skipped instead of corrupting locate_bay_payload_end (BUG-02)
+        let huge_toc = vec![
+            crate::types::ArchiveEntryItem {
+                name: "x".repeat(200_000),
+                size: 1,
+                is_dir: false,
+            };
+            350
+        ];
+        let mut buf = b"PAYLOAD".to_vec();
+        crate::compressor::bay::write_bay_toc_trailer(&mut buf, &huge_toc, None).unwrap();
+        assert_eq!(buf, b"PAYLOAD");
+
+        // 3. tester.rs detects corrupted RFC 8878 seek table even when Zstd frames are valid (BUG-04)
+        let bay_path = base.join("seek_tamper.bay");
+        let chunk_payload = vec![0x5Au8; 300 * 1024];
+        {
+            let mut raw = File::create(&bay_path).unwrap();
+            raw.write_all(b"BAYZIP\x02\x00").unwrap();
+            let mut enc =
+                crate::compressor::bay::SeekableZstdWriter::new(raw, 1, 1, true, 128 * 1024)
+                    .unwrap();
+            write_bay_file_entry(&mut enc, "a.bin", &chunk_payload);
+            enc.write_all(&[0u8]).unwrap();
+            let mut raw = enc.finish().unwrap();
+            raw.flush().unwrap();
+        }
+        let mut bytes = std::fs::read(&bay_path).unwrap();
+        // Flip the uncompressed size byte in seek entry #0 (located at len - 9 - 12 = len - 21 for 2+ frames)
+        let f_len = bytes.len();
+        let footer_magic_off = f_len - 4;
+        assert_eq!(
+            u32::from_le_bytes(bytes[footer_magic_off..].try_into().unwrap()),
+            crate::inspector::bay::ZSTD_SEEKABLE_FOOTER_MAGIC
+        );
+        let num_frames = u32::from_le_bytes(bytes[f_len - 9..f_len - 5].try_into().unwrap()) as usize;
+        assert!(num_frames >= 2);
+        // Tamper entry #0's decompressed size field (bytes after comp_size at table_entries_start + 4)
+        let entries_start = f_len - 9 - num_frames * 8;
+        bytes[entries_start + 4] ^= 0x01;
+        let tampered_path = base.join("tampered_seek.bay");
+        std::fs::write(&tampered_path, &bytes).unwrap();
+
+        let (_, _, seek_errs) = crate::tester::test_bay_archive(&tampered_path, None, None).unwrap();
+        assert!(
+            !seek_errs.is_empty(),
+            "Expected tester to catch tampered RFC 8878 seek table"
+        );
+        assert!(
+            seek_errs.iter().any(|e| e.file_name.contains("Seek Table")),
+            "Expected seek table diagnostic, got: {:?}",
+            seek_errs
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

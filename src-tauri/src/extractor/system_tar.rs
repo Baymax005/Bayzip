@@ -218,6 +218,7 @@ struct SystemTarInspection {
     total_entries: usize,
     included_entries: usize,
     total_uncompressed_bytes: u64,
+    had_unparseable: bool,
 }
 
 fn run_tar_streaming_lines(
@@ -342,8 +343,8 @@ fn inspect_archive_with_system_tar(
         total_entries: 0,
         included_entries: 0,
         total_uncompressed_bytes: 0,
+        had_unparseable: false,
     };
-    let mut had_unparseable = false;
     let archive_arg = archive_path.to_string_lossy().to_string();
 
     run_tar_streaming_lines(
@@ -353,7 +354,7 @@ fn inspect_archive_with_system_tar(
         |raw_line| match parse_bsdtar_tvf_line(raw_line)? {
             TvfLineResult::Empty => Ok(()),
             TvfLineResult::Unparseable => {
-                had_unparseable = true;
+                inspection.had_unparseable = true;
                 Ok(())
             }
             TvfLineResult::Entry {
@@ -401,11 +402,14 @@ fn inspect_archive_with_system_tar(
         },
     )?;
 
-    // Fail-closed fallback ONLY if an unusual -tvf line format appeared: verify raw paths via -tf.
-    if had_unparseable {
+    // Fail-closed fallback ONLY if an unusual -tvf line format appeared: verify raw paths via -tf
+    // and force staged extraction so symlink_metadata/reparse guards validate every extracted file.
+    if inspection.had_unparseable {
         inspection.preexisting_paths.clear();
+        inspection.entry_sizes.clear();
         inspection.total_entries = 0;
         inspection.included_entries = 0;
+        inspection.total_uncompressed_bytes = 0;
 
         run_tar_streaming_lines(
             &["-tf", &archive_arg],
@@ -489,7 +493,11 @@ fn finalize_staged_extraction_inner(
             let ft = entry
                 .file_type()
                 .map_err(|e| format!("Failed inspecting staged file type: {}", e))?;
-            if ft.is_symlink() {
+            if ft.is_symlink()
+                || std::fs::symlink_metadata(entry.path())
+                    .map(|m| super::io::is_reparse_or_symlink(&m))
+                    .unwrap_or(false)
+            {
                 return Err(format!(
                     "Security violation: staged extraction produced symlink '{}'. Extraction aborted.",
                     clean_rel
@@ -508,6 +516,7 @@ fn finalize_staged_extraction_inner(
                         newly_created,
                     )?;
                 } else {
+                    super::io::check_existing_target_safe(&target_path, false)?;
                     dir_cache.ensure_dir(&target_path).map_err(|e| {
                         format!(
                             "Failed preparing directory '{}': {}",
@@ -524,8 +533,12 @@ fn finalize_staged_extraction_inner(
                     dest_was_empty,
                     newly_created,
                 )?;
-                let was_preexisting = preexisting_paths.contains(&target_key)
-                    || std::fs::symlink_metadata(&target_path).is_ok();
+                let was_preexisting = if preexisting_paths.contains(&target_key) {
+                    super::io::check_existing_target_safe(&target_path, false)?;
+                    true
+                } else {
+                    super::io::check_existing_target_safe(&target_path, dest_was_empty)?
+                };
                 let entry_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 let src_path = entry.path();
                 if safe_atomic_rename(&src_path, &target_path).is_err() {
@@ -604,10 +617,11 @@ pub fn extract_with_system_tar(
         archive_size.max(1)
     };
 
-    // Isolate excluded extractions in a same-volume staging folder so bsdtar case/glob
-    // differences can never overwrite preexisting destination files or leak excluded paths.
+    // Isolate excluded or unparseable-listing extractions in a same-volume staging folder so bsdtar
+    // case/glob differences or unknown entry types can never bypass symlink/reparse guards.
+    let use_staging = has_exclusions || inspection.had_unparseable;
     let mut staging_guard = StagingDirGuard(None);
-    let extract_target: PathBuf = if has_exclusions {
+    let extract_target: PathBuf = if use_staging {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -714,7 +728,7 @@ pub fn extract_with_system_tar(
         *current_rel_slot = (!clean_rel.ends_with('/')).then(|| normalize_fs_key(&safe_path));
         *current_path_slot = Some(out_path.clone());
 
-        if !has_exclusions {
+        if !use_staging {
             let norm_key = normalize_fs_key(&out_path);
             let was_preexisting = inspection.preexisting_paths.contains(&norm_key);
             let out_str = out_path.to_string_lossy().to_string();
@@ -819,7 +833,7 @@ pub fn extract_with_system_tar(
         }
     }
 
-    if has_exclusions {
+    if use_staging {
         match finalize_staged_extraction_inner(
             &extract_target,
             dest_dir,
