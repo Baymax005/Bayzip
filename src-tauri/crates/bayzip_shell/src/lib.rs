@@ -18,6 +18,27 @@ use windows::Win32::UI::Shell::{
 pub const CLSID_BAYZIP_SHELL: GUID = GUID::from_u128(0x44e23c12_5883_4903_9da9_33d72120c19a);
 
 static OBJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static SERVER_LOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+fn increment_object_count() {
+    let _ = OBJECT_COUNT.try_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_add(1));
+}
+
+fn decrement_object_count() {
+    let _ = OBJECT_COUNT.try_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_sub(1));
+}
+
+fn increment_server_lock() {
+    let _ = SERVER_LOCK_COUNT.try_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_add(1));
+}
+
+fn decrement_server_lock() {
+    let _ = SERVER_LOCK_COUNT.try_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_sub(1));
+}
+
+fn can_unload_module() -> bool {
+    OBJECT_COUNT.load(Ordering::SeqCst) == 0 && SERVER_LOCK_COUNT.load(Ordering::SeqCst) == 0
+}
 
 fn to_co_task_mem_pwstr(s: &str) -> windows::core::Result<PWSTR> {
     let utf16: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
@@ -136,14 +157,14 @@ pub struct BayzipExplorerCommand {
 
 impl BayzipExplorerCommand {
     pub fn new(action: CommandAction) -> Self {
-        OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        increment_object_count();
         Self { action }
     }
 }
 
 impl Drop for BayzipExplorerCommand {
     fn drop(&mut self) {
-        OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+        decrement_object_count();
     }
 }
 
@@ -318,7 +339,7 @@ pub struct BayzipEnumExplorerCommand {
 
 impl BayzipEnumExplorerCommand {
     pub fn new(commands: Vec<IExplorerCommand>) -> Self {
-        OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        increment_object_count();
         Self {
             commands,
             index: AtomicUsize::new(0),
@@ -328,11 +349,12 @@ impl BayzipEnumExplorerCommand {
 
 impl Drop for BayzipEnumExplorerCommand {
     fn drop(&mut self) {
-        OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+        decrement_object_count();
     }
 }
 
 impl IEnumExplorerCommand_Impl for BayzipEnumExplorerCommand_Impl {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn Next(
         &self,
         celt: u32,
@@ -419,18 +441,25 @@ pub struct BayzipClassFactory;
 
 impl BayzipClassFactory {
     pub fn new() -> Self {
-        OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        increment_object_count();
         Self
+    }
+}
+
+impl Default for BayzipClassFactory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl Drop for BayzipClassFactory {
     fn drop(&mut self) {
-        OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+        decrement_object_count();
     }
 }
 
 impl IClassFactory_Impl for BayzipClassFactory_Impl {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn CreateInstance(
         &self,
         punkouter: Option<&windows::core::IUnknown>,
@@ -459,9 +488,9 @@ impl IClassFactory_Impl for BayzipClassFactory_Impl {
     fn LockServer(&self, flock: BOOL) -> windows::core::Result<()> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if flock.as_bool() {
-                OBJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+                increment_server_lock();
             } else {
-                OBJECT_COUNT.fetch_sub(1, Ordering::SeqCst);
+                decrement_server_lock();
             }
             Ok(())
         }))
@@ -469,6 +498,11 @@ impl IClassFactory_Impl for BayzipClassFactory_Impl {
     }
 }
 
+/// COM entry point returning the `IClassFactory` for `CLSID_BAYZIP_SHELL`.
+///
+/// # Safety
+/// The caller must pass valid pointers (or null, which returns `E_POINTER`) for `rclsid`, `riid`,
+/// and `ppv` according to the standard Windows COM `DllGetClassObject` ABI contract.
 #[no_mangle]
 pub unsafe extern "system" fn DllGetClassObject(
     rclsid: *const GUID,
@@ -490,19 +524,64 @@ pub unsafe extern "system" fn DllGetClassObject(
         }
 
         let factory: IClassFactory = BayzipClassFactory::new().into();
-        unsafe { factory.query(riid, ppv).into() }
+        unsafe { factory.query(riid, ppv) }
     }))
     .unwrap_or(E_FAIL)
 }
 
+/// COM entry point reporting whether the DLL can be safely unloaded from memory.
+///
+/// # Safety
+/// Must be called by the Windows COM runtime under the standard `DllCanUnloadNow` ABI contract.
 #[no_mangle]
 pub unsafe extern "system" fn DllCanUnloadNow() -> HRESULT {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if OBJECT_COUNT.load(Ordering::SeqCst) == 0 {
+        if can_unload_module() {
             S_OK
         } else {
             S_FALSE
         }
     }))
     .unwrap_or(S_FALSE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset_counters() {
+        OBJECT_COUNT.store(0, Ordering::SeqCst);
+        SERVER_LOCK_COUNT.store(0, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_lock_server_saturates_and_never_underflows_object_count() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_counters();
+
+        decrement_server_lock();
+        decrement_server_lock();
+        assert_eq!(SERVER_LOCK_COUNT.load(Ordering::SeqCst), 0);
+        assert_eq!(OBJECT_COUNT.load(Ordering::SeqCst), 0);
+
+        increment_object_count();
+        decrement_server_lock();
+        decrement_server_lock();
+        assert_eq!(OBJECT_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(SERVER_LOCK_COUNT.load(Ordering::SeqCst), 0);
+        assert!(!can_unload_module());
+
+        decrement_object_count();
+        assert!(can_unload_module());
+
+        increment_server_lock();
+        assert!(!can_unload_module());
+        decrement_server_lock();
+        assert!(can_unload_module());
+
+        reset_counters();
+    }
 }

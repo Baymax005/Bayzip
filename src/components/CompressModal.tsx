@@ -88,6 +88,7 @@ export function CompressModal({
   const availableAlgorithms = useMemo(() => {
     return formatAlgorithms[selectedFormat] || ["Standard"];
   }, [selectedFormat, formatAlgorithms]);
+  const supportsEncryption = selectedFormat !== ".tar";
 
   const totalCores = specs?.cpu_cores || 8;
   const isRamGuarded =
@@ -372,6 +373,10 @@ export function CompressModal({
                   if (algos && algos.length > 0) {
                     setSelectedAlgorithm(algos[0]);
                   }
+                  if (newFmt === ".tar") {
+                    setSelectedEncryption("none");
+                    setCompressPassword("");
+                  }
                 }}
                 className="bg-[#252529] hover:bg-[#2E2E34] border border-[#323238] focus:border-[#38BDF8] rounded-[4px] px-2 py-1.5 text-xs text-[#F4F4F6] font-mono outline-none cursor-pointer transition-colors"
               >
@@ -403,18 +408,21 @@ export function CompressModal({
               <div className="space-y-1">
                 <label className="text-[11px] text-[#9CA3AF] font-medium">Encryption</label>
                 <select
-                  value={selectedEncryption}
+                  value={supportsEncryption ? selectedEncryption : "none"}
+                  disabled={!supportsEncryption}
                   onChange={(e) => setSelectedEncryption(e.target.value)}
-                  className="w-full bg-[#252529] hover:bg-[#2E2E34] border border-[#323238] focus:border-[#38BDF8] rounded-[4px] px-2 py-1.5 text-[11px] text-[#F4F4F6] outline-none cursor-pointer transition-colors"
+                  className="w-full bg-[#252529] hover:bg-[#2E2E34] border border-[#323238] focus:border-[#38BDF8] rounded-[4px] px-2 py-1.5 text-[11px] text-[#F4F4F6] outline-none cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <option value="none">None (Fastest)</option>
-                  <option value="aes256">AES-256</option>
+                  <option value="none">
+                    {supportsEncryption ? "None (Fastest)" : "Not supported (.tar)"}
+                  </option>
+                  {supportsEncryption && <option value="aes256">AES-256</option>}
                 </select>
               </div>
             </div>
 
             {/* Dedicated Clear Password Section when AES-256 is selected */}
-            {selectedEncryption === "aes256" && (
+            {supportsEncryption && selectedEncryption === "aes256" && (
               <div className="space-y-1.5 bg-[#141416] p-2.5 rounded-[4px] border border-[#323238]">
                 <label className="text-[11px] text-[#9CA3AF] font-medium flex items-center justify-between">
                   <span className="flex items-center space-x-1.5">

@@ -286,6 +286,7 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         .inner_size(580.0, 560.0)
         .resizable(false)
         .decorations(false)
+        .transparent(false)
         .shadow(true)
         .center()
         .build()
@@ -333,6 +334,7 @@ async fn open_progress_window(app: tauri::AppHandle) -> Result<(), String> {
         .inner_size(480.0, 260.0)
         .resizable(false)
         .decorations(false)
+        .transparent(false)
         .shadow(true)
         .center()
         .build()
@@ -386,16 +388,16 @@ async fn focus_main_window(app: tauri::AppHandle) -> Result<(), String> {
 async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     if let Some(window) = app.get_webview_window("mini-extract") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     if let Some(window) = app.get_webview_window("progress") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     app.exit(0);
     Ok(())
@@ -436,15 +438,44 @@ pub fn run() {
         tauri::Builder::default()
             .plugin(tauri_plugin_dialog::init())
             .plugin(tauri_plugin_opener::init())
+            .on_window_event(|window, event| {
+                if matches!(event, tauri::WindowEvent::Destroyed)
+                    && matches!(window.label(), "main" | "mini-extract")
+                {
+                    use tauri::Manager;
+                    window.app_handle().exit(0);
+                }
+            })
             .setup(move |app| {
-                use tauri::Manager;
                 if is_mini_extract {
-                    if let Some(mini_window) = app.get_webview_window("mini-extract") {
-                        let _ = mini_window.show();
-                        let _ = mini_window.set_focus();
-                    }
-                } else if let Some(main_window) = app.get_webview_window("main") {
-                    let _ = main_window.show();
+                    let mini_window = tauri::WebviewWindowBuilder::new(
+                        app,
+                        "mini-extract",
+                        tauri::WebviewUrl::App("index.html?window=mini-extract".into()),
+                    )
+                    .title("Bayzip Extract")
+                    .inner_size(480.0, 260.0)
+                    .resizable(false)
+                    .decorations(false)
+                    .transparent(false)
+                    .shadow(true)
+                    .center()
+                    .visible(true)
+                    .build()?;
+                    let _ = mini_window.set_focus();
+                } else {
+                    let main_window = tauri::WebviewWindowBuilder::new(
+                        app,
+                        "main",
+                        tauri::WebviewUrl::App("index.html".into()),
+                    )
+                    .title("Bayzip")
+                    .inner_size(800.0, 700.0)
+                    .decorations(false)
+                    .transparent(false)
+                    .shadow(true)
+                    .visible(true)
+                    .build()?;
                     let _ = main_window.set_focus();
                 }
                 Ok(())

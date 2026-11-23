@@ -706,6 +706,10 @@ pub fn compress_bay(
             }
         }
 
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
+
         // Atomic rename of completed archive
         safe_atomic_rename(&temp_final, output_path)
             .map_err(|e| format!("Failed to rename temporary archive to destination: {}", e))?;
@@ -945,6 +949,10 @@ pub fn headless_quick_compress_bay_items(paths: &[&Path], output_path: &Path, is
         write_bay_toc_trailer(&mut finished_writer, &toc_entries, None)
             .map_err(|e| format!("Failed to write TOC: {}", e))?;
         drop(finished_writer);
+
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
 
         safe_atomic_rename(&temp_output, output_path)
             .map_err(|e| format!("Failed to rename temporary file to destination: {}", e))?;

@@ -282,7 +282,9 @@ export default function App() {
     if (isCompressing || isExtracting || testStatus === "testing") {
       setIsConfirmCloseOpen(true);
     } else {
-      getCurrentWindow().close().catch(() => {});
+      invoke("exit_app").catch(() => {
+        getCurrentWindow().close().catch(() => {});
+      });
     }
   };
 
@@ -680,7 +682,15 @@ export default function App() {
 
     invoke<StartupCommand>("get_cli_args")
       .then((cmd) => {
-        if (isMounted && cmd && cmd.paths && cmd.paths.length > 0) {
+        if (!isMounted || !cmd) return;
+        if (
+          cmd.action === "extract-here" ||
+          cmd.action === "extract-to-folder" ||
+          cmd.action === "mini-extract"
+        ) {
+          return;
+        }
+        if (cmd.paths && cmd.paths.length > 0) {
           if (cmd.action === "compress") {
             setSelectedArchive(null);
             setArchiveInfo(null);
@@ -944,7 +954,9 @@ export default function App() {
   const handleCompress = async () => {
     if (isCompressingRef.current || isExtractingRef.current || isTestingRef.current || selectedFiles.length === 0) return;
 
-    if (selectedEncryption !== "none" && !compressPassword.trim()) {
+    const effectiveEncryption = selectedFormat === ".tar" ? "none" : selectedEncryption;
+
+    if (effectiveEncryption !== "none" && !compressPassword.trim()) {
       setGlobalError({
         title: "Encryption Password Required",
         message: "Please enter an archive password to enable encryption.",
@@ -998,8 +1010,8 @@ export default function App() {
               algorithm: selectedAlgorithm,
               slider_value: sliderValue,
               custom_name: undefined,
-              encryption: selectedEncryption,
-              password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
+              encryption: effectiveEncryption,
+              password: effectiveEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
               output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
               smart_bypass: smartMediaBypass,
               excluded_paths: excludedCompressPaths.size > 0 ? Array.from(excludedCompressPaths) : undefined,
@@ -1036,8 +1048,8 @@ export default function App() {
             algorithm: selectedAlgorithm,
             slider_value: sliderValue,
             custom_name: customArchiveName.trim() || undefined,
-            encryption: selectedEncryption,
-            password: selectedEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
+            encryption: effectiveEncryption,
+            password: effectiveEncryption !== "none" && compressPassword.trim() ? compressPassword.trim() : undefined,
             output_dir: !archiveToOriginalPath && compressDestDir.trim() ? compressDestDir.trim() : undefined,
             smart_bypass: smartMediaBypass,
             excluded_paths: excludedCompressPaths.size > 0 ? Array.from(excludedCompressPaths) : undefined,

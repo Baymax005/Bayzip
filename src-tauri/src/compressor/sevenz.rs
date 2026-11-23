@@ -180,6 +180,10 @@ pub fn compress_7z(
         let inner = sz.finish().map_err(|e| format!("7z finalize error: {}", e))?;
         drop(inner);
 
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
+
         safe_atomic_rename(&temp_output, output_path)
             .map_err(|e| format!("Failed to rename temporary 7z file to destination: {}", e))?;
 
@@ -309,6 +313,10 @@ pub fn headless_quick_compress_7z_items(paths: &[&Path], output_path: &Path) -> 
 
         let inner = sz.finish().map_err(|e| format!("7z finalize error: {}", e))?;
         drop(inner);
+
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
 
         safe_atomic_rename(&temp_output, output_path)
             .map_err(|e| format!("Failed to rename temporary 7z file to destination: {}", e))?;

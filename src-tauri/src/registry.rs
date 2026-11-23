@@ -29,6 +29,21 @@ fn get_powershell_exe() -> std::path::PathBuf {
 }
 
 #[cfg(target_os = "windows")]
+fn build_register_appx_command(manifest_file: &std::path::Path, app_dir: &std::path::Path) -> Command {
+    let mut ps_cmd = Command::new(get_powershell_exe());
+    ps_cmd.env("BAYZIP_MANIFEST", manifest_file);
+    ps_cmd.env("BAYZIP_APP_DIR", app_dir);
+    ps_cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Add-AppxPackage -Register $env:BAYZIP_MANIFEST -ExternalLocation $env:BAYZIP_APP_DIR -ErrorAction SilentlyContinue",
+    ]);
+    ps_cmd.creation_flags(CREATE_NO_WINDOW);
+    ps_cmd
+}
+
+#[cfg(target_os = "windows")]
 pub fn notify_shell_associations_changed() {
     unsafe {
         // SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_FLUSH = 0x1000
@@ -375,16 +390,7 @@ pub fn register_context_menu_sync() -> Result<String, String> {
                 }
 
                 if is_win11 && dest_dll.exists() && manifest_file.exists() {
-                    let manifest_escaped = manifest_file.to_string_lossy().replace('\'', "''");
-                    let app_dir_escaped = app_dir.to_string_lossy().replace('\'', "''");
-                    let mut ps_cmd = Command::new(get_powershell_exe());
-                    let ps_script = format!(
-                        "Add-AppxPackage -Register '{}' -ExternalLocation '{}' -ErrorAction SilentlyContinue",
-                        manifest_escaped,
-                        app_dir_escaped
-                    );
-                    ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
-                    ps_cmd.creation_flags(CREATE_NO_WINDOW);
+                    let mut ps_cmd = build_register_appx_command(&manifest_file, &app_dir);
                     let _ = ps_cmd.output();
                 }
 
@@ -485,6 +491,37 @@ pub fn unregister_context_menu_sync() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_build_register_appx_command_uses_env_vars_not_interpolation() {
+        let manifest = std::path::PathBuf::from("C:\\Users\\O’Brien's $(calc)\\AppxManifest.xml");
+        let app_dir = std::path::PathBuf::from("C:\\Users\\O’Brien's $(calc)\\Bayzip");
+        let cmd = build_register_appx_command(&manifest, &app_dir);
+
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        for arg in &args {
+            assert!(!arg.contains('\u{2019}'), "arg leaked curly quote: {}", arg);
+            assert!(!arg.contains('\''), "arg leaked ASCII quote: {}", arg);
+            assert!(!arg.contains("$(calc)"), "arg leaked command sub: {}", arg);
+        }
+        assert!(args.iter().any(|a| a.contains("$env:BAYZIP_MANIFEST") && a.contains("$env:BAYZIP_APP_DIR")));
+
+        let mut found_manifest = None;
+        let mut found_app_dir = None;
+        for (k, v) in cmd.get_envs() {
+            if k == "BAYZIP_MANIFEST" {
+                found_manifest = v.map(std::path::PathBuf::from);
+            } else if k == "BAYZIP_APP_DIR" {
+                found_app_dir = v.map(std::path::PathBuf::from);
+            }
+        }
+        assert_eq!(found_manifest.as_ref(), Some(&manifest));
+        assert_eq!(found_app_dir.as_ref(), Some(&app_dir));
+    }
 
     #[test]
     fn test_format_registration_stamp_determinism() {

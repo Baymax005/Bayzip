@@ -287,6 +287,10 @@ pub fn compress_zip(
         inner.flush().map_err(|e| format!("Failed to flush zip buffer: {}", e))?;
         drop(inner);
 
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
+
         safe_atomic_rename(&temp_output, output_path)
             .map_err(|e| format!("Failed to rename temporary zip file to destination: {}", e))?;
 
@@ -425,6 +429,10 @@ pub fn headless_quick_compress_zip_items(paths: &[&Path], output_path: &Path) ->
         }
 
         writer.finish().map_err(|e| format!("Failed to finalize zip: {}", e))?;
+
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
 
         safe_atomic_rename(&temp_output, output_path)
             .map_err(|e| format!("Failed to rename temporary zip file to destination: {}", e))?;

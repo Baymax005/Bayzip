@@ -159,11 +159,25 @@ export function MiniExtractWindow() {
     }
   };
 
+  const didInitRef = useRef(false);
+
   // Initialize from CLI arguments on mount
   useEffect(() => {
+    if (didInitRef.current) return;
+    didInitRef.current = true;
+
     const initFromCli = async () => {
       try {
         const cmd = await invoke<StartupCommand>("get_cli_args");
+        const isMiniAction =
+          cmd.action === "extract-here" ||
+          cmd.action === "extract-to-folder" ||
+          cmd.action === "mini-extract";
+        if (!isMiniAction) {
+          setErrorMessage("Mini extract window launched without a valid extract action.");
+          setState("error");
+          return;
+        }
         if (!cmd.paths || cmd.paths.length === 0) {
           setErrorMessage("No archive file provided to extract.");
           setState("error");

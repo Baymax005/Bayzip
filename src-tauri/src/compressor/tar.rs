@@ -157,6 +157,10 @@ pub fn compress_tar(
         builder.finish().map_err(|e| format!("Tar finalize error: {}", e))?;
         drop(builder);
 
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
+
         safe_atomic_rename(&temp_output, output_path)
             .map_err(|e| format!("Failed to rename temporary tar file to destination: {}", e))?;
 
@@ -261,6 +265,10 @@ pub fn headless_quick_compress_tar_items(paths: &[&Path], output_path: &Path) ->
 
         builder.finish().map_err(|e| format!("Tar finalize error: {}", e))?;
         drop(builder);
+
+        if is_compression_cancelled() {
+            return Err("Compression cancelled by user".to_string());
+        }
 
         safe_atomic_rename(&temp_output, output_path)
             .map_err(|e| format!("Failed to rename temporary tar file to destination: {}", e))?;

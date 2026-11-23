@@ -2,6 +2,28 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v3.0.2] - 2026-11-24
+### Phase 1 Audit Hotfix — Window Lifecycle, `.tar` Encryption Safety, Shell COM Refcounting & Build Integrity
+
+- **Dynamic Primary Window Creation, Mini-Extract Action Guard & Clean Exit (`CRIT-01`, `HIGH-05`, `tauri.conf.json`, `lib.rs`, `App.tsx`, `MiniExtractWindow.tsx`)**:
+  - Switched `tauri.conf.json` to `"windows": []` so auxiliary windows (`settings`, `progress`, `mini-extract`) are no longer eagerly instantiated hidden at startup, and dynamically built only `"main"` or `"mini-extract"` in `lib.rs::run()`.
+  - Added explicit CLI action gating in `MiniExtractWindow.tsx` (`"extract-here"`, `"extract-to-folder"`, `"mini-extract"`) with a StrictMode initialization guard, and skipped mini-extract actions in `App.tsx`.
+  - Updated `exit_app` to call `.destroy()`, wired `handleRequestClose` to invoke `exit_app`, and added `WindowEvent::Destroyed` termination for `"main"` and `"mini-extract"` so closing never leaves zombie WebView2 processes.
+- **Reject & Disable `.tar` Encryption (`CRIT-02`, `compressor/mod.rs`, `CompressModal.tsx`, `App.tsx`)**:
+  - Disabled AES-256 encryption selection in `CompressModal.tsx` when `.tar` is selected, clearing any entered password on format switch, and added `validate_encryption_support()` in `compressor/mod.rs` to reject encrypted `.tar` requests on the backend.
+- **PowerShell Environment Variable Passing (`HIGH-01`, `registry.rs`)**:
+  - Replaced string-interpolated `Add-AppxPackage` arguments in `register_context_menu_sync()` with `build_register_appx_command()`, passing manifest and install directory paths via `BAYZIP_MANIFEST` and `BAYZIP_APP_DIR` environment variables to prevent ASCII/Unicode smart-quote injection.
+- **COM `LockServer` Reference Count Isolation (`HIGH-04`, `bayzip_shell/src/lib.rs`)**:
+  - Separated `SERVER_LOCK_COUNT` from `OBJECT_COUNT` using checked `try_update` increments/decrements so unmatched `LockServer(FALSE)` calls saturate cleanly at `0` without underflowing `OBJECT_COUNT` or causing premature `DllCanUnloadNow` / Explorer UAF crashes, and resolved all workspace Clippy lints in `bayzip_shell`.
+- **Preserve Pre-Existing Output Files on Compression Cancel (`HIGH-06`, `compressor/mod.rs`, `bay.rs`, `sevenz.rs`, `tar.rs`, `zip.rs`)**:
+  - Added `should_remove_output_after_cancel()` and `is_compression_cancelled()` guards before `safe_atomic_rename()`, ensuring cancelled or failed runs only clean up `.baytmp` staging files and never delete pre-existing `output_path` archives.
+- **Strict Profile DLL Selection (`HIGH-08`, `build.rs`)**:
+  - Updated `build.rs` to select release `bayzip_shell.dll` strictly when `PROFILE == "release"` (failing fast on Windows if missing instead of embedding a debug or 0-byte placeholder) and added `cargo:rerun-if-env-changed=PROFILE`.
+
+### Verification
+- Verified **97/97 automated unit tests passing** across the Cargo workspace (`96` in `bayzip_lib` + `1` in `bayzip_shell`, including **4 new regression tests #94–#97**).
+- Verified `cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings` (`0` warnings/errors), `cargo build -p bayzip_shell --release`, `npm run build` (`tsc && vite build`), and `npx tsc --noEmit` (`0` errors).
+
 ## [v3.0.1] - 2026-11-20
 ### Security, Memory Bounds & QA Hardening Patch (`v3.0.0` Post-Release Audit)
 

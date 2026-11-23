@@ -237,6 +237,36 @@ pub fn is_gamer_preset(format: &str) -> bool {
     )
 }
 
+pub fn validate_encryption_support(
+    format: &str,
+    password: Option<&str>,
+    encryption: Option<&str>,
+) -> Result<(), String> {
+    let fmt_clean = format.trim_start_matches('.').to_lowercase();
+    let wants_encryption = password.map(|s| !s.trim().is_empty()).unwrap_or(false)
+        || encryption
+            .map(|e| {
+                let t = e.trim();
+                !t.is_empty() && !t.eq_ignore_ascii_case("none")
+            })
+            .unwrap_or(false);
+    if fmt_clean == "tar" && wants_encryption {
+        return Err(
+            "Encryption is not supported for .tar archives. Please select .bay, .bayg, .zip, or .7z for AES-256 encryption."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+pub fn should_remove_output_after_cancel(
+    compress_succeeded: bool,
+    output_existed_before: bool,
+    is_cancelled: bool,
+) -> bool {
+    compress_succeeded && !output_existed_before && is_cancelled
+}
+
 pub fn headless_quick_compress(format: &str, target_path_str: &str) -> Result<(), String> {
     headless_quick_compress_targets(format, &[target_path_str])
 }
@@ -371,8 +401,10 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
 
     let pwd_ref = payload.password.as_deref();
     let enc_ref = payload.encryption.as_deref();
+    validate_encryption_support(&payload.format, pwd_ref, enc_ref)?;
     let fmt_clean = payload.format.trim_start_matches('.').to_lowercase();
     let smart_bypass = payload.smart_bypass.unwrap_or_else(utils::is_smart_bypass_enabled);
+    let output_existed_before = output_path.exists();
     let compress_res = match fmt_clean.as_str() {
         "zip" => {
             compress_zip(
@@ -421,17 +453,14 @@ pub fn compress_files_sync(app: AppHandle, payload: CompressPayload) -> Result<C
     };
 
     if let Err(e) = compress_res {
-        if is_compression_cancelled() || e.contains("cancelled") {
-            if output_path.exists() {
-                let _ = std::fs::remove_file(&output_path);
-            }
+        if is_compression_cancelled() {
             return Err("Compression cancelled by user".to_string());
         }
         return Err(e);
     }
 
     if is_compression_cancelled() {
-        if output_path.exists() {
+        if should_remove_output_after_cancel(true, output_existed_before, true) && output_path.exists() {
             let _ = std::fs::remove_file(&output_path);
         }
         return Err("Compression cancelled by user".to_string());
@@ -485,6 +514,16 @@ mod tests {
     }
 
     #[test]
+    fn test_should_remove_output_after_cancel_preserves_existing_file() {
+        assert!(!should_remove_output_after_cancel(false, true, true));
+        assert!(!should_remove_output_after_cancel(false, false, true));
+        assert!(!should_remove_output_after_cancel(true, true, true));
+        assert!(!should_remove_output_after_cancel(true, false, false));
+        assert!(!should_remove_output_after_cancel(true, true, false));
+        assert!(should_remove_output_after_cancel(true, false, true));
+    }
+
+    #[test]
     fn test_calculate_zstd_level_gamer_preset_cap() {
         // Gamer preset capped at Level 3 across 75% and 100%
         assert_eq!(calculate_zstd_level(0, true), -2);
@@ -509,6 +548,19 @@ mod tests {
         assert_eq!(calculate_target_threads(50, total_cores), 8);
         assert_eq!(calculate_target_threads(75, total_cores), 12);
         assert_eq!(calculate_target_threads(100, total_cores), 16);
+    }
+
+    #[test]
+    fn test_validate_encryption_support_rejects_tar_encryption() {
+        assert!(validate_encryption_support("tar", Some("secret"), None).is_err());
+        assert!(validate_encryption_support(".tar", None, Some("aes256")).is_err());
+        assert!(validate_encryption_support("TAR", Some("secret"), Some("aes256")).is_err());
+        assert!(validate_encryption_support(".tar", None, None).is_ok());
+        assert!(validate_encryption_support(".tar", Some("   "), Some("none")).is_ok());
+        assert!(validate_encryption_support(".bay", Some("secret"), Some("aes256")).is_ok());
+        assert!(validate_encryption_support(".bayg", Some("secret"), Some("aes256")).is_ok());
+        assert!(validate_encryption_support(".zip", Some("secret"), Some("aes256")).is_ok());
+        assert!(validate_encryption_support(".7z", Some("secret"), Some("aes256")).is_ok());
     }
 
     #[test]
