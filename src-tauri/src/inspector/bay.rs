@@ -1,49 +1,28 @@
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::Path;
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce, Key,
-};
 use zeroize::Zeroize;
 
-use crate::crypto::{derive_bay_key, ChunkedAesReader};
+use crate::crypto::{decrypt_bay_toc, ChunkedAesReader, BAY_ENC_V4_MAGIC, BAY_ETOC_V4_MAGIC};
 use crate::types::ArchiveEntryItem;
 
-pub fn is_valid_bay_inner_sig_suffix(rest: &[u8; 6]) -> bool {
-    rest == b"AYZIP\x02" || rest == b"AYBRO\x02" || rest == b"AYLZ4\x02"
-}
+pub const BAY_ZSTD_MAGIC: &[u8; 8] = b"BAYZIP\x02\x00";
+pub const BAY_BROTLI_MAGIC: &[u8; 8] = b"BAYBRO\x02\x00";
+pub const BAY_LZ4_MAGIC: &[u8; 8] = b"BAYLZ4\x02\x00";
+pub const BAY_TOC_MAGIC: &[u8; 8] = b"BAYTOC\x02\x00";
 
 pub fn list_bay_stream_entries<R: Read>(mut decoder: R) -> (Vec<ArchiveEntryItem>, usize, u64) {
     let mut items = Vec::new();
     let mut total_size = 0u64;
 
-    let mut first_byte = [0u8; 1];
-    let mut has_first = false;
-    if decoder.read_exact(&mut first_byte).is_ok() {
-        if first_byte[0] == b'B' {
-            let mut rest = [0u8; 6];
-            if decoder.read_exact(&mut rest).is_err() || !is_valid_bay_inner_sig_suffix(&rest) {
-                return (Vec::new(), 0, 0);
-            }
-        } else {
-            has_first = true;
-        }
-    }
-
     // Allocate 2 MB fast skipping buffer
     let mut sink = vec![0u8; 2 * 1024 * 1024];
 
     loop {
-        let entry_type = if has_first {
-            has_first = false;
-            first_byte[0]
-        } else {
-            let mut b = [0u8; 1];
-            match decoder.read_exact(&mut b) {
-                Ok(_) => b[0],
-                Err(_) => break,
-            }
+        let mut b = [0u8; 1];
+        let entry_type = match decoder.read_exact(&mut b) {
+            Ok(_) => b[0],
+            Err(_) => break,
         };
 
         if entry_type == 0 {
@@ -297,11 +276,13 @@ pub fn read_bay_trailer_stream<R: Read + Seek>(
     reader.read_exact(&mut trailer_magic)
         .map_err(|e| format!("Failed to read archive trailer magic: {}", e))?;
 
-    if &trailer_magic == b"BAYTOC\x02\x00" {
+    if &trailer_magic == BAY_TOC_MAGIC {
         reader.seek(std::io::SeekFrom::Start(0))
             .map_err(|e| format!("Failed to seek archive header: {}", e))?;
         let mut header_magic = [0u8; 8];
-        if reader.read_exact(&mut header_magic).is_ok() && header_magic.starts_with(b"BAYENC") {
+        if reader.read_exact(&mut header_magic).is_ok()
+            && (&header_magic == BAY_ENC_V4_MAGIC || header_magic.starts_with(b"BAYENC"))
+        {
             return Err("Security violation: unencrypted BAYTOC trailer on encrypted BAYENC archive".to_string());
         }
 
@@ -341,31 +322,47 @@ pub fn read_bay_trailer_stream<R: Read + Seek>(
         let count = entries.len();
         let total_uncompressed: u64 = entries.iter().map(|e| e.size).sum();
         return Ok((entries, count, total_uncompressed));
-    } else if &trailer_magic == b"BAYETOC\x03" {
+    } else if &trailer_magic == BAY_ETOC_V4_MAGIC {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),
             _ => return Err("Password required: Encrypted BAYETOC trailer detected".into()),
         };
 
-        if file_len < 44 {
+        if file_len < 60 {
             return Err("Archive too small for BAYETOC trailer".into());
         }
 
-        reader.seek(std::io::SeekFrom::End(-44))
+        reader.seek(std::io::SeekFrom::Start(0))
+            .map_err(|e| format!("Failed to seek archive header: {}", e))?;
+        let mut hdr = [0u8; 32];
+        reader.read_exact(&mut hdr)
+            .map_err(|e| format!("Failed to read BAYENC header for BAYETOC verification: {}", e))?;
+        if &hdr[..8] != BAY_ENC_V4_MAGIC {
+            return Err("Malformed archive: Encrypted BAYETOC trailer requires BAYENC v4 header".into());
+        }
+        let mut header_salt = [0u8; 16];
+        header_salt.copy_from_slice(&hdr[8..24]);
+        let mut header_base_nonce = [0u8; 8];
+        header_base_nonce.copy_from_slice(&hdr[24..32]);
+
+        reader.seek(std::io::SeekFrom::End(-28))
             .map_err(|e| format!("Failed to seek BAYETOC header: {}", e))?;
-        let mut meta = [0u8; 36];
+        let mut meta = [0u8; 20];
         reader.read_exact(&mut meta)
             .map_err(|e| format!("Failed to read BAYETOC metadata: {}", e))?;
 
         let mut len_bytes = [0u8; 8];
         len_bytes.copy_from_slice(&meta[0..8]);
         let enc_toc_len = u64::from_le_bytes(len_bytes);
-        let salt = &meta[8..24];
-        let nonce_bytes = &meta[24..36];
+        let mut toc_nonce = [0u8; 12];
+        toc_nonce.copy_from_slice(&meta[8..20]);
 
         // V-SEC-03: Enforce strict bounded allocation safety checks
         if enc_toc_len == 0 {
             return Err("Malformed archive: Encrypted BAYETOC length declared as 0 bytes".into());
+        }
+        if enc_toc_len < 16 {
+            return Err("Malformed archive: Encrypted BAYETOC length smaller than authentication tag".into());
         }
         if enc_toc_len > MAX_TOC_SIZE {
             return Err(format!(
@@ -373,7 +370,7 @@ pub fn read_bay_trailer_stream<R: Read + Seek>(
                 enc_toc_len, MAX_TOC_SIZE
             ));
         }
-        if enc_toc_len > file_len.saturating_sub(44) {
+        if enc_toc_len > file_len.saturating_sub(60) {
             return Err(format!(
                 "Malformed archive: Encrypted BAYETOC length ({} bytes) exceeds total archive file bounds ({} bytes)",
                 enc_toc_len, file_len
@@ -381,20 +378,26 @@ pub fn read_bay_trailer_stream<R: Read + Seek>(
         }
 
         // Seek and allocate only after bounds verification passes
-        reader.seek(std::io::SeekFrom::End(-44 - enc_toc_len as i64))
+        reader.seek(std::io::SeekFrom::End(-28 - enc_toc_len as i64))
             .map_err(|e| format!("Failed to seek to encrypted BAYETOC data: {}", e))?;
         let mut enc_bytes = vec![0u8; enc_toc_len as usize];
         reader.read_exact(&mut enc_bytes)
             .map_err(|e| format!("Failed to read encrypted BAYETOC payload: {}", e))?;
 
-        let mut key_bytes = derive_bay_key(pwd, salt);
-        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-        let cipher = Aes256Gcm::new(key);
-        key_bytes.zeroize();
-        let nonce = Nonce::from_slice(nonce_bytes);
-
-        let mut decrypted = cipher.decrypt(nonce, enc_bytes.as_ref())
-            .map_err(|_| "Incorrect password or corrupted BAYETOC payload".to_string())?;
+        let mut decrypted = decrypt_bay_toc(
+            pwd,
+            &header_salt,
+            &header_base_nonce,
+            &toc_nonce,
+            &enc_bytes,
+        )
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                "Incorrect password or corrupted BAYETOC payload".to_string()
+            } else {
+                format!("Failed to decrypt BAYETOC metadata: {}", e)
+            }
+        })?;
 
         let entries_res: Result<Vec<ArchiveEntryItem>, _> = serde_json::from_slice(&decrypted);
         decrypted.zeroize();
@@ -448,9 +451,12 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
 
     let mut magic = [0u8; 8];
     let n = file.read(&mut magic).unwrap_or(0);
+    if n < 8 {
+        return (Vec::new(), 0, 0);
+    }
 
-    // Encrypted .bay v3 (Streaming chunked AEAD - Constant ~1 MB RAM)
-    if n >= 7 && magic.starts_with(b"BAYENC\x03") {
+    // Encrypted .bay v4 (Argon2id + Chunked AEAD)
+    if &magic == BAY_ENC_V4_MAGIC {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),
             _ => return (Vec::new(), 0, 0),
@@ -466,68 +472,40 @@ pub fn list_bay_entries(p: &Path, password: Option<&str>) -> (Vec<ArchiveEntryIt
             return (Vec::new(), 0, 0);
         }
 
-        if inner_sig.starts_with(b"BAYBRO\x02") {
+        if &inner_sig == BAY_BROTLI_MAGIC {
             let decoder = brotli::Decompressor::new(enc_reader, 64 * 1024);
             return list_bay_stream_entries(decoder);
-        } else if inner_sig.starts_with(b"BAYLZ4\x02") {
+        } else if &inner_sig == BAY_LZ4_MAGIC {
             let decoder = lz4_flex::frame::FrameDecoder::new(enc_reader);
             return list_bay_stream_entries(decoder);
-        } else if inner_sig.starts_with(b"BAYZIP\x02") {
+        } else if &inner_sig == BAY_ZSTD_MAGIC {
             if let Ok(decoder) = zstd::stream::Decoder::new(enc_reader) {
                 return list_bay_stream_entries(decoder);
             }
-        } else {
-            let combined = std::io::Cursor::new(inner_sig).chain(enc_reader);
-            if let Ok(decoder) = zstd::stream::Decoder::new(combined) {
-                return list_bay_stream_entries(decoder);
-            }
         }
         return (Vec::new(), 0, 0);
     }
 
-    // Legacy encrypted .bay v1 & v2 (deprecated in v2.0+)
-    if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
-        return (Vec::new(), 0, 0);
-    }
-
-    let _ = file.seek(std::io::SeekFrom::Start(0));
-    let mut magic_header = [0u8; 8];
-    let n = file.read(&mut magic_header).unwrap_or(0);
-    if n >= 7 && magic_header.starts_with(b"BAYBRO\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
-        let _ = file.seek(std::io::SeekFrom::Start(offset));
+    if &magic == BAY_BROTLI_MAGIC {
+        let _ = file.seek(std::io::SeekFrom::Start(8));
         let decoder = brotli::Decompressor::new(file, 64 * 1024);
         list_bay_stream_entries(decoder)
-    } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
-        let _ = file.seek(std::io::SeekFrom::Start(offset));
+    } else if &magic == BAY_LZ4_MAGIC {
+        let _ = file.seek(std::io::SeekFrom::Start(8));
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
         list_bay_stream_entries(decoder)
-    } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+    } else if &magic == BAY_ZSTD_MAGIC {
         let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
         let payload_end = locate_bay_payload_end(&mut file, file_len);
-        let _ = file.seek(std::io::SeekFrom::Start(offset));
-        let bounded = file.take(payload_end.saturating_sub(offset));
+        let _ = file.seek(std::io::SeekFrom::Start(8));
+        let bounded = file.take(payload_end.saturating_sub(8));
         if let Ok(decoder) = zstd::stream::Decoder::new(bounded) {
             list_bay_stream_entries(decoder)
         } else {
             (Vec::new(), 0, 0)
         }
-    } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
-        let _ = file.seek(std::io::SeekFrom::Start(0));
-        let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        list_bay_stream_entries(decoder)
     } else {
-        let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-        let payload_end = locate_bay_payload_end(&mut file, file_len);
-        let _ = file.seek(std::io::SeekFrom::Start(0));
-        let bounded = file.take(payload_end);
-        if let Ok(decoder) = zstd::stream::Decoder::new(bounded) {
-            list_bay_stream_entries(decoder)
-        } else {
-            (Vec::new(), 0, 0)
-        }
+        (Vec::new(), 0, 0)
     }
 }
 
@@ -535,29 +513,11 @@ pub fn read_bay_entry_from_stream<R: Read>(mut decoder: R, target_entry: &str) -
     let target = target_entry.replace('\\', "/").trim_start_matches('/').to_string();
     let max_preview_bytes = 15 * 1024 * 1024; // 15 MB max
 
-    let mut first_byte = [0u8; 1];
-    let mut has_first = false;
-    if decoder.read_exact(&mut first_byte).is_ok() {
-        if first_byte[0] == b'B' {
-            let mut rest = [0u8; 6];
-            if decoder.read_exact(&mut rest).is_err() || !is_valid_bay_inner_sig_suffix(&rest) {
-                return Err("Malformed .bay archive: invalid inner signature header".into());
-            }
-        } else {
-            has_first = true;
-        }
-    }
-
     loop {
-        let entry_type = if has_first {
-            has_first = false;
-            first_byte[0]
-        } else {
-            let mut b = [0u8; 1];
-            match decoder.read_exact(&mut b) {
-                Ok(_) => b[0],
-                Err(_) => break,
-            }
+        let mut b = [0u8; 1];
+        let entry_type = match decoder.read_exact(&mut b) {
+            Ok(_) => b[0],
+            Err(_) => break,
         };
 
         if entry_type == 0 {
@@ -611,9 +571,12 @@ pub fn preview_bay_entry_bytes(path: &Path, entry_name: &str, password: Option<&
 
     let mut magic = [0u8; 8];
     let n = file.read(&mut magic).unwrap_or(0);
+    if n < 8 {
+        return Err("Invalid or unsupported .bay archive header".into());
+    }
 
-    // Encrypted .bay v3 (Streaming chunked AEAD - Constant ~1 MB RAM)
-    if n >= 7 && magic.starts_with(b"BAYENC\x03") {
+    // Encrypted .bay v4 (Argon2id + Chunked AEAD)
+    if &magic == BAY_ENC_V4_MAGIC {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),
             _ => return Err("Password required for encrypted .bay archive".into()),
@@ -627,59 +590,37 @@ pub fn preview_bay_entry_bytes(path: &Path, entry_name: &str, password: Option<&
         enc_reader.read_exact(&mut inner_sig)
             .map_err(|_| "Incorrect password for .bay archive".to_string())?;
 
-        if inner_sig.starts_with(b"BAYBRO\x02") {
+        if &inner_sig == BAY_BROTLI_MAGIC {
             let decoder = brotli::Decompressor::new(enc_reader, 64 * 1024);
             return read_bay_entry_from_stream(decoder, entry_name);
-        } else if inner_sig.starts_with(b"BAYLZ4\x02") {
+        } else if &inner_sig == BAY_LZ4_MAGIC {
             let decoder = lz4_flex::frame::FrameDecoder::new(enc_reader);
             return read_bay_entry_from_stream(decoder, entry_name);
-        } else if inner_sig.starts_with(b"BAYZIP\x02") {
+        } else if &inner_sig == BAY_ZSTD_MAGIC {
             let decoder = zstd::stream::Decoder::new(enc_reader).map_err(|e| e.to_string())?;
             return read_bay_entry_from_stream(decoder, entry_name);
         } else {
-            let combined = std::io::Cursor::new(inner_sig).chain(enc_reader);
-            let decoder = zstd::stream::Decoder::new(combined).map_err(|e| e.to_string())?;
-            return read_bay_entry_from_stream(decoder, entry_name);
+            return Err("Invalid or unsupported inner .bay header".into());
         }
     }
 
-    // Legacy encrypted .bay v1 & v2 (deprecated in v2.0+)
-    if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
-        return Err("Deprecated archive: Legacy v1/v2 encryption format is no longer supported. Please re-encrypt using modern Bayzip v2.0+ streaming encryption.".to_string());
-    }
-
-    let _ = file.seek(std::io::SeekFrom::Start(0));
-    let mut magic_header = [0u8; 8];
-    let n = file.read(&mut magic_header).unwrap_or(0);
-    if n >= 7 && magic_header.starts_with(b"BAYBRO\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
-        let _ = file.seek(std::io::SeekFrom::Start(offset));
+    if &magic == BAY_BROTLI_MAGIC {
+        let _ = file.seek(std::io::SeekFrom::Start(8));
         let decoder = brotli::Decompressor::new(file, 64 * 1024);
         read_bay_entry_from_stream(decoder, entry_name)
-    } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
-        let _ = file.seek(std::io::SeekFrom::Start(offset));
+    } else if &magic == BAY_LZ4_MAGIC {
+        let _ = file.seek(std::io::SeekFrom::Start(8));
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
         read_bay_entry_from_stream(decoder, entry_name)
-    } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
+    } else if &magic == BAY_ZSTD_MAGIC {
         let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
         let payload_end = locate_bay_payload_end(&mut file, file_len);
-        let _ = file.seek(std::io::SeekFrom::Start(offset));
-        let bounded = file.take(payload_end.saturating_sub(offset));
+        let _ = file.seek(std::io::SeekFrom::Start(8));
+        let bounded = file.take(payload_end.saturating_sub(8));
         let decoder = zstd::stream::Decoder::new(bounded).map_err(|e| e.to_string())?;
-        read_bay_entry_from_stream(decoder, entry_name)
-    } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
-        let _ = file.seek(std::io::SeekFrom::Start(0));
-        let decoder = lz4_flex::frame::FrameDecoder::new(file);
         read_bay_entry_from_stream(decoder, entry_name)
     } else {
-        let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-        let payload_end = locate_bay_payload_end(&mut file, file_len);
-        let _ = file.seek(std::io::SeekFrom::Start(0));
-        let bounded = file.take(payload_end);
-        let decoder = zstd::stream::Decoder::new(bounded).map_err(|e| e.to_string())?;
-        read_bay_entry_from_stream(decoder, entry_name)
+        Err("Invalid or unsupported .bay archive header".into())
     }
 }
 
@@ -777,12 +718,14 @@ mod tests {
     #[test]
     fn test_read_bay_trailer_rejects_oversized_encrypted_toc() {
         let mut buffer = Vec::new();
+        buffer.extend_from_slice(BAY_ENC_V4_MAGIC);
+        buffer.extend_from_slice(&[0x11u8; 16]); // salt
+        buffer.extend_from_slice(&[0x22u8; 8]); // base_nonce
         buffer.extend_from_slice(b"DUMMY_ENCRYPTED_STREAM_PAYLOAD");
         let oversized_len: u64 = 100 * 1024 * 1024;
         buffer.extend_from_slice(&oversized_len.to_le_bytes()); // 8 bytes
-        buffer.extend_from_slice(&[0x11u8; 16]); // salt 16 bytes
-        buffer.extend_from_slice(&[0x22u8; 12]); // nonce 12 bytes
-        buffer.extend_from_slice(b"BAYETOC\x03"); // 8 bytes
+        buffer.extend_from_slice(&[0x33u8; 12]); // toc_nonce 12 bytes
+        buffer.extend_from_slice(BAY_ETOC_V4_MAGIC); // 8 bytes
 
         let file_len = buffer.len() as u64;
         let mut cursor = Cursor::new(buffer);
@@ -797,12 +740,14 @@ mod tests {
     #[test]
     fn test_read_bay_trailer_rejects_encrypted_toc_exceeding_file_bounds() {
         let mut buffer = Vec::new();
+        buffer.extend_from_slice(BAY_ENC_V4_MAGIC);
+        buffer.extend_from_slice(&[0x11u8; 16]);
+        buffer.extend_from_slice(&[0x22u8; 8]);
         buffer.extend_from_slice(b"SHORT");
         let bounds_exceeding_len: u64 = 5000;
         buffer.extend_from_slice(&bounds_exceeding_len.to_le_bytes());
-        buffer.extend_from_slice(&[0x11u8; 16]);
-        buffer.extend_from_slice(&[0x22u8; 12]);
-        buffer.extend_from_slice(b"BAYETOC\x03");
+        buffer.extend_from_slice(&[0x33u8; 12]);
+        buffer.extend_from_slice(BAY_ETOC_V4_MAGIC);
 
         let file_len = buffer.len() as u64;
         let mut cursor = Cursor::new(buffer);
@@ -817,12 +762,14 @@ mod tests {
     #[test]
     fn test_read_bay_trailer_rejects_zero_encrypted_toc_len() {
         let mut buffer = Vec::new();
+        buffer.extend_from_slice(BAY_ENC_V4_MAGIC);
+        buffer.extend_from_slice(&[0x11u8; 16]);
+        buffer.extend_from_slice(&[0x22u8; 8]);
         buffer.extend_from_slice(b"DUMMY_PAYLOAD");
         let zero_len: u64 = 0;
         buffer.extend_from_slice(&zero_len.to_le_bytes());
-        buffer.extend_from_slice(&[0x11u8; 16]);
-        buffer.extend_from_slice(&[0x22u8; 12]);
-        buffer.extend_from_slice(b"BAYETOC\x03");
+        buffer.extend_from_slice(&[0x33u8; 12]);
+        buffer.extend_from_slice(BAY_ETOC_V4_MAGIC);
 
         let file_len = buffer.len() as u64;
         let mut cursor = Cursor::new(buffer);
@@ -831,6 +778,21 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Encrypted BAYETOC length declared as 0 bytes"));
+    }
+
+    #[test]
+    fn test_read_bay_trailer_rejects_bayetoc_v4_on_non_encrypted_header() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(BAY_ZSTD_MAGIC);
+        buffer.extend_from_slice(&[0xAAu8; 40]);
+        buffer.extend_from_slice(&16u64.to_le_bytes());
+        buffer.extend_from_slice(&[0x33u8; 12]);
+        buffer.extend_from_slice(BAY_ETOC_V4_MAGIC);
+
+        let file_len = buffer.len() as u64;
+        let mut cursor = Cursor::new(buffer);
+        let err = read_bay_trailer_stream(&mut cursor, file_len, Some("password123")).unwrap_err();
+        assert!(err.contains("requires BAYENC v4 header"));
     }
 
     #[test]

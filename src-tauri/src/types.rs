@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use zeroize::Zeroize;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ArchiveFormat {
@@ -70,7 +71,7 @@ pub struct ArchiveInfo {
     pub entries: Vec<ArchiveEntryItem>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone)]
 pub struct CompressPayload {
     pub files: Vec<String>,
     pub format: String,
@@ -82,6 +83,31 @@ pub struct CompressPayload {
     pub output_dir: Option<String>,
     pub smart_bypass: Option<bool>,
     pub excluded_paths: Option<Vec<String>>,
+}
+
+impl std::fmt::Debug for CompressPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompressPayload")
+            .field("files", &self.files)
+            .field("format", &self.format)
+            .field("algorithm", &self.algorithm)
+            .field("slider_value", &self.slider_value)
+            .field("custom_name", &self.custom_name)
+            .field("encryption", &self.encryption)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("output_dir", &self.output_dir)
+            .field("smart_bypass", &self.smart_bypass)
+            .field("excluded_paths", &self.excluded_paths)
+            .finish()
+    }
+}
+
+impl Drop for CompressPayload {
+    fn drop(&mut self) {
+        if let Some(ref mut pwd) = self.password {
+            pwd.zeroize();
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -186,5 +212,24 @@ mod tests {
         token1.cancel();
         assert!(token1.is_cancelled());
         assert!(!token2.is_cancelled());
+    }
+
+    #[test]
+    fn test_compress_payload_debug_redacts_password() {
+        let payload = CompressPayload {
+            files: vec!["D:\\work\\data.txt".to_string()],
+            format: ".bay".to_string(),
+            algorithm: "Zstandard".to_string(),
+            slider_value: 50,
+            custom_name: None,
+            encryption: Some("aes256".to_string()),
+            password: Some("SuperSecretPassword123!".to_string()),
+            output_dir: None,
+            smart_bypass: Some(true),
+            excluded_paths: None,
+        };
+        let formatted = format!("{:?}", payload);
+        assert!(!formatted.contains("SuperSecretPassword123!"));
+        assert!(formatted.contains("[REDACTED]"));
     }
 }

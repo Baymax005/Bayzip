@@ -29,10 +29,12 @@ pub fn detect_archive_type(path: &Path) -> ArchiveFormat {
 
     let mut magic = [0u8; 8];
     let bytes_read = file.read(&mut magic).unwrap_or(0);
-    if bytes_read >= 6 && (magic.starts_with(b"BAYZIP") || magic.starts_with(b"BAYBRO") || magic.starts_with(b"BAYLZ4") || magic.starts_with(b"BAYENC")) {
-        return ArchiveFormat::Bay;
-    }
-    if bytes_read >= 4 && magic[0] == 0x04 && magic[1] == 0x22 && magic[2] == 0x4D && magic[3] == 0x18 {
+    if bytes_read == 8
+        && (&magic == crate::inspector::bay::BAY_ZSTD_MAGIC
+            || &magic == crate::inspector::bay::BAY_BROTLI_MAGIC
+            || &magic == crate::inspector::bay::BAY_LZ4_MAGIC
+            || &magic == crate::crypto::BAY_ENC_V4_MAGIC)
+    {
         return ArchiveFormat::Bay;
     }
     if bytes_read >= 4 && magic[0] == 0x50 && magic[1] == 0x4B && (magic[2] == 0x03 || magic[2] == 0x05 || magic[2] == 0x07) {
@@ -106,7 +108,8 @@ pub fn has_instant_bay_toc(p: &Path) -> bool {
     if file.seek(std::io::SeekFrom::End(-8)).is_ok() {
         let mut magic = [0u8; 8];
         if file.read_exact(&mut magic).is_ok() {
-            return &magic == b"BAYTOC\x02\x00" || &magic == b"BAYETOC\x03";
+            return &magic == crate::inspector::bay::BAY_TOC_MAGIC
+                || &magic == crate::crypto::BAY_ETOC_V4_MAGIC;
         }
     }
     false
@@ -203,12 +206,12 @@ pub fn is_archive_encrypted(path: &Path) -> bool {
     let Ok(mut file) = File::open(path) else { return false; };
     let mut header = [0u8; 16];
     let n = file.read(&mut header).unwrap_or(0);
-    if n >= 6 && header.starts_with(b"BAYENC") {
+    if n >= 8 && &header[0..8] == crate::crypto::BAY_ENC_V4_MAGIC {
         return true;
     }
     if file.seek(std::io::SeekFrom::End(-8)).is_ok() {
         let mut trailer = [0u8; 8];
-        if file.read_exact(&mut trailer).is_ok() && &trailer == b"BAYETOC\x03" {
+        if file.read_exact(&mut trailer).is_ok() && &trailer == crate::crypto::BAY_ETOC_V4_MAGIC {
             return true;
         }
     }
@@ -260,4 +263,55 @@ pub fn is_archive_encrypted(path: &Path) -> bool {
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_archive_type_exact_bay_headers_no_lz4_zst_collision() {
+        let base = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test_format_detect");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let write_bytes = |name: &str, bytes: &[u8]| {
+            let p = base.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+
+        // Raw LZ4 frame must not masquerade as ArchiveFormat::Bay
+        let raw_lz4 = write_bytes("raw_frame.lz4", &[0x04, 0x22, 0x4D, 0x18, 0x60, 0x40, 0x82, 0x00]);
+        assert_ne!(detect_archive_type(&raw_lz4), ArchiveFormat::Bay);
+
+        // Raw Zstd frame must be Zstd, not Bay
+        let raw_zst = write_bytes("raw_frame.zst", &[0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x58, 0x00, 0x00]);
+        assert_eq!(detect_archive_type(&raw_zst), ArchiveFormat::Zstd);
+
+        // Legacy BAYENC\x03\x00 and 7-byte headers must not match Bay
+        let legacy_enc = write_bytes("legacy.dat", b"BAYENC\x03\x00");
+        assert_eq!(detect_archive_type(&legacy_enc), ArchiveFormat::Unknown);
+        let short_hdr = write_bytes("short.dat", b"BAYZIP\x02");
+        assert_eq!(detect_archive_type(&short_hdr), ArchiveFormat::Unknown);
+
+        // Exact 8-byte modern Bay headers must all resolve to ArchiveFormat::Bay
+        for (idx, magic) in [
+            crate::inspector::bay::BAY_ZSTD_MAGIC,
+            crate::inspector::bay::BAY_BROTLI_MAGIC,
+            crate::inspector::bay::BAY_LZ4_MAGIC,
+            crate::crypto::BAY_ENC_V4_MAGIC,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let p = write_bytes(&format!("valid_{}.dat", idx), *magic);
+            assert_eq!(detect_archive_type(&p), ArchiveFormat::Bay);
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

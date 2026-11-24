@@ -124,58 +124,38 @@ pub fn test_bay_stream<R: Read>(
     let mut errors = Vec::new();
     let mut last_emit = Instant::now();
 
-    let mut first_byte = [0u8; 1];
-    let mut has_first = false;
-
-    match decoder.read_exact(&mut first_byte) {
-        Ok(_) => {
-            if first_byte[0] == b'B' {
-                let mut rest_sig = [0u8; 6];
-                if let Err(e) = decoder.read_exact(&mut rest_sig) {
-                    return Err(format!("Error reading archive signature: {}", e));
-                }
-                if !crate::inspector::bay::is_valid_bay_inner_sig_suffix(&rest_sig) {
-                    errors.push(TestArchiveErrorItem {
-                        file_name: "Archive Header".to_string(),
-                        error: "Malformed .bay archive: invalid inner signature header".to_string(),
-                    });
-                    return Ok((0, 0, errors));
-                }
-            } else {
-                has_first = true;
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok((0, 0, errors)),
-        Err(e) => return Err(format!("Error reading archive header: {}", e)),
-    }
-
     let mut io_buf = vec![0u8; 256 * 1024];
+    let mut saw_any_entry = false;
 
     loop {
         if is_test_cancelled() {
             return Err("Testing cancelled by user".to_string());
         }
 
-        let entry_type = if has_first {
-            has_first = false;
-            first_byte[0]
-        } else {
-            let mut b = [0u8; 1];
-            match decoder.read_exact(&mut b) {
-                Ok(_) => b[0],
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+        let mut b = [0u8; 1];
+        let entry_type = loop {
+            match decoder.read(&mut b) {
+                Ok(0) => {
+                    if !saw_any_entry {
+                        return Ok((0, 0, errors));
+                    }
                     errors.push(TestArchiveErrorItem {
                         file_name: "Archive Stream".to_string(),
                         error: "Unexpected end of stream (missing EOF marker)".to_string(),
                     });
-                    break;
+                    return Ok((tested_count, total_tested, errors));
                 }
+                Ok(_) => {
+                    saw_any_entry = true;
+                    break b[0];
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(e) => {
                     errors.push(TestArchiveErrorItem {
                         file_name: "Archive Stream".to_string(),
                         error: format!("Stream header read error: {}", e),
                     });
-                    break;
+                    return Ok((tested_count, total_tested, errors));
                 }
             }
         };
@@ -304,9 +284,12 @@ pub fn test_bay_archive(
     let mut magic = [0u8; 8];
     let n = file.read(&mut magic)
         .map_err(|e| format!("Invalid or corrupted .bay header: {}", e))?;
+    if n < 8 {
+        return Err("Invalid or unsupported .bay archive header".to_string());
+    }
 
-    // Encrypted .bay v3 (Streaming chunked AEAD)
-    if n >= 7 && magic.starts_with(b"BAYENC\x03") {
+    // Encrypted .bay v4 (Argon2id + Chunked AEAD)
+    if &magic == crate::crypto::BAY_ENC_V4_MAGIC {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),
             _ => return Err("Password required: This .bay archive is encrypted with AES-256-GCM.".into()),
@@ -320,52 +303,34 @@ pub fn test_bay_archive(
         enc_reader.read_exact(&mut inner_sig)
             .map_err(|_| "Incorrect password: Failed to decrypt AES-256-GCM archive.".to_string())?;
 
-        if inner_sig.starts_with(b"BAYBRO\x02") {
+        if &inner_sig == crate::inspector::bay::BAY_BROTLI_MAGIC {
             let decoder = brotli::Decompressor::new(enc_reader, 64 * 1024);
             return test_bay_stream(decoder, total_expected_bytes, app);
-        } else if inner_sig.starts_with(b"BAYLZ4\x02") {
+        } else if &inner_sig == crate::inspector::bay::BAY_LZ4_MAGIC {
             let decoder = lz4_flex::frame::FrameDecoder::new(enc_reader);
             return test_bay_stream(decoder, total_expected_bytes, app);
-        } else if inner_sig.starts_with(b"BAYZIP\x02") {
+        } else if &inner_sig == crate::inspector::bay::BAY_ZSTD_MAGIC {
             let decoder = zstd::stream::Decoder::new(enc_reader)
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
             return test_bay_stream(decoder, total_expected_bytes, app);
         } else {
-            let combined = std::io::Cursor::new(inner_sig).chain(enc_reader);
-            let decoder = zstd::stream::Decoder::new(combined)
-                .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return test_bay_stream(decoder, total_expected_bytes, app);
+            return Err("Invalid or unsupported inner .bay header".to_string());
         }
     }
 
-    if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
-        return Err("Deprecated archive: Legacy v1/v2 encryption is no longer supported.".to_string());
-    }
-
-    // Unencrypted .bay
-    file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    let mut magic_header = [0u8; 8];
-    let n = file.read(&mut magic_header).unwrap_or(0);
-
-    if n >= 7 && magic_header.starts_with(b"BAYBRO\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
-        file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    // Unencrypted .bay (exact 8-byte header)
+    if &magic == crate::inspector::bay::BAY_BROTLI_MAGIC {
+        file.seek(std::io::SeekFrom::Start(8)).map_err(|e| e.to_string())?;
         let decoder = brotli::Decompressor::new(file, 64 * 1024);
         test_bay_stream(decoder, total_expected_bytes, app)
-    } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
-        file.seek(std::io::SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+    } else if &magic == crate::inspector::bay::BAY_LZ4_MAGIC {
+        file.seek(std::io::SeekFrom::Start(8)).map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
         test_bay_stream(decoder, total_expected_bytes, app)
-    } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 { 8 } else { 7 };
-        test_unencrypted_zstd_bay(file.into_inner(), offset, total_expected_bytes, app)
-    } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
-        file.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-        let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        test_bay_stream(decoder, total_expected_bytes, app)
+    } else if &magic == crate::inspector::bay::BAY_ZSTD_MAGIC {
+        test_unencrypted_zstd_bay(file.into_inner(), 8, total_expected_bytes, app)
     } else {
-        test_unencrypted_zstd_bay(file.into_inner(), 0, total_expected_bytes, app)
+        Err("Invalid or unsupported .bay archive header".to_string())
     }
 }
 

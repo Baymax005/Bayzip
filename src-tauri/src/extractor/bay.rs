@@ -430,10 +430,7 @@ impl PipedAesBufReader {
     const RING_SLOTS: usize = 8;
     const BUF_CAP: usize = 512 * 1024;
 
-    fn new<R: Read + Send + 'static>(
-        mut enc_reader: ChunkedAesReader<R>,
-        prefix: Option<[u8; 8]>,
-    ) -> Self {
+    fn new<R: Read + Send + 'static>(mut enc_reader: ChunkedAesReader<R>) -> Self {
         let (data_tx, data_rx) =
             mpsc::sync_channel::<Result<Vec<u8>, std::io::Error>>(Self::RING_SLOTS);
         let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<u8>>(Self::RING_SLOTS);
@@ -525,7 +522,7 @@ impl PipedAesBufReader {
             data_rx: Some(data_rx),
             recycle_tx: Some(recycle_tx),
             aborted,
-            current_buf: prefix.map(|p| p.to_vec()).unwrap_or_default(),
+            current_buf: Vec::new(),
             offset: 0,
             eof: false,
             worker: Some(worker),
@@ -689,29 +686,6 @@ pub fn extract_bay_stream<R: Read>(
     let mut last_emit = Instant::now();
     let mut total_extracted: u64 = 0;
 
-    let mut first_byte = [0u8; 1];
-    let mut has_first = false;
-
-    // Check if the stream starts with redundant b"BAY..." signature (from legacy files)
-    match decoder.read_exact(&mut first_byte) {
-        Ok(_) => {
-            if first_byte[0] == b'B' {
-                // Verify and skip remaining 6 signature bytes (AYZIP\x02, AYBRO\x02, AYLZ4\x02)
-                let mut rest_sig = [0u8; 6];
-                decoder
-                    .read_exact(&mut rest_sig)
-                    .map_err(|e| format!("Error reading archive signature: {}", e))?;
-                if !crate::inspector::bay::is_valid_bay_inner_sig_suffix(&rest_sig) {
-                    return Err("Malformed .bay archive: invalid inner signature header".to_string());
-                }
-            } else {
-                has_first = true;
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(extracted_files),
-        Err(e) => return Err(format!("Error reading archive header: {}", e)),
-    }
-
     let mut dir_cache = DirectoryCache::new();
     dir_cache.mark_existing(dest_dir);
     let mut writer_pool = AsyncFileWriterPool::new_for_dest(dest_dir);
@@ -721,23 +695,28 @@ pub fn extract_bay_stream<R: Read>(
     let mut io_buf = vec![0u8; 256 * 1024];
 
     let res = (|| -> Result<(), String> {
+        let mut saw_any_entry = false;
         loop {
             if is_extraction_cancelled() {
                 return Err("Extraction cancelled by user".to_string());
             }
 
-            let entry_type = if has_first {
-                has_first = false;
-                first_byte[0]
-            } else {
-                let mut b = [0u8; 1];
-                match decoder.read_exact(&mut b) {
-                    Ok(_) => b[0],
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            let mut b = [0u8; 1];
+            let entry_type = loop {
+                match decoder.read(&mut b) {
+                    Ok(0) => {
+                        if !saw_any_entry {
+                            return Ok(());
+                        }
                         return Err(
                             "Malformed or truncated .bay archive (missing EOF marker)".to_string(),
                         );
                     }
+                    Ok(_) => {
+                        saw_any_entry = true;
+                        break b[0];
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(e) => return Err(format!("Error reading archive entry: {}", e)),
                 }
             };
@@ -1015,9 +994,12 @@ pub fn extract_bay_archive(
     let n = file
         .read(&mut magic)
         .map_err(|e| format!("Invalid or corrupted .bay header: {}", e))?;
+    if n < 8 {
+        return Err("Invalid or unsupported .bay archive header".to_string());
+    }
 
-    // Encrypted .bay v3 (3-stage pipeline: Read-Ahead AES-256-GCM -> Decompress -> Async Writer Pool)
-    if n >= 7 && magic.starts_with(b"BAYENC\x03") {
+    // Encrypted .bay v4 (Argon2id + 3-stage pipeline: Read-Ahead AES-256-GCM -> Decompress -> Async Writer Pool)
+    if &magic == crate::crypto::BAY_ENC_V4_MAGIC {
         let pwd = match password {
             Some(p) if !p.trim().is_empty() => p.trim(),
             _ => {
@@ -1037,8 +1019,8 @@ pub fn extract_bay_archive(
             .read_exact(&mut inner_sig)
             .map_err(|_| "Incorrect password: Failed to decrypt AES-256-GCM archive.".to_string())?;
 
-        if inner_sig.starts_with(b"BAYBRO\x02") {
-            let piped = PipedAesBufReader::new(enc_reader, None);
+        if &inner_sig == crate::inspector::bay::BAY_BROTLI_MAGIC {
+            let piped = PipedAesBufReader::new(enc_reader);
             let decoder = brotli::Decompressor::new(piped, 64 * 1024);
             return extract_bay_stream(
                 decoder,
@@ -1048,8 +1030,8 @@ pub fn extract_bay_archive(
                 s_prefix,
                 excluded,
             );
-        } else if inner_sig.starts_with(b"BAYLZ4\x02") {
-            let piped = PipedAesBufReader::new(enc_reader, None);
+        } else if &inner_sig == crate::inspector::bay::BAY_LZ4_MAGIC {
+            let piped = PipedAesBufReader::new(enc_reader);
             let decoder = lz4_flex::frame::FrameDecoder::new(piped);
             return extract_bay_stream(
                 decoder,
@@ -1059,8 +1041,8 @@ pub fn extract_bay_archive(
                 s_prefix,
                 excluded,
             );
-        } else if inner_sig.starts_with(b"BAYZIP\x02") {
-            let piped = PipedAesBufReader::new(enc_reader, None);
+        } else if &inner_sig == crate::inspector::bay::BAY_ZSTD_MAGIC {
+            let piped = PipedAesBufReader::new(enc_reader);
             let decoder = zstd::stream::Decoder::with_buffer(piped)
                 .map_err(|e| format!("Zstd decoder error: {}", e))?;
             return extract_bay_stream(
@@ -1072,38 +1054,13 @@ pub fn extract_bay_archive(
                 excluded,
             );
         } else {
-            let piped = PipedAesBufReader::new(enc_reader, Some(inner_sig));
-            let decoder = zstd::stream::Decoder::with_buffer(piped)
-                .map_err(|e| format!("Zstd decoder error: {}", e))?;
-            return extract_bay_stream(
-                decoder,
-                dest_dir,
-                total_expected_bytes,
-                app,
-                s_prefix,
-                excluded,
-            );
+            return Err("Invalid or unsupported inner .bay header".to_string());
         }
     }
 
-    // Legacy encrypted .bay v1 & v2 (deprecated in v2.0+)
-    if n >= 7 && (magic.starts_with(b"BAYENC\x01") || magic.starts_with(b"BAYENC\x02")) {
-        return Err("Deprecated archive: Legacy v1/v2 encryption is no longer supported. Please re-encrypt using modern Bayzip v2.0+ streaming encryption.".to_string());
-    }
-
-    // Unencrypted .bay
-    file.seek(std::io::SeekFrom::Start(0))
-        .map_err(|e| e.to_string())?;
-    let mut magic_header = [0u8; 8];
-    let n = file.read(&mut magic_header).unwrap_or(0);
-
-    if n >= 7 && magic_header.starts_with(b"BAYBRO\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 {
-            8
-        } else {
-            7
-        };
-        file.seek(std::io::SeekFrom::Start(offset))
+    // Unencrypted .bay (exact 8-byte header)
+    if &magic == crate::inspector::bay::BAY_BROTLI_MAGIC {
+        file.seek(std::io::SeekFrom::Start(8))
             .map_err(|e| e.to_string())?;
         let decoder = brotli::Decompressor::new(file, 64 * 1024);
         extract_bay_stream(
@@ -1114,13 +1071,8 @@ pub fn extract_bay_archive(
             s_prefix,
             excluded,
         )
-    } else if n >= 7 && magic_header.starts_with(b"BAYLZ4\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 {
-            8
-        } else {
-            7
-        };
-        file.seek(std::io::SeekFrom::Start(offset))
+    } else if &magic == crate::inspector::bay::BAY_LZ4_MAGIC {
+        file.seek(std::io::SeekFrom::Start(8))
             .map_err(|e| e.to_string())?;
         let decoder = lz4_flex::frame::FrameDecoder::new(file);
         extract_bay_stream(
@@ -1131,30 +1083,12 @@ pub fn extract_bay_archive(
             s_prefix,
             excluded,
         )
-    } else if n >= 7 && magic_header.starts_with(b"BAYZIP\x02") {
-        let offset = if n >= 8 && magic_header[6] == 2 && magic_header[7] == 0 {
-            8
-        } else {
-            7
-        };
+    } else if &magic == crate::inspector::bay::BAY_ZSTD_MAGIC {
         extract_unencrypted_zstd_bay(
             file.into_inner(),
-            offset,
+            8,
             read_cap,
             archive_path,
-            dest_dir,
-            total_expected_bytes,
-            app,
-            s_prefix,
-            excluded,
-        )
-    } else if n >= 4 && magic_header.starts_with(&[0x04, 0x22, 0x4D, 0x18]) {
-        // Raw LZ4 frame
-        file.seek(std::io::SeekFrom::Start(0))
-            .map_err(|e| e.to_string())?;
-        let decoder = lz4_flex::frame::FrameDecoder::new(file);
-        extract_bay_stream(
-            decoder,
             dest_dir,
             total_expected_bytes,
             app,
@@ -1162,18 +1096,7 @@ pub fn extract_bay_archive(
             excluded,
         )
     } else {
-        // Standard Zstd
-        extract_unencrypted_zstd_bay(
-            file.into_inner(),
-            0,
-            read_cap,
-            archive_path,
-            dest_dir,
-            total_expected_bytes,
-            app,
-            s_prefix,
-            excluded,
-        )
+        Err("Invalid or unsupported .bay archive header".to_string())
     }
 }
 
@@ -1370,7 +1293,7 @@ mod tests {
         assert!(res.unwrap_err().contains("missing EOF marker"));
         assert!(!test_dir.join("hello.txt").exists());
 
-        // 2. Encrypted stream truncated right after entry_type == 0 (missing ChunkedAesReader 0u32 EOF marker)
+        // 2. Encrypted stream truncated after entry_type == 0 (missing authenticated final chunk)
         let password = "stream_eof_pass";
         let mut raw_stream = Vec::new();
         {
@@ -1384,10 +1307,11 @@ mod tests {
             writer.write_all(entry_name).unwrap();
             writer.write_all(&2u64.to_le_bytes()).unwrap();
             writer.write_all(b"hi").unwrap();
-            writer.write_all(&[0u8]).unwrap(); // entry_type == 0 present inside stream
-            writer.finish().unwrap();
+            writer.write_all(&[0u8]).unwrap(); // entry_type == 0 present inside chunk 0
+            writer.flush().unwrap();
+            writer.finish().unwrap(); // emits empty authenticated FINAL chunk 1
         }
-        // Chop off the final 4-byte ChunkedAesWriter 0u32 EOF marker!
+        // Chop off the final 4 bytes so chunk 1 (authenticated FINAL) fails integrity/EOF check
         let chopped = &raw_stream[8..raw_stream.len() - 4];
         let enc_reader = ChunkedAesReader::new(chopped, password).unwrap();
         let res_eof = extract_bay_stream(enc_reader, &test_dir, 2, None, None, None);
@@ -1395,6 +1319,26 @@ mod tests {
         assert!(res_eof.unwrap_err().contains("verification failed at EOF"));
         // Partial/rolled-back file must be cleaned up on EOF verification failure
         assert!(!test_dir.join("ok.txt").exists());
+
+        // 3. Single-chunk encrypted stream truncated at ciphertext boundary must also fail (never Ok)
+        let mut single_chunk = Vec::new();
+        {
+            let mut writer =
+                crate::crypto::ChunkedAesWriter::new(&mut single_chunk, password).unwrap();
+            writer.write_all(&[1u8]).unwrap();
+            let entry_name = b"single.txt";
+            writer
+                .write_all(&(entry_name.len() as u32).to_le_bytes())
+                .unwrap();
+            writer.write_all(entry_name).unwrap();
+            writer.write_all(&2u64.to_le_bytes()).unwrap();
+            writer.write_all(b"ok").unwrap();
+            writer.write_all(&[0u8]).unwrap();
+            writer.finish().unwrap();
+        }
+        let chopped_single = &single_chunk[8..single_chunk.len() - 4];
+        let enc_single = ChunkedAesReader::new(chopped_single, password).unwrap();
+        assert!(extract_bay_stream(enc_single, &test_dir, 2, None, None, None).is_err());
 
         let _ = std::fs::remove_dir_all(&test_dir);
     }
@@ -1491,7 +1435,7 @@ mod tests {
             write_bay_file_entry(&mut zstd_enc, "payload/data.bin", &large_incompressible);
             zstd_enc.write_all(&[0u8]).unwrap();
             let enc_writer = zstd_enc.finish().unwrap();
-            let mut raw = enc_writer.finish().unwrap();
+            let (mut raw, _toc_ctx) = enc_writer.finish().unwrap();
             raw.flush().unwrap();
         }
 
@@ -1610,7 +1554,7 @@ mod tests {
         assert_eq!(files_bro.len(), 1);
         assert_eq!(std::fs::read_to_string(out_bro.join("b.txt")).unwrap(), "brotli-baytoc-ok");
 
-        // D. Encrypted BAYENC\x03 + BAYZIP\x02\x00 + BAYETOC\x03 trailer
+        // D. Encrypted BAYENC\x04 + BAYZIP\x02\x00 + BAYETOC\x04 trailer
         let enc_bay = base.join("enc_etoc.bay");
         let pwd = "trailer_enc_password";
         {
@@ -1621,13 +1565,13 @@ mod tests {
             write_bay_file_entry(&mut zstd_enc, "sec/key.txt", b"encrypted-bayetoc-ok");
             zstd_enc.write_all(&[0u8]).unwrap();
             let enc_writer = zstd_enc.finish().unwrap();
-            let mut raw = enc_writer.finish().unwrap();
+            let (mut raw, toc_ctx) = enc_writer.finish().unwrap();
             let toc = vec![crate::types::ArchiveEntryItem {
                 name: "sec/key.txt".to_string(),
                 size: 20,
                 is_dir: false,
             }];
-            crate::compressor::bay::write_bay_toc_trailer(&mut raw, &toc, Some(pwd)).unwrap();
+            crate::compressor::bay::write_bay_toc_trailer(&mut raw, &toc, Some(&toc_ctx)).unwrap();
         }
         assert!(crate::inspector::has_instant_bay_toc(&enc_bay));
         let out_enc = base.join("out_enc");
@@ -1903,7 +1847,33 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(err_sig.contains("invalid inner signature header"));
+        assert!(err_sig.contains("invalid entry type 66"));
+
+        let raw_lz4_path = base.join("raw_lz4.bay");
+        std::fs::write(&raw_lz4_path, [0x04, 0x22, 0x4D, 0x18, 0x60, 0x40, 0x82, 0x00]).unwrap();
+        let err_raw_lz4 = extract_bay_archive(
+            &raw_lz4_path,
+            &base.join("out_raw_lz4"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err_raw_lz4.contains("Invalid or unsupported .bay archive header"));
+
+        let legacy_v3_path = base.join("legacy_v3.bay");
+        std::fs::write(&legacy_v3_path, b"BAYENC\x03\x00dummy_payload").unwrap();
+        let err_v3 = extract_bay_archive(
+            &legacy_v3_path,
+            &base.join("out_legacy_v3"),
+            Some("pass"),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err_v3.contains("Invalid or unsupported .bay archive header"));
 
         // 2. Oversized > 64 MB TOC is skipped instead of corrupting locate_bay_payload_end (BUG-02)
         let huge_toc = vec![

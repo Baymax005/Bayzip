@@ -228,13 +228,10 @@ pub fn get_io_buffers(slider_value: i32) -> (usize, usize) {
     }
 }
 
-/// Returns true if the requested format or preset corresponds to Gamer Preset (.bayg / .bay_gamer).
+/// Returns true if the requested format or preset corresponds to Gamer Preset (.bayg).
 pub fn is_gamer_preset(format: &str) -> bool {
     let clean = format.trim_start_matches('.').to_lowercase();
-    matches!(
-        clean.as_str(),
-        "bayg" | "gamer" | "bay_gamer" | "baygamer"
-    )
+    matches!(clean.as_str(), "bayg" | "gamer")
 }
 
 pub fn validate_encryption_support(
@@ -498,14 +495,12 @@ mod tests {
         assert!(is_gamer_preset(".bayg"));
         assert!(is_gamer_preset("gamer"));
         assert!(is_gamer_preset(".gamer"));
-        assert!(is_gamer_preset("bay_gamer"));
-        assert!(is_gamer_preset(".bay_gamer"));
-        assert!(is_gamer_preset("baygamer"));
-        assert!(is_gamer_preset(".baygamer"));
         assert!(is_gamer_preset("BAYG"));
-        assert!(is_gamer_preset("BAY_GAMER"));
-        assert!(is_gamer_preset(".BAY_GAMER"));
 
+        assert!(!is_gamer_preset("bay_gamer"));
+        assert!(!is_gamer_preset(".bay_gamer"));
+        assert!(!is_gamer_preset("baygamer"));
+        assert!(!is_gamer_preset(".baygamer"));
         assert!(!is_gamer_preset("bay"));
         assert!(!is_gamer_preset(".bay"));
         assert!(!is_gamer_preset("zip"));

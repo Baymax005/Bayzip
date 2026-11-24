@@ -137,35 +137,6 @@ impl<W: Write> Write for SeekableZstdWriter<W> {
     }
 }
 
-pub fn collect_bay_toc(dir: &Path, base: &Path, list: &mut Vec<ArchiveEntryItem>, depth: usize) {
-    if depth > 32 { return; }
-    if let Ok(m) = std::fs::symlink_metadata(dir) {
-        let rel = dir.strip_prefix(base).unwrap_or(dir);
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        let clean = rel_str.trim_start_matches('/').to_string();
-        if !clean.is_empty() {
-            if m.is_dir() && !m.file_type().is_symlink() {
-                list.push(ArchiveEntryItem {
-                    name: format!("{}/", clean.trim_end_matches('/')),
-                    size: 0,
-                    is_dir: true,
-                });
-                if let Ok(entries) = std::fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        collect_bay_toc(&entry.path(), base, list, depth + 1);
-                    }
-                }
-            } else if m.is_file() {
-                list.push(ArchiveEntryItem {
-                    name: clean,
-                    size: m.len(),
-                    is_dir: false,
-                });
-            }
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn write_file_to_bay_archive<W: Write>(
     filepath: &Path,
@@ -412,14 +383,27 @@ impl Write for BayOutputWriter {
     }
 }
 
+struct ZeroizingBuf(Vec<u8>);
+
+impl Drop for ZeroizingBuf {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 impl BayOutputWriter {
-    pub fn finish(self) -> std::io::Result<BufWriter<File>> {
+    pub fn finish(
+        self,
+    ) -> std::io::Result<(BufWriter<File>, Option<crate::crypto::BayTocContext>)> {
         match self {
             BayOutputWriter::Plain(mut w) => {
                 w.flush()?;
-                Ok(w)
+                Ok((w, None))
             }
-            BayOutputWriter::Encrypted(w) => w.finish(),
+            BayOutputWriter::Encrypted(w) => {
+                let (inner, toc_ctx) = w.finish()?;
+                Ok((inner, Some(toc_ctx)))
+            }
         }
     }
 }
@@ -427,56 +411,45 @@ impl BayOutputWriter {
 pub fn write_bay_toc_trailer<W: Write>(
     file_writer: &mut W,
     toc_entries: &[ArchiveEntryItem],
-    password: Option<&str>,
+    toc_ctx: Option<&crate::crypto::BayTocContext>,
 ) -> std::io::Result<()> {
     if toc_entries.is_empty() {
         return Ok(());
     }
 
-    let toc_json = serde_json::to_vec(toc_entries).unwrap_or_default();
+    let mut toc_json = serde_json::to_vec(toc_entries).unwrap_or_default();
     if toc_json.is_empty() || (toc_json.len() as u64) > crate::inspector::bay::MAX_TOC_SIZE {
+        toc_json.zeroize();
         return Ok(());
     }
 
-    if let Some(pwd) = password.filter(|p| !p.trim().is_empty()) {
-        use aes_gcm::{Aes256Gcm, Key, Nonce, aead::{Aead, KeyInit}};
-        use rand::RngCore;
+    let res = (|| -> std::io::Result<()> {
+        if let Some(ctx) = toc_ctx {
+            let (mut encrypted_toc, toc_nonce) = ctx.encrypt_toc(&toc_json)?;
+            let enc_toc_len = encrypted_toc.len() as u64;
+            if enc_toc_len > crate::inspector::bay::MAX_TOC_SIZE {
+                encrypted_toc.zeroize();
+                return Ok(());
+            }
 
-        let mut salt = [0u8; 16];
-        let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut salt);
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
-
-        let mut key_bytes = crate::crypto::derive_bay_key(pwd.trim(), &salt);
-        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-        let cipher = Aes256Gcm::new(key);
-        key_bytes.zeroize();
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let encrypted_toc = cipher
-            .encrypt(nonce, toc_json.as_slice())
-            .map_err(|e| std::io::Error::other(format!("TOC encryption error: {}", e)))?;
-
-        let enc_toc_len = encrypted_toc.len() as u64;
-        if enc_toc_len > crate::inspector::bay::MAX_TOC_SIZE {
-            return Ok(());
+            file_writer.write_all(&encrypted_toc)?;
+            encrypted_toc.zeroize();
+            file_writer.write_all(&enc_toc_len.to_le_bytes())?;
+            file_writer.write_all(&toc_nonce)?;
+            file_writer.write_all(crate::crypto::BAY_ETOC_V4_MAGIC)?;
+            file_writer.flush()?;
+        } else {
+            let toc_len = toc_json.len() as u64;
+            file_writer.write_all(&toc_json)?;
+            file_writer.write_all(&toc_len.to_le_bytes())?;
+            file_writer.write_all(crate::inspector::bay::BAY_TOC_MAGIC)?;
+            file_writer.flush()?;
         }
+        Ok(())
+    })();
 
-        file_writer.write_all(&encrypted_toc)?;
-        file_writer.write_all(&enc_toc_len.to_le_bytes())?;
-        file_writer.write_all(&salt)?;
-        file_writer.write_all(&nonce_bytes)?;
-        file_writer.write_all(b"BAYETOC\x03")?;
-        file_writer.flush()?;
-    } else {
-        let toc_len = toc_json.len() as u64;
-        file_writer.write_all(&toc_json)?;
-        file_writer.write_all(&toc_len.to_le_bytes())?;
-        file_writer.write_all(b"BAYTOC\x02\x00")?;
-        file_writer.flush()?;
-    }
-
-    Ok(())
+    toc_json.zeroize();
+    res
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -534,8 +507,8 @@ pub fn compress_bay(
             BayOutputWriter::Plain(buf_out)
         };
 
-        // Allocate read buffer scaled by hardware allocation
-        let mut read_buf = vec![0u8; read_buf_size];
+        // Allocate read buffer scaled by hardware allocation and zeroize on exit
+        let mut read_buf = ZeroizingBuf(vec![0u8; read_buf_size]);
 
         // Dynamic TOC entries collected in-flight without double-scanning disk
         let mut toc_entries: Vec<ArchiveEntryItem> = Vec::new();
@@ -562,7 +535,7 @@ pub fn compress_bay(
                 output_path,
                 &temp_final,
                 &mut encoder,
-                &mut read_buf,
+                &mut read_buf.0,
                 &mut bytes_processed,
                 total_original,
                 app,
@@ -582,8 +555,8 @@ pub fn compress_bay(
             });
             encoder.flush().map_err(|e| format!("Brotli flush error: {}", e))?;
             let finished_writer = encoder.into_inner();
-            let mut file_writer = finished_writer.finish().map_err(|e| format!("Brotli finalize error: {}", e))?;
-            write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+            let (mut file_writer, toc_ctx) = finished_writer.finish().map_err(|e| format!("Brotli finalize error: {}", e))?;
+            write_bay_toc_trailer(&mut file_writer, &toc_entries, toc_ctx.as_ref())
                 .map_err(|e| format!("Failed to write TOC: {}", e))?;
         } else if algo_lower.contains("lz4") {
             let mut out_sink = out_writer;
@@ -595,7 +568,7 @@ pub fn compress_bay(
                 output_path,
                 &temp_final,
                 &mut encoder,
-                &mut read_buf,
+                &mut read_buf.0,
                 &mut bytes_processed,
                 total_original,
                 app,
@@ -614,8 +587,8 @@ pub fn compress_bay(
                 total_bytes: total_original,
             });
             let finished_writer = encoder.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
-            let mut file_writer = finished_writer.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
-            write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+            let (mut file_writer, toc_ctx) = finished_writer.finish().map_err(|e| format!("LZ4 finalize error: {}", e))?;
+            write_bay_toc_trailer(&mut file_writer, &toc_entries, toc_ctx.as_ref())
                 .map_err(|e| format!("Failed to write TOC: {}", e))?;
         } else {
             // Default to Zstandard or .bayg preset
@@ -647,7 +620,7 @@ pub fn compress_bay(
                     output_path,
                     &temp_final,
                     &mut encoder,
-                    &mut read_buf,
+                    &mut read_buf.0,
                     &mut bytes_processed,
                     total_original,
                     app,
@@ -666,8 +639,8 @@ pub fn compress_bay(
                     total_bytes: total_original,
                 });
                 let finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
-                let mut file_writer = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
-                write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+                let (mut file_writer, toc_ctx) = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
+                write_bay_toc_trailer(&mut file_writer, &toc_entries, toc_ctx.as_ref())
                     .map_err(|e| format!("Failed to write TOC: {}", e))?;
             } else {
                 let mut encoder = zstd::stream::Encoder::new(out_sink, zstd_level)
@@ -681,7 +654,7 @@ pub fn compress_bay(
                     output_path,
                     &temp_final,
                     &mut encoder,
-                    &mut read_buf,
+                    &mut read_buf.0,
                     &mut bytes_processed,
                     total_original,
                     app,
@@ -700,8 +673,8 @@ pub fn compress_bay(
                     total_bytes: total_original,
                 });
                 let finished_writer = encoder.finish().map_err(|e| format!("Failed to finalize compression: {}", e))?;
-                let mut file_writer = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
-                write_bay_toc_trailer(&mut file_writer, &toc_entries, pwd_trimmed)
+                let (mut file_writer, toc_ctx) = finished_writer.finish().map_err(|e| format!("Failed to finalize output stream: {}", e))?;
+                write_bay_toc_trailer(&mut file_writer, &toc_entries, toc_ctx.as_ref())
                     .map_err(|e| format!("Failed to write TOC: {}", e))?;
             }
         }

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v3.0.2-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v3.0.2" /></a>
+  <a href="https://github.com/Baymax005/Bayzip/releases"><img src="https://img.shields.io/badge/version-v3.0.3-0078D4?style=flat-square&logo=semver&logoColor=white" alt="Version v3.0.3" /></a>
   <a href="#windows-shell-integration"><img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows11&logoColor=white" alt="Windows 10 | 11" /></a>
   <a href="https://v2.tauri.app/"><img src="https://img.shields.io/badge/Tauri-v2.0-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2.0" /></a>
   <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/Rust-2021%20Edition-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021 Edition" /></a>
@@ -20,7 +20,7 @@
 
 <p align="center">
   <a href="src-tauri/src/crypto.rs"><img src="https://img.shields.io/badge/security-AES--256--GCM%20AEAD-10B981?style=flat-square&logo=shield&logoColor=white" alt="AES-256-GCM AEAD Security" /></a>
-  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-97%2F97%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="97/97 Automated Tests Passing" /></a>
+  <a href="TESTS.md"><img src="https://img.shields.io/badge/tests-103%2F103%20passing-success?style=flat-square&logo=checkmarx&logoColor=white" alt="103/103 Automated Tests Passing" /></a>
   <a href="src-tauri/src/compressor/mod.rs"><img src="https://img.shields.io/badge/engine-Zstandard%20%7C%20zlib--rs%20%7C%20LZMA2-F59E0B?style=flat-square&logo=speedtest&logoColor=white" alt="Compression Engine" /></a>
   <a href="src-tauri/crates/bayzip_shell/src/lib.rs"><img src="https://img.shields.io/badge/shell-Windows%2011%20COM-6366F1?style=flat-square&logo=windows&logoColor=white" alt="Windows 11 COM Shell Extension" /></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/audit-60%2F60%20remediated-8B5CF6?style=flat-square&logo=target&logoColor=white" alt="60/60 Technical Audit Findings Remediated" /></a>
@@ -46,7 +46,7 @@ Bayzip **v3.0.0** introduces a ground-up **Multi-Core, Storage-Aware Extraction 
 
 - **Multi-Frame Seekable `.bay` / `.bayg` Container & Parallel Zstd Unpacking (`compressor/bay.rs`, `inspector/bay.rs`, `extractor/bay.rs`)**:
   - Unencrypted Zstandard archives now emit independent seekable Zstd frames (`8 MB` frames for `.bayg` Gamer Preset; `16 MB` frames for `.bay`) indexed by an RFC 8878 Seek Table skippable frame (`0x184D2A5E` / `0x8F92EAB1`) directly ahead of the instant `BAYTOC\x02\x00` trailer.
-  - `ParallelSeekableZstdReader` decodes frames concurrently across `2–8` `zstd::bulk::Decompressor` workers inside a bounded `96 MB` sliding window with recycled buffers, using independent `open_random_read` handles on SSDs/NVMe and serialized sequential reads on spinning HDDs/USB drives—while remaining 100% backward-compatible with legacy single-frame `.bay` and encrypted `BAYENC\x03` archives.
+  - `ParallelSeekableZstdReader` decodes frames concurrently across `2–8` `zstd::bulk::Decompressor` workers inside a bounded `96 MB` sliding window with recycled buffers, using independent `open_random_read` handles on SSDs/NVMe and serialized sequential reads on spinning HDDs/USB drives across single-frame and seekable `BAYZIP\x02\x00` containers as well as `BAYENC\x04\x00` (`Argon2id` + `AES-256-GCM`) encrypted archives.
 - **Storage-Aware Win32 NTFS I/O & `AsyncFileWriterPool` (`inspector/hardware.rs`, `extractor/io.rs`, `extractor/mod.rs`)**:
   - Queries both `STORAGE_BUS_TYPE` and `StorageDeviceSeekPenaltyProperty` (`PropertyId = 7`) via `IOCTL_STORAGE_QUERY_PROPERTY` to distinguish NVMe SSDs, SATA SSDs, spinning HDDs, and USB flash drives.
   - Applies Win32 `FILE_FLAG_SEQUENTIAL_SCAN` / `FILE_FLAG_RANDOM_ACCESS` hints, NTFS `FileAllocationInfo` preallocation for files `>= 64 KB`, `DirectoryCache` ancestor tracking to eliminate redundant `create_dir_all` syscalls, and a byte-budgeted `AsyncFileWriterPool` (`16–48 MB` in-flight cap) with per-worker `ScopedPriorityGuard` and deterministic `abort_and_join()` rollback cleanup.
@@ -61,7 +61,7 @@ Bayzip **v3.0.0** introduces a ground-up **Multi-Core, Storage-Aware Extraction 
 - **Single-Pass Cancellable System `tar.exe` Inspection (`extractor/system_tar.rs`)**:
   - Replaced three sequential `tar.exe` pre-scans with a single cancellable streaming `tar.exe -tvf` pass and fail-closed `parse_bsdtar_tvf_line` parser (rejecting symlinks, hardlinks, FIFOs, sockets, and device nodes mid-stream) plus fast `DirectoryCache` staged finalization.
 - **Expanded Verification**:
-  - Automated workspace Rust test suite expanded through **v3.0.2** Phase 1 emergency audit hardening (`CRIT-01/02`, `HIGH-01/04/05/06/08`) to **97 unit tests (`96` `bayzip_lib` + `1` `bayzip_shell`, `97/97 passing`)**, verified alongside `0` workspace Clippy warnings and `0` TypeScript errors.
+  - Automated workspace Rust test suite expanded through **v3.0.3** Phase 2 Crypto v4 (`Argon2id` + `AES-256-GCM`) & legacy format purge to **103 unit tests (`102` `bayzip_lib` + `1` `bayzip_shell`, `103/103 passing`)**, verified alongside `0` workspace Clippy warnings and `0` TypeScript errors.
 
 ---
 
@@ -170,14 +170,13 @@ flowchart TD
 
 ---
 
-## 🔒 Zero-Allocation Streaming AES-256-GCM Encryption
+## 🔒 Zero-Allocation Streaming AES-256-GCM Encryption (Crypto v4)
 
-- **In-Place AEAD Streaming**:
-  - `ChunkedAesWriter` and `ChunkedAesReader` operate with zero heap allocations per chunk using `AeadInPlace` (`encrypt_in_place` / `decrypt_in_place`).
-  - 4 MB chunk size minimizes AEAD authentication tag overhead while maximizing hardware throughput on AES-NI capable CPUs, with deterministic `Drop` and per-chunk zeroization of plaintext buffers and base nonces plus `BAYTOC` spoof protection on encrypted headers.
-  - Constant memory footprint (< 100 MB RAM) regardless of archive size, eliminating Out-Of-Memory (OOM) risks on multi-gigabyte encrypted archives.
-  - Explicit 4-byte EOF end-of-stream delimiter verifies payload integrity and rejects truncated streams with `UnexpectedEof`.
-- **Key Derivation**: Argon2id / PBKDF2 salt-derived symmetric keys with random 8-byte nonces.
+- **In-Place AEAD Streaming (`BAYENC\x04\x00` + `BAYETOC\x04`)**:
+  - `ChunkedAesWriter` and `ChunkedAesReader` encrypt and decrypt 4 MB chunks in-place using **AES-256-GCM** (`aes-gcm` with `zeroize`), keeping steady-state RAM constant (< 100 MB) regardless of archive size.
+  - Every chunk binds its exact chunk sequence index (`u32`) and authenticated finality flag (`BAY_CHUNK_FLAG_MORE = 0x00` / `BAY_CHUNK_FLAG_FINAL = 0x01`) inside AES-256-GCM AAD, rejecting mid-stream truncation, flag tampering, or `0u32` EOF forgery while `ChunkedAesWriter` permanently poisons on write errors to prevent unwind panics or nonce reuse.
+  - `BAYETOC\x04` metadata trailers bind cryptographically to the archive header `salt` and `base_nonce` via domain-separated AAD (`build_toc_aad`), preventing trailer stripping or cross-archive TOC grafting, with `ZeroizingBuf` and `CompressPayload` password redaction/zeroization across compression paths.
+- **Key Derivation**: Memory-hard **Argon2id** (`64 MiB` memory, `t=3` iterations, `p=1`) derives domain-separated `(stream_key, toc_key)` 256-bit keys in a single pass per archive using random 16-byte salts and 8-byte base nonces.
 
 ---
 

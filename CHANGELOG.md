@@ -2,6 +2,24 @@
 
 All notable changes, version milestones, security fixes, and performance enhancements across Bayzip are documented in this file.
 
+## [v3.0.3] - 2026-11-25
+### Phase 2 Release — Legacy `.bay`/`.bayg` Purge & Crypto v4 (`Argon2id` + `AES-256-GCM`)
+
+- **Single-Version Crypto v4 (`BAYENC\x04\x00` + `BAYETOC\x04`, `CRIT-03`, `HIGH-02`, `HIGH-03`, `MED-04`)**:
+  - Upgraded `src-tauri/src/crypto.rs` to **Argon2id** (`64 MiB` memory, `t=3`, `p=1`) deriving domain-separated `(stream_key, toc_key)` in a single KDF pass to key **AES-256-GCM** chunked AEAD encryption, eliminating the weak 10,000-round raw SHA-256 KDF.
+  - Bound chunk sequence index (`u32`) and finality flag (`BAY_CHUNK_FLAG_MORE = 0x00` / `BAY_CHUNK_FLAG_FINAL = 0x01`) directly into AES-256-GCM AAD (`[chunk_len: u32 LE][flags: u8][ciphertext+tag]`), eliminating the unauthenticated `0u32` EOF truncation bypass.
+  - Added `BayTocContext` and header-salt/base-nonce-bound `BAYETOC\x04` AAD authentication (`build_toc_aad` / `decrypt_bay_toc`), preventing TOC stripping or cross-archive trailer grafting under shared passwords while eliminating duplicate KDF work during compression.
+  - Permanently poisoned `ChunkedAesWriter` on I/O or crypto failures (`self.failed`) and advanced `chunk_index` before encryption/write to eliminate unwind panics or nonce reuse on write failure.
+  - Enabled `features = ["zeroize"]` on `aes-gcm` in `Cargo.toml`, added `Drop` zeroization + redacted `[REDACTED]` `Debug` output to `CompressPayload` (`types.rs`), and zeroized `read_buf` (`ZeroizingBuf`) and `toc_json`/`encrypted_toc` buffers in `compressor/bay.rs`.
+- **Legacy `.bay`/`.bayg` Purge & Magic-Byte Collision Removal (`inspector/`, `extractor/bay.rs`, `tester.rs`, `compressor/`, `registry.rs`)**:
+  - Enforced exact 8-byte Bayzip signatures (`BAYZIP\x02\x00`, `BAYBRO\x02\x00`, `BAYLZ4\x02\x00`, `BAYENC\x04\x00`) in `inspector/format.rs`, removing the raw LZ4 (`0x04 0x22 0x4D 0x18`) magic collision and headerless raw Zstd / 7-byte offset fallbacks across `inspector/bay.rs`, `extractor/bay.rs`, and `tester.rs`.
+  - Removed legacy inner `'B'` signature sniffing (`is_valid_bay_inner_sig_suffix`), deprecated `BAYENC\x01`/`\x02`/`\x03` and `BAYETOC\x03` handlers, dead `collect_bay_toc`, and legacy `.bay_gamer`/`.baygamer`/`.baygamers` aliases and registry purge entries.
+  - Updated `extract_bay_stream` and `test_bay_stream` to distinguish clean empty EOF (`Ok(0)`) from `Err(UnexpectedEof)` so truncated first-chunk ciphertext streams never silently succeed.
+
+### Verification
+- Verified **103/103 automated workspace unit tests passing** (`102` in `bayzip_lib` + `1` in `bayzip_shell`, adding **6 new tests #98–#103** covering Crypto v4 mid-stream truncation/flag tampering, poisoned writer handling, cross-archive TOC grafting rejection, password `Debug` redaction, non-`BAYENC` `BAYETOC\x04` rejection, and exact magic-byte detection).
+- Verified `cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings` (`0` warnings/errors), `npm run build` (`tsc && vite build`), and `npx tsc --noEmit` (`0` errors).
+
 ## [v3.0.2] - 2026-11-24
 ### Phase 1 Audit Hotfix — Window Lifecycle, `.tar` Encryption Safety, Shell COM Refcounting & Build Integrity
 
